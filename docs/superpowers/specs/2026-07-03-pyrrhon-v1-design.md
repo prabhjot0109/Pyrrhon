@@ -100,9 +100,11 @@ Two model slots, both user-configurable:
 
 ### Tool harness (v1)
 
-`read_file`, `grep`, `glob`, `git_log`, `git_blame`, `git_show`,
-`find_symbol`, `find_references`, `web_search`, `web_fetch`, plus any tools
-contributed by attached MCP servers.
+`read_file`, `grep`, `glob`, `find_symbol`, `find_references`,
+`web_search`, `web_fetch`, plus any tools contributed by attached MCP
+servers. Git history tools (`git_log`, `git_blame`, `git_show`) join in M4
+for history-aware questions — they are ordinary tools, not part of citation
+verification (amended 2026-07-03).
 
 ### AST / code map
 
@@ -115,9 +117,11 @@ without a graph database. Invalidated by file mtime/git HEAD change.
 
 Runs between the LLM and the output channels, before anything is spoken:
 
-1. Extract every `file:line` / commit reference from the draft answer.
-2. Verify mechanically: file exists, line exists, (when the claim quotes
-   code) content matches; commit hashes resolve via git.
+1. Extract every `file:line` reference from the draft answer.
+2. Verify mechanically: file exists, line exists, and when the claim quotes
+   code the content matches. No commit-hash or git-level verification —
+   accurate `file:line` claims are the whole requirement (amended
+   2026-07-03).
 3. On failure: the draft goes back to the agent once to fix; if still
    unverifiable, the claim is downgraded to an explicit "I'm not certain"
    before reaching TTS.
@@ -131,8 +135,10 @@ Encoded in the system prompt and mode logic:
 
 - **Understand mode**: grounded walkthroughs; explains from first principles
   (the problem, the construct that solves it, the alternatives, the trade-off
-  chosen); connects cause and effect across files; asks short check-questions;
-  offers "want to see the code?" rather than dumping it.
+  chosen); connects cause and effect across files; points out where the code
+  falls short of solid architecture or engineering standards and how to
+  improve it; asks short check-questions; offers "want to see the code?"
+  rather than dumping it.
 - **Design mode**: interrogates before generating; challenges at least the
   weakest assumption; writes `PRD.md` / `HLD.md` / `LLD.md` / `api.md` /
   `database.md` / `risks.md` only once reasoning is explicit.
@@ -165,8 +171,8 @@ OpenAI TTS; Groq PlayAI as alternate) → speaker.
 - `/code` also opens the current citation in VS Code (`code --goto
   file:line`) since Pyrrhon runs in its integrated terminal.
 
-Slash commands (v1): `/repo <path>`, `/mode understand|design`, `/model
-<slot> <provider/model>`, `/voice on|off`, `/mcp list|add`, `/help`.
+Slash commands (v1): `/init`, `/repo <path>`, `/mode understand|design`,
+`/model <slot> <provider/model>`, `/voice on|off`, `/mcp list|add`, `/help`.
 
 ## Extension seams (v1) and the plugin loader (M7)
 
@@ -189,6 +195,15 @@ TOML at `~/.pyrrhon/config.toml` (global) merged with `<repo>/.pyrrhon.toml`
 (per-project). Holds provider keys (or env-var references), model slot
 assignments, TTS voice, MCP server list, fallback chains. `pyrrhon` is run
 from (or pointed at) the target repo: `pyrrhon [path]`.
+
+### Personalization: `/init` and soul files
+
+`/init` scaffolds `.pyrrhon/` in the current repo with a `soul.md` template —
+the user's own context file (who they are, how they like things explained,
+conventions they care about, current goals). At session start every markdown
+file in `~/.pyrrhon/` and then `<repo>/.pyrrhon/` (e.g. `soul.md`,
+`skill.md`) is loaded into the agent's system prompt — global first, repo
+last, so repo-level context wins (added 2026-07-03).
 
 ## Error handling
 
@@ -224,12 +239,13 @@ implementation plan.
 - **M0 — Grounded text REPL**: package scaffold, config, provider registry +
   OpenAI-compat adapter, minimal agent loop with repo tools. Ask a repo
   questions in text, get cited answers.
-- **M1 — Trust**: grounding gate, git tools, grounding eval v0.
+- **M1 — Trust**: grounding gate (`file:line` verification), grounding eval
+  v0.
 - **M2 — TUI**: Textual transcript + code viewer + slash commands.
 - **M3 — Voice**: Pipecat pipeline, barge-in, speech/screen dual channel.
   *(v1 success criteria 1–3 become testable here.)*
-- **M4 — Deep reasoning**: tree-sitter symbol index, web search/fetch, model
-  escalation.
+- **M4 — Deep reasoning**: tree-sitter symbol index, git history tools, web
+  search/fetch, model escalation.
 - **M5 — Extensibility**: MCP client, provider fallback chains, latency
   polish.
 - **M6 — Act 2**: design mode, Socratic interrogation, spec artifacts.
