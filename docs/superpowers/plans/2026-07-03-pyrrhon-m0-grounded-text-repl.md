@@ -17,6 +17,7 @@
 - Tests run with `uv run pytest` (single test: `uv run pytest path::test_name`).
 - All file reads/writes use `encoding="utf-8"`; repo-relative paths are displayed POSIX-style (`utils/helpers.py`), including on Windows.
 - Tools return **error strings** (prefixed `ERROR:`) instead of raising, so the LLM can read and recover from failures.
+- **Real-time discipline (spec hard rule):** no sync filesystem/CPU work inline in an `async def` anywhere in `core/` — wrap it in `asyncio.to_thread()`. Voice arrives in M3 and a ~100ms event-loop stall becomes an audible audio glitch; tools written blocking now would have to be rewritten then.
 - No grounding *verification* in M0 (that is M1); M0 only extracts citations for files that exist.
 - Commit after every task (green tests only).
 
@@ -69,7 +70,7 @@ tests/
 └── test_init_and_repl.py
 ```
 
-Later milestones (each gets its own plan): M1 grounding gate + eval, M2 Textual TUI, M3 Pipecat voice, M4 tree-sitter/git/web tools, M5 MCP + fallbacks, M6 design mode, M7 plugin loader.
+Later milestones (each gets its own plan): M1 grounding gate (split-path recovery) + eval + `remember`/memory.md, M2 Textual TUI, M3 Pipecat voice (barge-in, `TruncateSpeech` history sync, turn cancellation), M4 tree-sitter/git/web tools, M5 MCP + fallbacks, M6 design mode, M7 plugin loader.
 
 ---
 
@@ -856,10 +857,16 @@ class Tool(ABC):
 `pyrrhon/core/tools/repo.py`:
 
 ```python
-"""Read-only repo tools, sandboxed to the repo root."""
+"""Read-only repo tools, sandboxed to the repo root.
+
+Real-time discipline: `run()` methods do no filesystem work on the event
+loop — the sync body is offloaded via asyncio.to_thread(), because in M3 a
+~100ms loop stall becomes an audible audio glitch.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import re
 from pathlib import Path
@@ -910,6 +917,9 @@ class ReadFileTool(Tool):
         self.root = root
 
     async def run(self, path: str, start_line: int = 1, end_line: int | None = None) -> str:
+        return await asyncio.to_thread(self._read, path, start_line, end_line)
+
+    def _read(self, path: str, start_line: int, end_line: int | None) -> str:
         target = _resolve_inside(self.root, path)
         if target is None:
             return f"ERROR: '{path}' is outside the repo."
@@ -937,6 +947,9 @@ class GrepTool(Tool):
         self.root = root
 
     async def run(self, pattern: str) -> str:
+        return await asyncio.to_thread(self._search, pattern)
+
+    def _search(self, pattern: str) -> str:
         try:
             rx = re.compile(pattern)
         except re.error as exc:
@@ -971,6 +984,9 @@ class GlobTool(Tool):
         self.root = root
 
     async def run(self, pattern: str) -> str:
+        return await asyncio.to_thread(self._match, pattern)
+
+    def _match(self, pattern: str) -> str:
         matches = [
             p.relative_to(self.root).as_posix()
             for p in _iter_files(self.root)
@@ -1680,4 +1696,8 @@ git commit -m "feat: /init soul scaffolding and rich text REPL over the core"
 
 ## Next plans (written after M0 lands, one per milestone)
 
-M1 grounding gate + eval → M2 Textual TUI → M3 Pipecat voice → M4 tree-sitter/git/web tools → M5 MCP + fallbacks → M6 design mode → M7 plugin loader.
+M1 grounding gate (split-path recovery) + eval + `remember` tool/memory.md → M2 Textual TUI → M3 Pipecat voice (barge-in, `TruncateSpeech`, turn cancellation) → M4 tree-sitter/git/web tools → M5 MCP + fallbacks → M6 design mode → M7 plugin loader.
+
+Note for M4's plan: tree-sitter parsing and SQLite index writes are the heavy
+CPU-bound cases the real-time discipline rule exists for — offload via
+`asyncio.to_thread()`/`ProcessPoolExecutor` there, same as the M0 tools do.

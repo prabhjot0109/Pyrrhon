@@ -77,9 +77,34 @@ dual speech/screen channel:
   viewer jumps to it.
 - `ToolCallStarted(name, args)` / `ToolCallFinished(name)` — progress display.
 - `AskUser(question)` — the Socratic channel; Pyrrhon asking *you* something.
+- `TruncateSpeech(played_text)` — the one *reverse-direction* event
+  (channel → core), emitted by the voice layer on barge-in: word-level
+  playback timestamps (where the TTS service provides them; a duration-based
+  estimate otherwise) say how much the user actually heard, and the session
+  rewrites the last assistant message to exactly that text — history never
+  assumes knowledge of unspoken words (added 2026-07-03).
 
 Voice and TUI are subscribers. A future GUI subscribes to the same stream
 (over a local socket) without touching the core.
+
+### Real-time discipline (hard rules, added 2026-07-03)
+
+Voice makes the event loop a shared resource with a ~100ms tolerance; these
+rules apply to all `core/` code from M0 onward, not just voice code:
+
+- **Never block the event loop.** CPU-bound work — tree-sitter parsing,
+  SQLite writes, large-file scanning/tokenization — runs via
+  `asyncio.to_thread()` (or a `ProcessPoolExecutor` for heavy parse jobs),
+  never inline in an `async def`. A 100ms stall is an audible audio buffer
+  underrun or dropped VAD frames once voice is attached.
+- **Turns are cancellable.** `session.abort_current_turn()` cancels the
+  asyncio task running the reasoning loop — including in-flight tool calls
+  and MCP requests — the moment VAD detects barge-in. Results arriving from
+  a cancelled turn are discarded, never appended to history; the state
+  machine starts the next turn clean.
+- **History records what was heard, not what was generated.** On barge-in
+  the voice channel reports played text via `TruncateSpeech` and the session
+  truncates the last assistant message accordingly.
 
 ## Agent core
 
@@ -101,8 +126,8 @@ Two model slots, both user-configurable:
 ### Tool harness (v1)
 
 `read_file`, `grep`, `glob`, `find_symbol`, `find_references`,
-`web_search`, `web_fetch`, plus any tools contributed by attached MCP
-servers. Git history tools (`git_log`, `git_blame`, `git_show`) join in M4
+`web_search`, `web_fetch`, `remember` (append a key fact to
+`.pyrrhon/memory.md`), plus any tools contributed by attached MCP servers. Git history tools (`git_log`, `git_blame`, `git_show`) join in M4
 for history-aware questions — they are ordinary tools, not part of citation
 verification (amended 2026-07-03).
 
@@ -122,9 +147,13 @@ Runs between the LLM and the output channels, before anything is spoken:
    code the content matches. No commit-hash or git-level verification —
    accurate `file:line` claims are the whole requirement (amended
    2026-07-03).
-3. On failure: the draft goes back to the agent once to fix; if still
-   unverifiable, the claim is downgraded to an explicit "I'm not certain"
-   before reaching TTS.
+3. On failure, split by destination (added 2026-07-03): screen-bound
+   content (`ScreenArtifact`) may take one self-correction round-trip back
+   to the LLM; speech-bound content (`SpeechChunk`) never loops back — a
+   retry on the fast path costs a full LLM turnaround (~200–400ms) and
+   breaks the latency budget, so the unverifiable `file:line` is stripped
+   from the verbal stream and replaced with an honest "I couldn't verify
+   that location."
 
 Confident hallucination cannot reach the speakers. Failures are logged to
 feed the grounding eval.
@@ -205,6 +234,15 @@ file in `~/.pyrrhon/` and then `<repo>/.pyrrhon/` (e.g. `soul.md`,
 `skill.md`) is loaded into the agent's system prompt — global first, repo
 last, so repo-level context wins (added 2026-07-03).
 
+### Session memory: `memory.md`
+
+Key facts worth carrying across sessions — decisions made, corrections the
+user gave, repo quirks discovered — live in `<repo>/.pyrrhon/memory.md`.
+Reading is free: it sits in `.pyrrhon/`, so the soul loader already ingests
+it. Writing happens through a `remember` tool (M1) the agent calls when
+something is worth keeping: append-only, dated bullets, and the user can
+edit or prune the file freely (added 2026-07-03).
+
 ## Error handling
 
 - **Provider failure** → configured fallback chain (e.g., Groq STT →
@@ -239,11 +277,13 @@ implementation plan.
 - **M0 — Grounded text REPL**: package scaffold, config, provider registry +
   OpenAI-compat adapter, minimal agent loop with repo tools. Ask a repo
   questions in text, get cited answers.
-- **M1 — Trust**: grounding gate (`file:line` verification), grounding eval
-  v0.
+- **M1 — Trust**: grounding gate (`file:line` verification) with the
+  split-path recovery policy, grounding eval v0, `remember` tool +
+  `.pyrrhon/memory.md`.
 - **M2 — TUI**: Textual transcript + code viewer + slash commands.
-- **M3 — Voice**: Pipecat pipeline, barge-in, speech/screen dual channel.
-  *(v1 success criteria 1–3 become testable here.)*
+- **M3 — Voice**: Pipecat pipeline, barge-in, speech/screen dual channel,
+  `TruncateSpeech` history sync, turn cancellation
+  (`abort_current_turn`). *(v1 success criteria 1–3 become testable here.)*
 - **M4 — Deep reasoning**: tree-sitter symbol index, git history tools, web
   search/fetch, model escalation.
 - **M5 — Extensibility**: MCP client, provider fallback chains, latency
