@@ -93,9 +93,10 @@ Two model slots, both user-configurable:
 
 - **Fast conversational model** (default: Groq-hosted) — keeps voice latency
   low for turn-by-turn dialogue.
-- **Deep reasoning model** (default: user's pick via OpenRouter) — the agent
-  escalates to it for multi-file analysis ("map how this affects that"),
-  design interrogation, and spec writing.
+- **Deep reasoning model** (typically via OpenRouter; if unset, the deep
+  slot falls back to the fast slot's model) — the agent escalates to it for
+  multi-file analysis ("map how this affects that"), design interrogation,
+  and spec writing.
 
 ### Tool harness (v1)
 
