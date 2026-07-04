@@ -1,0 +1,13 @@
+# Grounding eval v0 — question → expected-citation pairs against
+# tests/fixtures/sample_repo. A case passes if any emitted Citation matches
+# the expected file exactly with the line within ±5. Run with a real LLM:
+#   uv run python -m pyrrhon.evals.grounding evals/grounding.yaml
+- question: "Where is the greet function defined?"
+  expected:
+    - {file: utils/helpers.py, line: 1}
+- question: "Where does the app call greet?"
+  expected:
+    - {file: app.py, line: 5}
+- question: "Where is the main entry function of the sample app defined?"
+  expected:
+    - {file: app.py, line: 4}

@@ -35,8 +35,12 @@ Python >= 3.12 (`.python-version`, `pyproject.toml`).
   needs `GROQ_API_KEY` set or configure another provider in `.pyrrhon.toml`)
 - Run tests: `uv run pytest` (single test: `uv run pytest path::test_name`)
 
-There is no lint config yet. Current state: M0 (grounded text REPL) — see
-`docs/superpowers/plans/2026-07-03-pyrrhon-m0-grounded-text-repl.md`.
+- Run the grounding eval (real LLM, needs an API key):
+  `uv run python -m pyrrhon.evals.grounding evals/grounding.yaml`
+
+There is no lint config yet. Current state: M1 (trust: grounding gate +
+grounding eval + memory) — see
+`docs/superpowers/plans/2026-07-03-pyrrhon-m1-grounding-gate-memory.md`.
 
 
 ## Design constraints (do not violate without discussion)

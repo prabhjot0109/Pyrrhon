@@ -13,19 +13,29 @@ from pyrrhon.config.settings import load_settings
 from pyrrhon.core.agent.loop import Agent
 from pyrrhon.core.agent.soul import build_system_prompt
 from pyrrhon.core.events import Citation, SpeechChunk, ToolCallStarted
+from pyrrhon.core.grounding.gate import GroundingGate
 from pyrrhon.core.providers.llm import MissingAPIKeyError, create_llm
+from pyrrhon.core.tools.memory import RememberTool
 from pyrrhon.core.tools.repo import GlobTool, GrepTool, ReadFileTool
 
 
 def build_agent(repo_root: Path, llm=None) -> Agent:
     settings = load_settings(repo_root)
     llm = llm or create_llm(settings.fast, settings)
-    tools = [ReadFileTool(repo_root), GrepTool(repo_root), GlobTool(repo_root)]
+    tools = [
+        ReadFileTool(repo_root),
+        GrepTool(repo_root),
+        GlobTool(repo_root),
+        RememberTool(repo_root),
+    ]
     return Agent(
         llm=llm,
         tools=tools,
         system_prompt=build_system_prompt(repo_root),
         repo_root=repo_root,
+        grounding_gate=GroundingGate(repo_root),
+        # REPL is a screen channel → default allow_retry=True. M3's speech
+        # path constructs its Agent with allow_retry=False (spec split-path).
     )
 
 
