@@ -45,11 +45,18 @@ def run_repl(repo: str) -> None:
         f"[bold]Pyrrhon[/bold] — discussing [cyan]{repo_root.name}[/cyan]. "
         "Commands: /init (personalize), /quit"
     )
+    try:
+        asyncio.run(_repl_loop(agent, console, repo_root))
+    except KeyboardInterrupt:
+        pass
+
+
+async def _repl_loop(agent: Agent, console: Console, repo_root: Path) -> None:
     history: list[dict] = []
     while True:
         try:
-            user = console.input("[bold cyan]you> [/bold cyan]").strip()
-        except (EOFError, KeyboardInterrupt):
+            user = (await asyncio.to_thread(console.input, "[bold cyan]you> [/bold cyan]")).strip()
+        except EOFError:
             break
         if not user:
             continue
@@ -60,14 +67,10 @@ def run_repl(repo: str) -> None:
             verb = "created" if created else "already exists"
             console.print(f"soul file {verb}: {path} — edit it, then restart the session.")
             continue
-        asyncio.run(_turn(agent, history, user, console))
-
-
-async def _turn(agent: Agent, history: list[dict], user: str, console: Console) -> None:
-    async for event in agent.run_turn(history, user):
-        if isinstance(event, ToolCallStarted):
-            console.print(f"[dim]→ {event.name}({event.args})[/dim]")
-        elif isinstance(event, SpeechChunk):
-            console.print(Markdown(event.text))
-        elif isinstance(event, Citation):
-            console.print(f"[green]📍 {event.file}:{event.line}[/green]")
+        async for event in agent.run_turn(history, user):
+            if isinstance(event, ToolCallStarted):
+                console.print(f"[dim]→ {event.name}({event.args})[/dim]")
+            elif isinstance(event, SpeechChunk):
+                console.print(Markdown(event.text))
+            elif isinstance(event, Citation):
+                console.print(f"[green]📍 {event.file}:{event.line}[/green]")
