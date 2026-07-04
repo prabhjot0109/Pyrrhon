@@ -8,7 +8,6 @@ loop — the sync body is offloaded via asyncio.to_thread(), because in M3 a
 from __future__ import annotations
 
 import asyncio
-import fnmatch
 import re
 from pathlib import Path
 
@@ -128,12 +127,15 @@ class GlobTool(Tool):
         return await asyncio.to_thread(self._match, pattern)
 
     def _match(self, pattern: str) -> str:
+        # Reject absolute patterns; glob patterns must be repo-relative
+        if Path(pattern).is_absolute():
+            return f"ERROR: glob pattern must be repo-relative (got '{pattern}')."
         try:
             matches = [
                 p.relative_to(self.root).as_posix()
                 for p in sorted(self.root.glob(pattern))
                 if p.is_file() and not any(part in SKIP_DIRS for part in p.parts)
             ]
-        except (ValueError, OSError):
+        except (ValueError, OSError, NotImplementedError):
             return f"ERROR: Invalid glob pattern '{pattern}'."
         return "\n".join(matches[:MAX_GLOB_MATCHES]) or "No files match."

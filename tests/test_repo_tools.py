@@ -31,6 +31,10 @@ async def test_glob_lists_matching_files():
     assert "README.md" not in out
 
 
+async def test_glob_absolute_pattern_is_an_error_string():
+    assert (await GlobTool(FIXTURE).run(pattern="/etc/*")).startswith("ERROR:")
+
+
 async def test_tool_schema_shape():
     schema = ReadFileTool(FIXTURE).schema()
     assert schema["type"] == "function"
