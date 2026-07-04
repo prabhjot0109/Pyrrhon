@@ -15,13 +15,19 @@ from pyrrhon.core.agent.soul import build_system_prompt
 from pyrrhon.core.events import Citation, SpeechChunk, ToolCallStarted
 from pyrrhon.core.grounding.gate import GroundingGate
 from pyrrhon.core.providers.llm import MissingAPIKeyError, create_llm
+from pyrrhon.core.tools.memory import RememberTool
 from pyrrhon.core.tools.repo import GlobTool, GrepTool, ReadFileTool
 
 
 def build_agent(repo_root: Path, llm=None) -> Agent:
     settings = load_settings(repo_root)
     llm = llm or create_llm(settings.fast, settings)
-    tools = [ReadFileTool(repo_root), GrepTool(repo_root), GlobTool(repo_root)]
+    tools = [
+        ReadFileTool(repo_root),
+        GrepTool(repo_root),
+        GlobTool(repo_root),
+        RememberTool(repo_root),
+    ]
     return Agent(
         llm=llm,
         tools=tools,
