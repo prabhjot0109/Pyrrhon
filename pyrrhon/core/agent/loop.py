@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -51,7 +52,7 @@ class Agent:
                 text = reply.text or "(no answer)"
                 history.append({"role": "assistant", "content": text})
                 yield SpeechChunk(text=text)
-                for citation in extract_citations(text, self.repo_root):
+                for citation in await asyncio.to_thread(extract_citations, text, self.repo_root):
                     yield citation
                 return
 
