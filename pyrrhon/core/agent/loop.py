@@ -1,4 +1,12 @@
-"""The reasoning loop: LLM ⇄ tools, emitting the core event stream."""
+"""The reasoning loop: LLM ⇄ tools, emitting the core event stream.
+
+M1: a GroundingGate can sit between the LLM's final text and the emitted
+events. Split-path recovery policy (spec, amended 2026-07-03): screen
+channels construct the Agent with allow_retry=True and get one
+self-correction LLM round-trip; the M3 speech channel constructs it with
+allow_retry=False and unverifiable references are stripped immediately —
+a retry costs a full LLM turnaround and breaks the voice latency budget.
+"""
 
 from __future__ import annotations
 
@@ -14,10 +22,22 @@ from pyrrhon.core.events import (
     ToolCallStarted,
 )
 from pyrrhon.core.grounding.citations import extract_citations
+from pyrrhon.core.grounding.gate import GroundingGate
 from pyrrhon.core.providers.llm import LLMReply
 from pyrrhon.core.tools.base import Tool
 
 PREVIEW_LEN = 200
+
+
+def _retry_prompt(unverified: tuple[str, ...]) -> str:
+    refs = ", ".join(unverified)
+    return (
+        "Grounding check failed: these citations do not point at real "
+        f"locations in the repo: {refs}. Rewrite your answer using only "
+        "path:line locations you actually saw in tool output earlier in this "
+        "conversation. If you are not sure of the exact location, say "
+        "\"I'm not certain\" and drop the citation. Never invent a path."
+    )
 
 
 class Agent:
@@ -31,12 +51,16 @@ class Agent:
         system_prompt: str,
         repo_root: Path,
         max_tool_rounds: int = 8,
+        grounding_gate: GroundingGate | None = None,
+        allow_retry: bool = True,
     ):
         self.llm = llm
         self.tools = {tool.name: tool for tool in tools}
         self.system_prompt = system_prompt
         self.repo_root = repo_root
         self.max_tool_rounds = max_tool_rounds
+        self.grounding_gate = grounding_gate
+        self.allow_retry = allow_retry
 
     async def run_turn(
         self, history: list[dict], user_text: str
@@ -50,9 +74,37 @@ class Agent:
             reply = await self.llm.chat(history, tools=schemas)
             if not reply.tool_calls:
                 text = reply.text or "(no answer)"
-                history.append({"role": "assistant", "content": text})
-                yield SpeechChunk(text=text)
-                for citation in await asyncio.to_thread(extract_citations, text, self.repo_root):
+
+                if self.grounding_gate is None:
+                    # Backward-compatible M0 path: no verification.
+                    history.append({"role": "assistant", "content": text})
+                    yield SpeechChunk(text=text)
+                    for citation in await asyncio.to_thread(
+                        extract_citations, text, self.repo_root
+                    ):
+                        yield citation
+                    return
+
+                gated = await self.grounding_gate.check(text)
+                if gated.unverified and self.allow_retry:
+                    # Exactly ONE self-correction round-trip (screen path).
+                    # The draft and the correction never enter `history` —
+                    # history records what the user was shown, not drafts.
+                    retry_messages = [
+                        *history,
+                        {"role": "assistant", "content": text},
+                        {"role": "user", "content": _retry_prompt(gated.unverified)},
+                    ]
+                    # tools=None: the retry is a single LLM call, never a new
+                    # tool loop — the model fixes from context or hedges.
+                    retry_reply = await self.llm.chat(retry_messages, tools=None)
+                    text = retry_reply.text or text
+                    # Gate the retry result WITHOUT further retry.
+                    gated = await self.grounding_gate.check(text)
+
+                history.append({"role": "assistant", "content": gated.speech_text})
+                yield SpeechChunk(text=gated.speech_text)
+                for citation in gated.citations:
                     yield citation
                 return
 

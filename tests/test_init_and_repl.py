@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from pyrrhon.commands.init_cmd import init_pyrrhon_dir
+from pyrrhon.core.grounding.gate import GroundingGate
 from pyrrhon.core.providers.llm import LLMReply
 from pyrrhon.repl import build_agent
 from tests.helpers import FakeLLM
@@ -28,3 +29,11 @@ async def test_build_agent_wires_tools_and_answers(tmp_path: Path):
     events = [event async for event in agent.run_turn([], "hi")]
     texts = [e.text for e in events if hasattr(e, "text")]
     assert "app.py:1 imports greet." in texts
+
+
+def test_build_agent_wires_grounding_gate():
+    fake = FakeLLM([])
+    agent = build_agent(FIXTURE, llm=fake)
+    assert isinstance(agent.grounding_gate, GroundingGate)
+    assert agent.grounding_gate.root == FIXTURE
+    assert agent.allow_retry is True  # REPL is a screen channel
