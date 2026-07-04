@@ -1,3 +1,7 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "pyrrhon"
 version = "0.1.0"
@@ -17,8 +21,8 @@ pyrrhon = "pyrrhon.cli:main"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 
-[tool.uv]
-package = true
+[tool.hatch.build.targets.wheel]
+packages = ["pyrrhon"]
 
 [dependency-groups]
 dev = [
