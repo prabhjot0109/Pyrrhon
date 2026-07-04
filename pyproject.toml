@@ -1,9 +1,28 @@
 [project]
-name = "Pyrrhon"
+name = "pyrrhon"
 version = "0.1.0"
-description = "Add your description here"
+description = "A voice-first senior-engineer agent for understanding and designing software."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "openai>=2.44.0",
+    "pydantic>=2.12.5",
+    "rich>=14.3.1",
+]
 
+[project.scripts]
+pyrrhon = "pyrrhon.cli:main"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.uv]
+package = true
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "respx>=0.23.1",
 ]
