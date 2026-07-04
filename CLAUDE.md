@@ -17,10 +17,12 @@ making product/scope decisions.
 
 ## Current state
 
-Pre-implementation restart. The previous entry points (`jarvis.py`, `main.py`)
-have been removed from the working tree — do not treat their git history as the
-intended design. There is currently no Python source, no tests, and no lint
-config. You are building Act 1 (Understand) first.
+M0 (grounded text REPL) is implemented — headless `pyrrhon/core/` module
+(events, LLM adapter, repo tools, citation extraction, agent loop) with a
+rich-based REPL channel (`pyrrhon/repl.py`), `/init` soul scaffolding, and full
+pytest suite. The previous entry points (`jarvis.py`, `main.py`) have been
+removed from the working tree — do not treat their git history as the intended
+design. There is no lint config yet.
 
 ## Toolchain and commands
 
@@ -29,11 +31,8 @@ Python >= 3.12 (`.python-version`, `pyproject.toml`).
 
 - Install/sync deps: `uv sync`
 - Add a dependency: `uv add <package>`
-- Run a script/module: `uv run <path-or-module>` (no entry point exists yet;
-  create one, e.g. `uv run python -m pyrrhon` or `uv run pyrrhon.py`)
-
-- Run the app: `uv run pyrrhon [repo-path]` (needs `GROQ_API_KEY` set, or
-  configure another provider in `.pyrrhon.toml`)
+- Run the app: `uv run pyrrhon [repo-path]` (alternatively `python -m pyrrhon`;
+  needs `GROQ_API_KEY` set or configure another provider in `.pyrrhon.toml`)
 - Run tests: `uv run pytest` (single test: `uv run pytest path::test_name`)
 
 There is no lint config yet. Current state: M0 (grounded text REPL) — see
