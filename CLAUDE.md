@@ -32,9 +32,12 @@ Python >= 3.12 (`.python-version`, `pyproject.toml`).
 - Run a script/module: `uv run <path-or-module>` (no entry point exists yet;
   create one, e.g. `uv run python -m pyrrhon` or `uv run pyrrhon.py`)
 
-There is no test or lint setup yet. When adding one, prefer `pytest` run via
-`uv run pytest` (single test: `uv run pytest path::test_name`), and record the
-real commands here once they exist. Do not invent commands that aren't wired up.
+- Run the app: `uv run pyrrhon [repo-path]` (needs `GROQ_API_KEY` set, or
+  configure another provider in `.pyrrhon.toml`)
+- Run tests: `uv run pytest` (single test: `uv run pytest path::test_name`)
+
+There is no lint config yet. Current state: M0 (grounded text REPL) — see
+`docs/superpowers/plans/2026-07-03-pyrrhon-m0-grounded-text-repl.md`.
 
 
 ## Design constraints (do not violate without discussion)
