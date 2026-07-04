@@ -22,3 +22,8 @@ def test_dedupes_and_normalizes_backslashes():
     text = r"utils\helpers.py:1 and again utils/helpers.py:1"
     cites = extract_citations(text, FIXTURE)
     assert cites == [Citation(file="utils/helpers.py", line=1)]
+
+
+def test_skips_paths_that_escape_root():
+    cites = extract_citations("see a/../../../../pyproject.toml:1", FIXTURE)
+    assert cites == []

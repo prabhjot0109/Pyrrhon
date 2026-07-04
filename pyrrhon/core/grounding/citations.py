@@ -18,8 +18,13 @@ def extract_citations(text: str, root: Path) -> list[Citation]:
     for match in _CITATION_RE.finditer(text):
         rel = match.group("path").replace("\\", "/")
         line = int(match.group("line"))
-        if not (root / rel).is_file():
-            continue  # only surface citations that point at real files
+        candidate = (root / rel).resolve()
+        try:
+            candidate.relative_to(root.resolve())
+        except ValueError:
+            continue  # escapes the repo root
+        if not candidate.is_file():
+            continue
         if (rel, line) in seen:
             continue
         seen.add((rel, line))
