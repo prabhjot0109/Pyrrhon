@@ -24,7 +24,12 @@ from pyrrhon.core.providers.llm import (
 )
 from pyrrhon.core.session import Session
 from pyrrhon.core.tools.base import Tool
-from pyrrhon.core.tools.ast_index import FindReferencesTool, FindSymbolTool, SymbolIndex
+from pyrrhon.core.tools.ast_index import (
+    DependenciesTool,
+    FindReferencesTool,
+    FindSymbolTool,
+    SymbolIndex,
+)
 from pyrrhon.core.tools.git import GitBlameTool, GitLogTool, GitShowTool
 from pyrrhon.core.tools.memory import RememberTool
 from pyrrhon.core.tools.repo import GlobTool, GrepTool, ReadFileTool
@@ -74,6 +79,7 @@ def build_agent(
         RememberTool(repo_root),
         FindSymbolTool(index),
         FindReferencesTool(index),
+        DependenciesTool(index),
         GitLogTool(repo_root),
         GitBlameTool(repo_root),
         GitShowTool(repo_root),

@@ -41,13 +41,83 @@ _REF_QUERY = Query(
     """,
 )
 
+# Whole import statements — their text is parsed in Python, which is robust
+# across grammar details.
+_IMPORT_QUERY = Query(
+    _PY_LANGUAGE,
+    """
+    (import_statement) @import
+    (import_from_statement) @import
+    """,
+)
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY, mtime REAL);
 CREATE TABLE IF NOT EXISTS symbols (name TEXT, kind TEXT, file TEXT, line INTEGER);
 CREATE TABLE IF NOT EXISTS refs (name TEXT, file TEXT, line INTEGER);
+CREATE TABLE IF NOT EXISTS imports (file TEXT, module TEXT);
 CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols (name);
 CREATE INDEX IF NOT EXISTS idx_refs_name ON refs (name);
+CREATE INDEX IF NOT EXISTS idx_imports_module ON imports (module);
+CREATE INDEX IF NOT EXISTS idx_imports_file ON imports (file);
 """
+
+
+def _module_name(rel: str) -> str:
+    parts = list(Path(rel).with_suffix("").parts)
+    if parts and parts[-1] == "__init__":
+        parts.pop()
+    return ".".join(parts)
+
+
+def _package_of(rel: str) -> str:
+    parts = list(Path(rel).with_suffix("").parts)
+    if parts:
+        parts.pop()  # __init__ or the module file — either way, drop it
+    return ".".join(parts)
+
+
+def _modules_from_import(stmt_text: str, package: str) -> list[str]:
+    """Module names referenced by one import statement.
+
+    from-imports also record `module.name` for each imported name: the name
+    may be a submodule (`from pkg import api`) or an attribute — a false
+    attribute edge is harmless, a missed submodule edge is not.
+    """
+    text = " ".join(stmt_text.split())
+    if text.startswith("from "):
+        module_part, _, names_part = text[len("from "):].partition(" import ")
+        module = _resolve_relative(module_part.strip(), package)
+        if not module:
+            return []
+        if names_part.strip() == "*":
+            return [module]
+        modules = [module]
+        for name in names_part.replace("(", "").replace(")", "").split(","):
+            name = name.strip().split(" as ")[0].strip()
+            if name:
+                modules.append(f"{module}.{name}")
+        return modules
+    modules = []
+    for part in text[len("import "):].split(","):
+        module = part.strip().split(" as ")[0].strip()
+        if module:
+            modules.append(module)
+    return modules
+
+
+def _resolve_relative(module: str, package: str) -> str:
+    if not module.startswith("."):
+        return module
+    dots = len(module) - len(module.lstrip("."))
+    remainder = module.lstrip(".")
+    parts = package.split(".") if package else []
+    if dots - 1:
+        parts = parts[: -(dots - 1)] if len(parts) >= dots - 1 else []
+    base = ".".join(parts)
+    if remainder and base:
+        return f"{base}.{remainder}"
+    return remainder or base
 
 
 class SymbolIndex:
@@ -67,6 +137,12 @@ class SymbolIndex:
 
     async def find_references(self, name: str) -> list[tuple[str, int]]:
         return await asyncio.to_thread(self._sync_find_references, name)
+
+    async def list_imports(self, rel_file: str) -> list[str]:
+        return await asyncio.to_thread(self._sync_list_imports, rel_file)
+
+    async def find_importers(self, rel_file: str) -> list[str]:
+        return await asyncio.to_thread(self._sync_find_importers, rel_file)
 
     # -- everything below runs in a worker thread ---------------------------
 
@@ -124,11 +200,22 @@ class SymbolIndex:
                     "INSERT INTO refs (name, file, line) VALUES (?, ?, ?)",
                     (node.text.decode("utf-8"), rel, node.start_point.row + 1),
                 )
+        conn.execute("DELETE FROM imports WHERE file = ?", (rel,))
+        package = _package_of(rel)
+        for nodes in QueryCursor(_IMPORT_QUERY).captures(tree.root_node).values():
+            for node in nodes:
+                stmt = node.text.decode("utf-8")
+                for module in _modules_from_import(stmt, package):
+                    conn.execute(
+                        "INSERT INTO imports (file, module) VALUES (?, ?)",
+                        (rel, module),
+                    )
         conn.execute("INSERT OR REPLACE INTO files (path, mtime) VALUES (?, ?)", (rel, mtime))
 
     def _forget(self, conn: sqlite3.Connection, rel: str) -> None:
         conn.execute("DELETE FROM symbols WHERE file = ?", (rel,))
         conn.execute("DELETE FROM refs WHERE file = ?", (rel,))
+        conn.execute("DELETE FROM imports WHERE file = ?", (rel,))
         conn.execute("DELETE FROM files WHERE path = ?", (rel,))
 
     def _sync_find_symbol(self, name: str) -> list[tuple[str, int, str]]:
@@ -152,6 +239,30 @@ class SymbolIndex:
         finally:
             conn.close()
         return [(file, line) for file, line in rows]
+
+    def _sync_list_imports(self, rel_file: str) -> list[str]:
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT DISTINCT module FROM imports WHERE file = ? ORDER BY module",
+                (rel_file,),
+            ).fetchall()
+        finally:
+            conn.close()
+        return [module for (module,) in rows]
+
+    def _sync_find_importers(self, rel_file: str) -> list[str]:
+        module = _module_name(rel_file)
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT DISTINCT file FROM imports WHERE module = ? "
+                "AND file != ? ORDER BY file",
+                (module, rel_file),
+            ).fetchall()
+        finally:
+            conn.close()
+        return [file for (file,) in rows]
 
 
 class FindSymbolTool(Tool):
@@ -202,3 +313,34 @@ class FindReferencesTool(Tool):
         if not rows:
             return "No matches."
         return "\n".join(f"{file}:{line}" for file, line in rows)
+
+
+class DependenciesTool(Tool):
+    name = "list_dependencies"
+    description = (
+        "Show a Python file's import edges both ways: modules it imports, and "
+        "repo files that import it. Answers 'what depends on this?' / "
+        "'what does this rely on?' before you trace call sites."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Repo-relative .py path"},
+        },
+        "required": ["path"],
+    }
+
+    def __init__(self, index: SymbolIndex):
+        self.index = index
+
+    async def run(self, path: str) -> str:
+        await self.index.ensure_fresh()
+        imports = await self.index.list_imports(path)
+        importers = await self.index.find_importers(path)
+        if not imports and not importers:
+            return f"No import edges recorded for {path} (is it a Python file in the repo?)."
+        lines = ["imports:"]
+        lines += [f"  {m}" for m in imports] or ["  (none)"]
+        lines.append("imported by:")
+        lines += [f"  {f}" for f in importers] or ["  (none)"]
+        return "\n".join(lines)
