@@ -18,6 +18,11 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Use the plain-text REPL instead of the TUI",
     )
+    parser.add_argument(
+        "--voice",
+        action="store_true",
+        help="Start with the voice pipeline on (equivalent to /voice on)",
+    )
     parser.add_argument("--version", action="version", version=f"pyrrhon {__version__}")
     args = parser.parse_args(argv)
 
@@ -25,8 +30,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.text:
         from pyrrhon.repl import run_repl
 
-        run_repl(args.repo)
+        run_repl(args.repo, voice=args.voice)
     else:
         from pyrrhon.tui.app import run_tui
 
-        run_tui(args.repo)
+        run_tui(args.repo, voice=args.voice)

@@ -16,14 +16,27 @@ def test_cli_version_flag_exits_zero(capsys):
 
 
 def test_default_launches_tui(monkeypatch):
-    launched: list[str] = []
-    monkeypatch.setattr("pyrrhon.tui.app.run_tui", lambda repo: launched.append(repo))
+    launched: list[tuple] = []
+    monkeypatch.setattr(
+        "pyrrhon.tui.app.run_tui", lambda repo, voice=False: launched.append((repo, voice))
+    )
     main(["some/repo"])
-    assert launched == ["some/repo"]
+    assert launched == [("some/repo", False)]
 
 
 def test_text_flag_launches_repl(monkeypatch):
-    launched: list[str] = []
-    monkeypatch.setattr("pyrrhon.repl.run_repl", lambda repo: launched.append(repo))
+    launched: list[tuple] = []
+    monkeypatch.setattr(
+        "pyrrhon.repl.run_repl", lambda repo, voice=False: launched.append((repo, voice))
+    )
     main(["--text", "some/repo"])
-    assert launched == ["some/repo"]
+    assert launched == [("some/repo", False)]
+
+
+def test_voice_flag_reaches_the_tui(monkeypatch):
+    launched: list[tuple] = []
+    monkeypatch.setattr(
+        "pyrrhon.tui.app.run_tui", lambda repo, voice=False: launched.append((repo, voice))
+    )
+    main(["--voice", "some/repo"])
+    assert launched == [("some/repo", True)]

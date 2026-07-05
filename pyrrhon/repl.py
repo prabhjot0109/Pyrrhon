@@ -8,7 +8,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.markdown import Markdown
 
-from pyrrhon.commands import builtin, debug_cmd  # noqa: F401 — registers commands
+from pyrrhon.commands import builtin, debug_cmd, voice_cmd  # noqa: F401 — registers commands
 from pyrrhon.commands.registry import CommandContext, dispatch
 from pyrrhon.config.settings import load_settings
 from pyrrhon.core.agent.loop import Agent
@@ -52,12 +52,18 @@ class ConsoleUI:
         self._console.print(text)
 
 
-def run_repl(repo: str) -> None:
+def run_repl(repo: str, voice: bool = False) -> None:
     console = Console()
     repo_root = Path(repo).resolve()
     if not repo_root.is_dir():
         console.print(f"[red]Not a directory: {repo_root}[/red]")
         raise SystemExit(1)
+    if voice:
+        # Voice is a TUI-channel feature; the plain REPL stays text-only.
+        console.print(
+            "[yellow]--voice needs the TUI — run plain `pyrrhon` for voice; "
+            "continuing in text mode.[/yellow]"
+        )
     try:
         agent = build_agent(repo_root)
     except MissingAPIKeyError as exc:
