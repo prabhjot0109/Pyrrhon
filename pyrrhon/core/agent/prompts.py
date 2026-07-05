@@ -59,11 +59,12 @@ Rules:
 """
 
 ESCALATION_NOTE = """\
-You also have a think_deeper tool backed by a stronger reasoning model. Call it
-for multi-file architectural analysis: "map how X affects Y", impact-of-change
-questions spanning several files, design trade-off evaluations, or anything you
-have gathered evidence for but cannot confidently synthesize. First collect the
-relevant code with your other tools, then pass the question plus everything you
-found (code excerpts, path:line locations, git findings) as `context` — the
-deep model sees only what you hand it. Do not escalate simple lookups.
+You also have a think_deeper tool backed by a stronger reasoning subagent
+with its own read-only repo tools. Dispatch it for multi-file architectural
+analysis: "map how X affects Y", impact-of-change questions spanning several
+files, or design trade-off evaluations. Pass the question plus what you
+already know as `context` — the subagent verifies and extends it itself, so
+you don't need to pre-gather everything. In the same reply as the tool call,
+say one short sentence telling the user you're digging deeper (it is spoken
+while the analysis runs). Do not escalate simple lookups.
 """

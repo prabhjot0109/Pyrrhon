@@ -79,6 +79,7 @@ class Agent:
         grounding_gate: GroundingGate | None = None,
         allow_retry: bool = True,
         deep_llm=None,
+        deep_tools: list[Tool] | None = None,
         mode: str = "understand",
         context_budget_tokens: int = 32000,
         context_keep_last: int = 8,
@@ -95,7 +96,7 @@ class Agent:
         self.context_budget_tokens = context_budget_tokens
         self.context_keep_last = context_keep_last
         if deep_llm is not None:
-            deep_tool = ThinkDeeperTool(deep_llm)
+            deep_tool = ThinkDeeperTool(deep_llm, tools=deep_tools)
             self.tools[deep_tool.name] = deep_tool
             self.system_prompt = system_prompt + "\n" + ESCALATION_NOTE
 

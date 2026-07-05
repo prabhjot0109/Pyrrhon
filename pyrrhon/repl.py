@@ -107,6 +107,22 @@ def build_agent(
     plugin_prompts = "\n\n".join(p.prompt_text for p in plugins if p.prompt_text)
     if plugin_prompts:
         system_prompt += f"\n# Plugin context\n\n{plugin_prompts}\n"
+    # The deep subagent's read-only belt. Excluded on purpose: think_deeper
+    # (recursion), write_spec (read-only), remember (fast model owns memory),
+    # web tools (repo questions stay in the repo), MCP/plugin tools
+    # (uncontrolled cost).
+    deep_tools = [
+        ReadFileTool(repo_root),
+        GrepTool(repo_root),
+        GlobTool(repo_root),
+        FindSymbolTool(index),
+        FindReferencesTool(index),
+        DependenciesTool(index),
+        RepoMapTool(index),
+        GitLogTool(repo_root),
+        GitBlameTool(repo_root),
+        GitShowTool(repo_root),
+    ]
     return Agent(
         llm=llm,
         tools=tools,
@@ -116,6 +132,7 @@ def build_agent(
         # REPL is a screen channel → default allow_retry=True. M3's speech
         # path constructs its Agent with allow_retry=False (spec split-path).
         deep_llm=deep_llm,
+        deep_tools=deep_tools,
         context_budget_tokens=settings.context.budget_tokens,
         context_keep_last=settings.context.keep_last_messages,
     )
