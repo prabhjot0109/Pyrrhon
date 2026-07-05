@@ -17,11 +17,12 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal
 from textual.widgets import Input, RichLog
 
-from pyrrhon.commands import builtin, debug_cmd, mcp_cmd, voice_cmd  # noqa: F401 — registers commands
+from pyrrhon.commands import builtin, debug_cmd, mcp_cmd, mode_cmd, voice_cmd  # noqa: F401 — registers commands
 from pyrrhon.commands.registry import CommandContext, dispatch
 from pyrrhon.config.settings import load_settings
 from pyrrhon.core.agent.loop import Agent
 from pyrrhon.core.events import (
+    AskUser,
     Citation,
     ScreenArtifact,
     SpeechChunk,
@@ -131,7 +132,7 @@ class PyrrhonApp(App):
         fast = getattr(self.agent.llm, "model", "unknown")
         deep = getattr(getattr(self.agent, "deep_llm", None), "model", "= fast")
         self.query_one(StatusBar).show_status(
-            "understand", fast, deep, latency_ms=self.session.last_turn_latency_ms
+            self.session.mode, fast, deep, latency_ms=self.session.last_turn_latency_ms
         )
 
     @on(Input.Submitted, "#prompt")
@@ -177,6 +178,9 @@ class PyrrhonApp(App):
         elif isinstance(event, ScreenArtifact):
             # M0/M1 never emit these; rendered plainly until M3 refines per-kind.
             transcript.write(Markdown(event.content))
+        elif isinstance(event, AskUser):
+            # Design mode's Socratic question, rendered distinctly (spec: M6).
+            transcript.write(Text(f"? {event.question}", style="bold magenta"))
         elif isinstance(event, TruncateSpeech):
             # Voice barge-in: history was rewritten to what was actually heard.
             transcript.write(Text("⏹ interrupted", style="dim"))

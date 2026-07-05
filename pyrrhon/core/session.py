@@ -16,10 +16,14 @@ import asyncio
 import time
 from collections.abc import AsyncIterator
 
+from pyrrhon.core.agent.design_prompts import DESIGN_PROMPT
 from pyrrhon.core.agent.loop import Agent
 from pyrrhon.core.events import Event, SpeechChunk
 
 INTERRUPTED_MARKER = " …[interrupted]"
+
+VALID_MODES: frozenset[str] = frozenset({"understand", "design"})
+UNDERSTAND_MARKER = "Return to understand mode."
 
 _TURN_DONE = object()
 
@@ -36,6 +40,33 @@ class Session:
         # Channels read this for the status bar; M3's voice budget is judged
         # against it. None until the first turn produces speech.
         self.last_turn_latency_ms: float | None = None
+
+    def set_mode(self, mode: str) -> None:
+        """Switch understand <-> design by layering a system message.
+
+        The base teaching prompt from turn one always stays underneath; the
+        injected message sits on top of the history. Design gets the full
+        skeptic policy; understand gets a one-line marker (the base prompt
+        already carries the teaching policy, so no re-injection is needed).
+        """
+        if mode not in VALID_MODES:
+            raise ValueError(
+                f"Unknown mode '{mode}'. Valid modes: "
+                f"{', '.join(sorted(VALID_MODES))}."
+            )
+        if mode == self.mode:
+            return
+        if not self.history:
+            # First run_turn normally injects the base prompt; if the user
+            # switches mode before saying anything, inject it now so the
+            # mode message never becomes the conversation's foundation.
+            self.history.append(
+                {"role": "system", "content": self.agent.system_prompt}
+            )
+        self.mode = mode
+        self.agent.mode = mode
+        content = DESIGN_PROMPT if mode == "design" else UNDERSTAND_MARKER
+        self.history.append({"role": "system", "content": content})
 
     async def run_turn(self, user_text: str) -> AsyncIterator[Event]:
         """Drive one turn, timing user_text -> first SpeechChunk."""
