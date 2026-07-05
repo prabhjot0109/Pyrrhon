@@ -8,15 +8,21 @@ from pathlib import Path
 from rich.console import Console
 from rich.markdown import Markdown
 
-from pyrrhon.commands import builtin, debug_cmd, voice_cmd  # noqa: F401 — registers commands
+from pyrrhon.commands import builtin, debug_cmd, mcp_cmd, voice_cmd  # noqa: F401 — registers commands
 from pyrrhon.commands.registry import CommandContext, dispatch
 from pyrrhon.config.settings import load_settings
 from pyrrhon.core.agent.loop import Agent
 from pyrrhon.core.agent.soul import build_system_prompt
 from pyrrhon.core.events import Citation, SpeechChunk, ToolCallStarted
 from pyrrhon.core.grounding.gate import GroundingGate
-from pyrrhon.core.providers.llm import MissingAPIKeyError, create_llm
+from pyrrhon.core.mcp import MCPManager
+from pyrrhon.core.providers.llm import (
+    FallbackLLM,
+    MissingAPIKeyError,
+    create_llm_with_fallbacks,
+)
 from pyrrhon.core.session import Session
+from pyrrhon.core.tools.base import Tool
 from pyrrhon.core.tools.ast_index import FindReferencesTool, FindSymbolTool, SymbolIndex
 from pyrrhon.core.tools.git import GitBlameTool, GitLogTool, GitShowTool
 from pyrrhon.core.tools.memory import RememberTool
@@ -24,13 +30,19 @@ from pyrrhon.core.tools.repo import GlobTool, GrepTool, ReadFileTool
 from pyrrhon.core.tools.web import WebFetchTool, WebSearchTool
 
 
-def build_agent(repo_root: Path, llm=None, deep_llm=None) -> Agent:
+def build_agent(
+    repo_root: Path,
+    llm=None,
+    deep_llm=None,
+    extra_tools: list[Tool] | None = None,
+) -> Agent:
     settings = load_settings(repo_root)
-    llm = llm or create_llm(settings.fast, settings)
+    # With no [fallbacks] configured this returns exactly what create_llm did.
+    llm = llm or create_llm_with_fallbacks("fast", settings)
     if deep_llm is None:
         try:
             # deep_slot falls back to fast when [deep] is unset (Settings rule).
-            deep_llm = create_llm(settings.deep_slot, settings)
+            deep_llm = create_llm_with_fallbacks("deep", settings)
         except MissingAPIKeyError:
             deep_llm = None  # no key for the deep slot -> think_deeper not registered
     index = SymbolIndex(repo_root)
@@ -46,6 +58,7 @@ def build_agent(repo_root: Path, llm=None, deep_llm=None) -> Agent:
         GitShowTool(repo_root),
         WebSearchTool(),
         WebFetchTool(),
+        *(extra_tools or []),  # MCP adapters join here
     ]
     return Agent(
         llm=llm,
@@ -83,26 +96,47 @@ def run_repl(repo: str, voice: bool = False) -> None:
             "continuing in text mode.[/yellow]"
         )
     try:
-        agent = build_agent(repo_root)
+        # Agent construction happens inside the loop: the MCP manager's
+        # start()/stop() must run in the same asyncio task (anyio rule).
+        asyncio.run(_repl_main(console, repo_root))
     except MissingAPIKeyError as exc:
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(1)
-
-    console.print(
-        f"[bold]Pyrrhon[/bold] — discussing [cyan]{repo_root.name}[/cyan]. "
-        "Commands: /help, /quit"
-    )
-    try:
-        asyncio.run(_repl_loop(agent, console, repo_root))
     except KeyboardInterrupt:
         pass
 
 
-async def _repl_loop(agent: Agent, console: Console, repo_root: Path) -> None:
+async def _repl_main(console: Console, repo_root: Path) -> None:
+    settings = load_settings(repo_root)
+    manager = MCPManager(settings.mcp_servers)
+    mcp_tools = await manager.start()  # never raises; dead servers log one warning
+    try:
+        agent = build_agent(repo_root, extra_tools=mcp_tools)
+        console.print(
+            f"[bold]Pyrrhon[/bold] — discussing [cyan]{repo_root.name}[/cyan]. "
+            "Commands: /help, /quit"
+        )
+        await _repl_loop(agent, console, repo_root, mcp=manager)
+    finally:
+        await manager.stop()  # same task as start() — anyio cancel-scope rule
+
+
+async def _repl_loop(
+    agent: Agent, console: Console, repo_root: Path, mcp: MCPManager | None = None
+) -> None:
     ui = ConsoleUI(console)
+    if isinstance(agent.llm, FallbackLLM):
+        llm = agent.llm
+        # Spec: provider failure -> fallback chain "with a one-sentence
+        # spoken notice". In this text channel the notice prints.
+        llm.on_switch = lambda i: ui.notify(
+            f"My primary model stopped responding — switching to {llm.chain[i].model}."
+        )
     session = Session(agent)
     # voice stays None: the plain REPL is a text channel; /voice answers honestly.
-    ctx = CommandContext(repo_root=repo_root, agent=agent, ui=ui, session=session)
+    ctx = CommandContext(
+        repo_root=repo_root, agent=agent, ui=ui, session=session, mcp=mcp
+    )
     while True:
         try:
             user = (await asyncio.to_thread(console.input, "[bold cyan]you> [/bold cyan]")).strip()
@@ -117,6 +151,10 @@ async def _repl_loop(agent: Agent, console: Console, repo_root: Path) -> None:
             console.print(response)
             continue
         await _turn(session, user, console, ui)
+        if session.last_turn_latency_ms is not None:
+            console.print(
+                f"[dim](first response in {session.last_turn_latency_ms:.0f} ms)[/dim]"
+            )
 
 
 async def _turn(session: Session, user: str, console: Console, ui: ConsoleUI) -> None:
