@@ -69,3 +69,11 @@ async def test_init_via_tui(tmp_path: Path):
         await submit(app, pilot, "/init")
         assert (tmp_path / ".pyrrhon" / "soul.md").is_file()
         assert "soul file created" in app.last_command_response
+
+
+async def test_turn_failure_reports_error_and_recovers():
+    app, fake = make_app([])  # first chat() call raises inside FakeLLM
+    async with app.run_test(size=(120, 40)) as pilot:
+        await submit(app, pilot, "hello")
+        prompt = app.query_one("#prompt", Input)
+        assert not prompt.disabled and prompt.has_focus  # session survived the failed turn

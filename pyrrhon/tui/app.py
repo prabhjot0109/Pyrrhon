@@ -123,6 +123,10 @@ class PyrrhonApp(App):
                 elif isinstance(event, ScreenArtifact):
                     # M0/M1 never emit these; rendered plainly until M3 refines per-kind.
                     transcript.write(Markdown(event.content))
+        except Exception as exc:
+            # A failed turn must not kill the session (Textual workers
+            # default to exit_on_error=True): show it and hand back the prompt.
+            transcript.write(Text(f"ERROR: turn failed: {exc}", style="red"))
         finally:
             prompt.disabled = False
             prompt.focus()
