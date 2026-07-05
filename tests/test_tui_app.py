@@ -43,3 +43,12 @@ async def test_show_citation_unreadable_file_is_error_not_crash():
         await pilot.pause()
         viewer = app.query_one(CodeViewer)
         assert viewer.current_file is None  # nothing loaded, app still alive
+
+
+async def test_show_citation_escaping_path_is_rejected():
+    app = make_app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.show_citation(Citation(file="../../outside.py", line=1))
+        await pilot.pause()
+        viewer = app.query_one(CodeViewer)
+        assert viewer.current_file is None  # escape rejected, app still alive

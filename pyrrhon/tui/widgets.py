@@ -26,7 +26,13 @@ class CodeViewer(Static):
         self.current_line: int | None = None
 
     def show(self, citation: Citation, root: Path) -> None:
-        path = root / citation.file
+        # Guard: ensure citation path stays inside root (mirrors repo-tools containment rule).
+        path = (root / citation.file).resolve()
+        try:
+            path.relative_to(root.resolve())
+        except ValueError:
+            self.update(f"ERROR: citation escapes the repo: {citation.file}")
+            return
         try:
             source = path.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
