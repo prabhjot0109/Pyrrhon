@@ -100,3 +100,29 @@ async def test_forced_answer_falls_back_to_canned_text_on_failure():
     events = [e async for e in agent.run_turn([], "q")]
     speech = [e for e in events if isinstance(e, SpeechChunk)]
     assert "budget" in speech[-1].text  # canned fallback
+
+
+async def test_narration_alongside_tool_calls_is_spoken():
+    fast = FakeLLM([
+        LLMReply(
+            text="Give me a second — I'm tracing that through the codebase.",
+            tool_calls=(ToolCall(id="c1", name="echo", arguments={"text": "x"}),),
+        ),
+        LLMReply(text="Here is the answer."),
+    ])
+    agent = Agent(llm=fast, tools=[EchoTool()], system_prompt="p", repo_root=FIXTURE)
+    events = [e async for e in agent.run_turn([], "q")]
+    speech = [e.text for e in events if isinstance(e, SpeechChunk)]
+    assert speech[0].startswith("Give me a second")
+    assert speech[-1] == "Here is the answer."
+
+
+async def test_no_narration_event_when_reply_has_no_text():
+    fast = FakeLLM([
+        LLMReply(tool_calls=(ToolCall(id="c1", name="echo", arguments={"text": "x"}),)),
+        LLMReply(text="answer"),
+    ])
+    agent = Agent(llm=fast, tools=[EchoTool()], system_prompt="p", repo_root=FIXTURE)
+    events = [e async for e in agent.run_turn([], "q")]
+    speech = [e for e in events if isinstance(e, SpeechChunk)]
+    assert len(speech) == 1

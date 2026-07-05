@@ -123,6 +123,15 @@ class Agent:
                     yield event
                 return
 
+            if reply.text:
+                # Narration spoken while tools run. It passes the gate too:
+                # a fabricated citation must never be spoken, even mid-turn.
+                narration = reply.text
+                if self.grounding_gate is not None:
+                    narration = (await self.grounding_gate.check(narration)).speech_text
+                if narration.strip():
+                    yield SpeechChunk(text=narration)
+
             history.append(assistant_tool_message(reply))
             for call in reply.tool_calls:
                 yield ToolCallStarted(name=call.name, args=call.arguments)
