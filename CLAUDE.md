@@ -31,16 +31,16 @@ Python >= 3.12 (`.python-version`, `pyproject.toml`).
 
 - Install/sync deps: `uv sync`
 - Add a dependency: `uv add <package>`
-- Run the app: `uv run pyrrhon [repo-path]` (alternatively `python -m pyrrhon`;
-  needs `GROQ_API_KEY` set or configure another provider in `.pyrrhon.toml`)
+- Run the app: `uv run pyrrhon [repo-path]` — launches the Textual TUI;
+  add `--text` for the plain-text REPL (needs `GROQ_API_KEY` set, or
+  configure another provider in `.pyrrhon.toml`)
 - Run tests: `uv run pytest` (single test: `uv run pytest path::test_name`)
 
 - Run the grounding eval (real LLM, needs an API key):
   `uv run python -m pyrrhon.evals.grounding evals/grounding.yaml`
 
-There is no lint config yet. Current state: M1 (trust: grounding gate +
-grounding eval + memory) — see
-`docs/superpowers/plans/2026-07-03-pyrrhon-m1-grounding-gate-memory.md`.
+There is no lint config yet. Current state: M2 (Textual TUI + slash-command
+registry) — see `docs/superpowers/plans/2026-07-03-pyrrhon-m2-textual-tui.md`.
 
 
 ## Design constraints (do not violate without discussion)

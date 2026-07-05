@@ -37,3 +37,20 @@ def test_build_agent_wires_grounding_gate():
     assert isinstance(agent.grounding_gate, GroundingGate)
     assert agent.grounding_gate.root == FIXTURE
     assert agent.allow_retry is True  # REPL is a screen channel
+
+
+async def test_console_ui_tracks_citations_for_code_command():
+    import io
+
+    from rich.console import Console
+
+    from pyrrhon.core.events import Citation
+    from pyrrhon.repl import ConsoleUI, _turn
+
+    console = Console(file=io.StringIO())
+    ui = ConsoleUI(console)
+    fake = FakeLLM([LLMReply(text="greet lives at utils/helpers.py:1.")])
+    agent = build_agent(FIXTURE, llm=fake)
+
+    await _turn(agent, [], "where is greet?", console, ui)
+    assert ui.last_citation == Citation(file="utils/helpers.py", line=1)

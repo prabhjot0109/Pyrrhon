@@ -8,7 +8,8 @@ from pathlib import Path
 from rich.console import Console
 from rich.markdown import Markdown
 
-from pyrrhon.commands.init_cmd import init_pyrrhon_dir
+from pyrrhon.commands import builtin  # noqa: F401 — registers /init, /model, /code
+from pyrrhon.commands.registry import CommandContext, dispatch
 from pyrrhon.config.settings import load_settings
 from pyrrhon.core.agent.loop import Agent
 from pyrrhon.core.agent.soul import build_system_prompt
@@ -39,6 +40,17 @@ def build_agent(repo_root: Path, llm=None) -> Agent:
     )
 
 
+class ConsoleUI:
+    """Duck-typed `ui` for CommandContext in the text channel."""
+
+    def __init__(self, console: Console):
+        self._console = console
+        self.last_citation: Citation | None = None
+
+    def notify(self, text: str) -> None:
+        self._console.print(text)
+
+
 def run_repl(repo: str) -> None:
     console = Console()
     repo_root = Path(repo).resolve()
@@ -53,7 +65,7 @@ def run_repl(repo: str) -> None:
 
     console.print(
         f"[bold]Pyrrhon[/bold] — discussing [cyan]{repo_root.name}[/cyan]. "
-        "Commands: /init (personalize), /quit"
+        "Commands: /help, /quit"
     )
     try:
         asyncio.run(_repl_loop(agent, console, repo_root))
@@ -62,6 +74,8 @@ def run_repl(repo: str) -> None:
 
 
 async def _repl_loop(agent: Agent, console: Console, repo_root: Path) -> None:
+    ui = ConsoleUI(console)
+    ctx = CommandContext(repo_root=repo_root, agent=agent, ui=ui)
     history: list[dict] = []
     while True:
         try:
@@ -72,15 +86,19 @@ async def _repl_loop(agent: Agent, console: Console, repo_root: Path) -> None:
             continue
         if user in {"/quit", "/exit"}:
             break
-        if user == "/init":
-            path, created = init_pyrrhon_dir(repo_root)
-            verb = "created" if created else "already exists"
-            console.print(f"soul file {verb}: {path} — edit it, then restart the session.")
+        response = dispatch(user, ctx)
+        if response is not None:
+            console.print(response)
             continue
-        async for event in agent.run_turn(history, user):
-            if isinstance(event, ToolCallStarted):
-                console.print(f"[dim]→ {event.name}({event.args})[/dim]")
-            elif isinstance(event, SpeechChunk):
-                console.print(Markdown(event.text))
-            elif isinstance(event, Citation):
-                console.print(f"[green]📍 {event.file}:{event.line}[/green]")
+        await _turn(agent, history, user, console, ui)
+
+
+async def _turn(agent: Agent, history: list[dict], user: str, console: Console, ui: ConsoleUI) -> None:
+    async for event in agent.run_turn(history, user):
+        if isinstance(event, ToolCallStarted):
+            console.print(f"[dim]→ {event.name}({event.args})[/dim]")
+        elif isinstance(event, SpeechChunk):
+            console.print(Markdown(event.text))
+        elif isinstance(event, Citation):
+            ui.last_citation = event  # /code opens the most recent citation
+            console.print(f"[green]📍 {event.file}:{event.line}[/green]")
