@@ -108,6 +108,8 @@ def build_agent(
         # REPL is a screen channel → default allow_retry=True. M3's speech
         # path constructs its Agent with allow_retry=False (spec split-path).
         deep_llm=deep_llm,
+        context_budget_tokens=settings.context.budget_tokens,
+        context_keep_last=settings.context.keep_last_messages,
     )
 
 

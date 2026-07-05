@@ -18,6 +18,7 @@ from pathlib import Path
 
 from pyrrhon.core.agent.escalate import ThinkDeeperTool
 from pyrrhon.core.agent.prompts import ESCALATION_NOTE
+from pyrrhon.core.context import compact_tool_results, maybe_summarize
 from pyrrhon.core.events import (
     AskUser,
     Event,
@@ -75,6 +76,8 @@ class Agent:
         allow_retry: bool = True,
         deep_llm=None,
         mode: str = "understand",
+        context_budget_tokens: int = 32000,
+        context_keep_last: int = 8,
     ):
         self.llm = llm
         self.tools = {tool.name: tool for tool in tools}
@@ -85,6 +88,8 @@ class Agent:
         self.allow_retry = allow_retry
         # Mutable: Session.set_mode reassigns it on /mode switches.
         self.mode = mode
+        self.context_budget_tokens = context_budget_tokens
+        self.context_keep_last = context_keep_last
         if deep_llm is not None:
             deep_tool = ThinkDeeperTool(deep_llm)
             self.tools[deep_tool.name] = deep_tool
@@ -96,6 +101,14 @@ class Agent:
         if not history:
             history.append({"role": "system", "content": self.system_prompt})
         history.append({"role": "user", "content": user_text})
+        compact_tool_results(history)
+        if self.context_budget_tokens:
+            await maybe_summarize(
+                history,
+                self.llm,
+                self.context_budget_tokens,
+                keep_last=self.context_keep_last,
+            )
         schemas = [tool.schema() for tool in self.tools.values()]
 
         for _ in range(self.max_tool_rounds):

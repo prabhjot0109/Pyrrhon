@@ -62,3 +62,67 @@ def compact_tool_results(history: list[dict]) -> int:
         )
         elided += 1
     return elided
+
+
+SUMMARY_PROMPT = (
+    "Summarize the conversation below so it can be continued later. Keep: the "
+    "user's goals, decisions made, key findings about the codebase, and EVERY "
+    "path:line citation EXACTLY as written (e.g. utils/helpers.py:12). Drop "
+    "tool output noise and dead ends. 300 words maximum. Output only the summary."
+)
+
+SUMMARY_HEADER = "Summary of earlier conversation (older turns were compacted):\n"
+
+
+def _render(messages: list[dict]) -> str:
+    lines: list[str] = []
+    for message in messages:
+        role = message.get("role", "?")
+        content = message.get("content")
+        if isinstance(content, str) and content:
+            lines.append(f"{role}: {content}")
+        for call in message.get("tool_calls") or ():
+            name = call.get("function", {}).get("name", "?")
+            args = call.get("function", {}).get("arguments", "")
+            lines.append(f"{role} called tool {name}({args})")
+    return "\n".join(lines)
+
+
+async def maybe_summarize(
+    history: list[dict], llm, budget_tokens: int, keep_last: int = 8
+) -> bool:
+    """Compress old turns into one system summary when over budget.
+
+    history[0] (the base system prompt) and the last `keep_last` messages
+    survive verbatim; system messages in the compacted span (mode prompts)
+    are kept in place, not summarized away. The split never strands a tool
+    result without its parent assistant tool_calls message. Any LLM failure
+    leaves history untouched — compaction is an optimization, never a
+    correctness requirement.
+    """
+    if history_tokens(history) <= budget_tokens:
+        return False
+    split = max(len(history) - keep_last, 1)
+    while split > 1 and history[split].get("role") == "tool":
+        split -= 1
+    if split <= 1:
+        return False
+    middle = history[1:split]
+    try:
+        reply = await llm.chat(
+            [
+                {"role": "system", "content": SUMMARY_PROMPT},
+                {"role": "user", "content": _render(middle)},
+            ],
+            tools=None,
+        )
+    except Exception:
+        return False
+    if not reply.text:
+        return False
+    kept_system = [m for m in middle if m.get("role") == "system"]
+    history[1:split] = [
+        *kept_system,
+        {"role": "system", "content": SUMMARY_HEADER + reply.text},
+    ]
+    return True

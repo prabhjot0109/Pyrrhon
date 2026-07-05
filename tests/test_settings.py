@@ -50,6 +50,16 @@ def test_custom_provider_in_config(tmp_path: Path):
     assert settings.provider_for(settings.fast).base_url == "http://localhost:8000/v1"
 
 
+def test_context_settings_defaults_and_override(tmp_path: Path):
+    assert load_settings(tmp_path).context.budget_tokens == 32000
+    (tmp_path / ".pyrrhon.toml").write_text(
+        "[context]\nbudget_tokens = 9000\nkeep_last_messages = 4\n", encoding="utf-8"
+    )
+    settings = load_settings(tmp_path)
+    assert settings.context.budget_tokens == 9000
+    assert settings.context.keep_last_messages == 4
+
+
 def test_voice_settings_defaults_and_override(tmp_path: Path):
     settings = load_settings(repo_root=tmp_path, home=tmp_path / "nohome")
     assert settings.voice.tts_voice == "nova"

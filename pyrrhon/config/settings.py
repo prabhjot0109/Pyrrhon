@@ -61,11 +61,19 @@ class VoiceSettings(BaseModel):
     chars_per_sec: float = 15.0                # played-text estimator rate
 
 
+class ContextSettings(BaseModel):
+    """Context-window budgeting (TOML section [context])."""
+
+    budget_tokens: int = 32000       # estimated-token ceiling before compaction
+    keep_last_messages: int = 8      # recent messages kept verbatim
+
+
 class Settings(BaseModel):
     fast: ModelSlot = ModelSlot(provider="groq", model="llama-3.3-70b-versatile")
     deep: ModelSlot | None = None
     providers: dict[str, ProviderConfig] = {}
     voice: VoiceSettings = VoiceSettings()
+    context: ContextSettings = ContextSettings()
     mcp_servers: dict[str, MCPServerConfig] = {}
     # Slot name ("fast"/"deep") -> providers tried IN ORDER after the slot's
     # primary. Entry format: "provider" or "provider/model" (first '/' splits).
