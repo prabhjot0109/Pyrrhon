@@ -1,0 +1,7 @@
+name = "hello-reviewer"
+version = "0.1.0"
+description = "A review-style prompt plus a static code-review checklist tool."
+
+[contributes]
+prompts = ["prompts/*.md"]
+tools = "tools.py:get_tools"
