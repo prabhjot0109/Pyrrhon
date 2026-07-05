@@ -5,7 +5,7 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 
 class ModelSlot(BaseModel):
@@ -16,6 +16,23 @@ class ModelSlot(BaseModel):
 class ProviderConfig(BaseModel):
     base_url: str | None = None
     api_key_env: str
+
+
+class MCPServerConfig(BaseModel):
+    """One [mcp_servers.<name>] table: a stdio command OR a streamable-HTTP url."""
+
+    command: str | None = None
+    args: list[str] = []
+    url: str | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one_transport(self) -> "MCPServerConfig":
+        if (self.command is None) == (self.url is None):
+            raise ValueError(
+                "an MCP server needs exactly one of 'command' (stdio) or "
+                "'url' (streamable HTTP)"
+            )
+        return self
 
 
 BUILTIN_PROVIDERS: dict[str, ProviderConfig] = {
@@ -49,6 +66,10 @@ class Settings(BaseModel):
     deep: ModelSlot | None = None
     providers: dict[str, ProviderConfig] = {}
     voice: VoiceSettings = VoiceSettings()
+    mcp_servers: dict[str, MCPServerConfig] = {}
+    # Slot name ("fast"/"deep") -> providers tried IN ORDER after the slot's
+    # primary. Entry format: "provider" or "provider/model" (first '/' splits).
+    fallbacks: dict[str, list[str]] = {}
 
     @property
     def deep_slot(self) -> ModelSlot:
