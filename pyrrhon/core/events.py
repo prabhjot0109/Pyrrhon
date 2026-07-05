@@ -52,6 +52,20 @@ class AskUser:
     question: str
 
 
+@dataclass(frozen=True)
+class TruncateSpeech:
+    """The one reverse-direction event (channel → core).
+
+    Emitted by the voice layer on barge-in. `played_text` is the prose the
+    user actually heard before interrupting — word-level playback timestamps
+    where the TTS service provides them, a duration-based estimate otherwise.
+    The session rewrites the last assistant message to exactly this text:
+    history never assumes knowledge of unspoken words.
+    """
+
+    played_text: str
+
+
 Event = (
     SpeechChunk
     | ScreenArtifact
@@ -59,4 +73,5 @@ Event = (
     | ToolCallStarted
     | ToolCallFinished
     | AskUser
+    | TruncateSpeech
 )
