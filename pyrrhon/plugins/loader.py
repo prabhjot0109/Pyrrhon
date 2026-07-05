@@ -17,8 +17,11 @@ one-line warning — it never crashes startup.
 
 from __future__ import annotations
 
+import importlib.util
 import logging
+import sys
 import tomllib
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -57,6 +60,53 @@ def parse_manifest(path: Path) -> PluginManifest:
     with path.open("rb") as f:
         data = tomllib.load(f)
     return PluginManifest.model_validate(data)
+
+
+def read_trusted(repo_root: Path) -> set[str]:
+    """Plugin names the user has trusted for this repo (<repo>/.pyrrhon/trusted)."""
+    path = repo_root / ".pyrrhon" / "trusted"
+    if not path.is_file():
+        return set()
+    return {
+        line.strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    }
+
+
+def record_trusted(repo_root: Path, names: Iterable[str]) -> None:
+    """Append newly trusted plugin names (one per line, no duplicates)."""
+    existing = read_trusted(repo_root)
+    new = [name for name in names if name not in existing]
+    if not new:
+        return
+    directory = repo_root / ".pyrrhon"
+    directory.mkdir(exist_ok=True)
+    with (directory / "trusted").open("a", encoding="utf-8") as f:
+        for name in new:
+            f.write(name + "\n")
+
+
+def _load_entry(plugin_dir: Path, plugin_name: str, entry: str):
+    """Load '<relative/file>.py:<callable>' from inside the plugin dir."""
+    file_part, _, attr = entry.partition(":")
+    if not file_part or not attr:
+        raise ValueError(f"entry point {entry!r} must look like 'tools.py:get_tools'")
+    target = (plugin_dir / file_part).resolve()
+    target.relative_to(plugin_dir.resolve())  # ValueError → entry escapes the plugin dir
+    module_name = f"pyrrhon_plugin_{plugin_name}_{target.stem}".replace(
+        "-", "_"
+    ).replace(".", "_")
+    spec = importlib.util.spec_from_file_location(module_name, target)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot create import spec for {target}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)  # may raise whatever the plugin code raises
+    fn = getattr(module, attr, None)
+    if fn is None:
+        raise AttributeError(f"{target} has no attribute {attr!r}")
+    return fn
 
 
 @dataclass
@@ -111,6 +161,30 @@ class PluginManager:
             loaded[name] = plugin
         return list(loaded.values())
 
+    def _is_global(self, plugin_dir: Path) -> bool:
+        return (
+            plugin_dir.resolve().parent
+            == (self.home / ".pyrrhon" / "plugins").resolve()
+        )
+
+    def repo_code_plugins(self) -> list[str]:
+        """Names of repo-level plugins declaring executable contributions.
+
+        This is the list the channel must obtain user consent for before
+        calling load_all(allow_repo_code=True).
+        """
+        names: list[str] = []
+        for plugin_dir in self.discover():
+            if self._is_global(plugin_dir):
+                continue
+            try:
+                manifest = parse_manifest(plugin_dir / "plugin.toml")
+            except (OSError, tomllib.TOMLDecodeError, ValidationError):
+                continue  # load_all warns about it; nothing loadable to trust
+            if manifest.contributes.tools or manifest.contributes.commands:
+                names.append(manifest.name)
+        return names
+
     def _load_one(self, plugin_dir: Path, allow_repo_code: bool) -> LoadedPlugin | None:
         try:
             manifest = parse_manifest(plugin_dir / "plugin.toml")
@@ -118,9 +192,37 @@ class PluginManager:
             log.warning("plugin at %s: bad manifest (%s) — skipped", plugin_dir, exc)
             return None
         prompt_text = _load_prompts(plugin_dir, manifest)
-        # Executable contributions (tools/commands entry points) land in Task 3.
+        contributes = manifest.contributes
+        tools: list[Tool] = []
+        wants_code = bool(contributes.tools or contributes.commands)
+        code_allowed = self._is_global(plugin_dir) or allow_repo_code
+        if wants_code and not code_allowed:
+            log.warning(
+                "plugin %s: repo-level executable contributions are not trusted — "
+                "loading prompts/config only",
+                manifest.name,
+            )
+        if wants_code and code_allowed:
+            try:
+                if contributes.tools:
+                    get_tools = _load_entry(plugin_dir, manifest.name, contributes.tools)
+                    candidates = list(get_tools())
+                    for tool in candidates:
+                        if not isinstance(tool, Tool):
+                            raise TypeError(f"get_tools() returned a non-Tool: {tool!r}")
+                    tools = candidates
+                if contributes.commands:
+                    get_commands = _load_entry(
+                        plugin_dir, manifest.name, contributes.commands
+                    )
+                    get_commands()  # registers via the @command decorator
+            except Exception as exc:  # noqa: BLE001 — plugin code can raise anything
+                log.warning(
+                    "plugin %s: failed to load code (%s) — skipped", manifest.name, exc
+                )
+                return None
         return LoadedPlugin(
-            manifest=manifest, dir=plugin_dir, tools=[], prompt_text=prompt_text
+            manifest=manifest, dir=plugin_dir, tools=tools, prompt_text=prompt_text
         )
 
 

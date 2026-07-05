@@ -7,6 +7,8 @@ from pyrrhon.plugins.loader import (
     PluginManifest,
     merge_plugin_settings,
     parse_manifest,
+    read_trusted,
+    record_trusted,
 )
 
 __all__ = [
@@ -16,4 +18,6 @@ __all__ = [
     "PluginManifest",
     "merge_plugin_settings",
     "parse_manifest",
+    "read_trusted",
+    "record_trusted",
 ]
