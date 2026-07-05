@@ -17,12 +17,14 @@ making product/scope decisions.
 
 ## Current state
 
-M0 (grounded text REPL) is implemented — headless `pyrrhon/core/` module
-(events, LLM adapter, repo tools, citation extraction, agent loop) with a
-rich-based REPL channel (`pyrrhon/repl.py`), `/init` soul scaffolding, and full
-pytest suite. The previous entry points (`jarvis.py`, `main.py`) have been
-removed from the working tree — do not treat their git history as the intended
-design. There is no lint config yet.
+M0–M3 are implemented — headless `pyrrhon/core/` module (events, LLM adapter,
+repo tools, citation extraction, agent loop, grounding gate, `Session` with
+cancellable turns), a rich-based REPL channel (`pyrrhon/repl.py`), the Textual
+TUI (`pyrrhon/tui/`), and the Pipecat voice channel (`pyrrhon/voice/`:
+mic → Silero VAD → Groq Whisper STT → bridge → OpenAI TTS, with barge-in and
+`TruncateSpeech` history rewriting). The previous entry points (`jarvis.py`,
+`main.py`) have been removed from the working tree — do not treat their git
+history as the intended design. There is no lint config yet.
 
 ## Toolchain and commands
 
@@ -33,14 +35,18 @@ Python >= 3.12 (`.python-version`, `pyproject.toml`).
 - Add a dependency: `uv add <package>`
 - Run the app: `uv run pyrrhon [repo-path]` — launches the Textual TUI;
   add `--text` for the plain-text REPL (needs `GROQ_API_KEY` set, or
-  configure another provider in `.pyrrhon.toml`)
+  configure another provider in `.pyrrhon.toml`); add `--voice` for the
+  voice pipeline (needs `GROQ_API_KEY` + `OPENAI_API_KEY` and the pipecat
+  `local` extra). `/voice on|off` toggles voice inside the TUI;
+  `/debug-history` dumps the session history.
 - Run tests: `uv run pytest` (single test: `uv run pytest path::test_name`)
 
 - Run the grounding eval (real LLM, needs an API key):
   `uv run python -m pyrrhon.evals.grounding evals/grounding.yaml`
 
-There is no lint config yet. Current state: M2 (Textual TUI + slash-command
-registry) — see `docs/superpowers/plans/2026-07-03-pyrrhon-m2-textual-tui.md`.
+There is no lint config yet. Current state: M3 (voice: Pipecat pipeline,
+barge-in, TruncateSpeech) — see
+`docs/superpowers/plans/2026-07-03-pyrrhon-m3-pipecat-voice.md`.
 
 
 ## Design constraints (do not violate without discussion)

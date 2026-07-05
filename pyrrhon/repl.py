@@ -8,7 +8,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.markdown import Markdown
 
-from pyrrhon.commands import builtin  # noqa: F401 — registers /init, /model, /code
+from pyrrhon.commands import builtin, debug_cmd, voice_cmd  # noqa: F401 — registers commands
 from pyrrhon.commands.registry import CommandContext, dispatch
 from pyrrhon.config.settings import load_settings
 from pyrrhon.core.agent.loop import Agent
@@ -16,6 +16,7 @@ from pyrrhon.core.agent.soul import build_system_prompt
 from pyrrhon.core.events import Citation, SpeechChunk, ToolCallStarted
 from pyrrhon.core.grounding.gate import GroundingGate
 from pyrrhon.core.providers.llm import MissingAPIKeyError, create_llm
+from pyrrhon.core.session import Session
 from pyrrhon.core.tools.memory import RememberTool
 from pyrrhon.core.tools.repo import GlobTool, GrepTool, ReadFileTool
 
@@ -51,12 +52,18 @@ class ConsoleUI:
         self._console.print(text)
 
 
-def run_repl(repo: str) -> None:
+def run_repl(repo: str, voice: bool = False) -> None:
     console = Console()
     repo_root = Path(repo).resolve()
     if not repo_root.is_dir():
         console.print(f"[red]Not a directory: {repo_root}[/red]")
         raise SystemExit(1)
+    if voice:
+        # Voice is a TUI-channel feature; the plain REPL stays text-only.
+        console.print(
+            "[yellow]--voice needs the TUI — run plain `pyrrhon` for voice; "
+            "continuing in text mode.[/yellow]"
+        )
     try:
         agent = build_agent(repo_root)
     except MissingAPIKeyError as exc:
@@ -75,8 +82,9 @@ def run_repl(repo: str) -> None:
 
 async def _repl_loop(agent: Agent, console: Console, repo_root: Path) -> None:
     ui = ConsoleUI(console)
-    ctx = CommandContext(repo_root=repo_root, agent=agent, ui=ui)
-    history: list[dict] = []
+    session = Session(agent)
+    # voice stays None: the plain REPL is a text channel; /voice answers honestly.
+    ctx = CommandContext(repo_root=repo_root, agent=agent, ui=ui, session=session)
     while True:
         try:
             user = (await asyncio.to_thread(console.input, "[bold cyan]you> [/bold cyan]")).strip()
@@ -86,15 +94,15 @@ async def _repl_loop(agent: Agent, console: Console, repo_root: Path) -> None:
             continue
         if user in {"/quit", "/exit"}:
             break
-        response = dispatch(user, ctx)
+        response = await dispatch(user, ctx)
         if response is not None:
             console.print(response)
             continue
-        await _turn(agent, history, user, console, ui)
+        await _turn(session, user, console, ui)
 
 
-async def _turn(agent: Agent, history: list[dict], user: str, console: Console, ui: ConsoleUI) -> None:
-    async for event in agent.run_turn(history, user):
+async def _turn(session: Session, user: str, console: Console, ui: ConsoleUI) -> None:
+    async for event in session.run_turn(user):
         if isinstance(event, ToolCallStarted):
             console.print(f"[dim]→ {event.name}({event.args})[/dim]")
         elif isinstance(event, SpeechChunk):

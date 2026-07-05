@@ -28,22 +28,32 @@ def echo_test(args: str, ctx: CommandContext) -> str:
     return f"echo:{args}"
 
 
-def test_plain_text_is_not_a_command():
-    assert dispatch("what does app.py do?", make_ctx()) is None
+@command("echo-async-test", "Echo the arguments back from an async handler (test-only)")
+async def echo_async_test(args: str, ctx: CommandContext) -> str:
+    return f"async-echo:{args}"
 
 
-def test_registered_command_receives_args():
-    assert dispatch("/echo-test hello world", make_ctx()) == "echo:hello world"
+async def test_plain_text_is_not_a_command():
+    assert await dispatch("what does app.py do?", make_ctx()) is None
 
 
-def test_unknown_command_points_at_help():
-    response = dispatch("/doesnotexist", make_ctx())
+async def test_registered_command_receives_args():
+    assert await dispatch("/echo-test hello world", make_ctx()) == "echo:hello world"
+
+
+async def test_async_handlers_are_awaited():
+    # M3 commands (/voice off) await pipeline teardown; sync handlers still work.
+    assert await dispatch("/echo-async-test hi", make_ctx()) == "async-echo:hi"
+
+
+async def test_unknown_command_points_at_help():
+    response = await dispatch("/doesnotexist", make_ctx())
     assert response is not None
     assert "Unknown command" in response
     assert "/help" in response
 
 
-def test_help_lists_registered_commands():
-    response = dispatch("/help", make_ctx())
+async def test_help_lists_registered_commands():
+    response = await dispatch("/help", make_ctx())
     assert "/help — List available commands" in response
     assert "/echo-test — Echo the arguments back (test-only)" in response

@@ -16,17 +16,21 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal
 from textual.widgets import Input, RichLog
 
-from pyrrhon.commands import builtin  # noqa: F401 — registers /init, /model, /code
+from pyrrhon.commands import builtin, debug_cmd, voice_cmd  # noqa: F401 — registers commands
 from pyrrhon.commands.registry import CommandContext, dispatch
+from pyrrhon.config.settings import load_settings
 from pyrrhon.core.agent.loop import Agent
 from pyrrhon.core.events import (
     Citation,
     ScreenArtifact,
     SpeechChunk,
     ToolCallStarted,
+    TruncateSpeech,
 )
 from pyrrhon.core.providers.llm import MissingAPIKeyError
+from pyrrhon.core.session import Session
 from pyrrhon.tui.widgets import CodeViewer, StatusBar
+from pyrrhon.voice import VoiceController
 
 
 class PyrrhonApp(App):
@@ -53,13 +57,36 @@ class PyrrhonApp(App):
     }
     """
 
-    def __init__(self, repo_root: Path, agent: Agent):
+    def __init__(self, repo_root: Path, agent: Agent, start_voice: bool = False):
         super().__init__()
         self.repo_root = repo_root
-        self.agent = agent
-        self.history: list[dict] = []
+        self.session = Session(agent)
         self.last_citation: Citation | None = None
         self.last_command_response: str | None = None
+        self._start_voice = start_voice
+        self.voice = VoiceController(
+            self.session,
+            load_settings(repo_root),
+            on_event=self._on_voice_event,
+            notify=self._notify_voice,
+        )
+
+    def _on_voice_event(self, event) -> None:
+        # Bridge events arrive on the same asyncio loop Textual runs on;
+        # hand them to the normal renderer (citations jump the code viewer,
+        # TruncateSpeech marks the transcript).
+        self.call_later(self._render_event, event)
+
+    def _notify_voice(self, message: str) -> None:
+        self.call_later(self.notify, message)
+
+    @property
+    def agent(self) -> Agent:
+        return self.session.agent
+
+    @property
+    def history(self) -> list[dict]:
+        return self.session.history
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="panes"):
@@ -74,6 +101,8 @@ class PyrrhonApp(App):
         self.query_one("#transcript", RichLog).write(
             f"Pyrrhon — discussing {self.repo_root.name}. Type /help for commands."
         )
+        if self._start_voice:
+            self.notify(self.voice.start())
 
     def show_citation(self, citation: Citation) -> None:
         """Record the citation and jump the code viewer to it."""
@@ -94,8 +123,14 @@ class PyrrhonApp(App):
         transcript = self.query_one("#transcript", RichLog)
         transcript.write(Text(f"you> {text}", style="bold cyan"))
 
-        ctx = CommandContext(repo_root=self.repo_root, agent=self.agent, ui=self)
-        response = dispatch(text, ctx)
+        ctx = CommandContext(
+            repo_root=self.repo_root,
+            agent=self.agent,
+            ui=self,
+            session=self.session,
+            voice=self.voice,
+        )
+        response = await dispatch(text, ctx)
         if response is not None:
             self.last_command_response = response
             style = "red" if response.startswith("ERROR") else "yellow"
@@ -107,22 +142,31 @@ class PyrrhonApp(App):
         event.input.disabled = True
         self.run_worker(self._agent_turn(text), exclusive=True)
 
+    def _render_event(self, event) -> None:
+        """Render one core event into the panes — agent turns and the M3
+        voice bridge (via VoiceController's on_event) both land here."""
+        transcript = self.query_one("#transcript", RichLog)
+        if isinstance(event, SpeechChunk):
+            transcript.write(Markdown(event.text))
+        elif isinstance(event, ToolCallStarted):
+            transcript.write(Text(f"→ {event.name}({event.args})", style="dim"))
+        elif isinstance(event, Citation):
+            transcript.write(Text(f"📍 {event.file}:{event.line}", style="green"))
+            self.show_citation(event)
+        elif isinstance(event, ScreenArtifact):
+            # M0/M1 never emit these; rendered plainly until M3 refines per-kind.
+            transcript.write(Markdown(event.content))
+        elif isinstance(event, TruncateSpeech):
+            # Voice barge-in: history was rewritten to what was actually heard.
+            transcript.write(Text("⏹ interrupted", style="dim"))
+
     async def _agent_turn(self, user_text: str) -> None:
         """Consume the core event stream inside a worker — the UI never blocks."""
         transcript = self.query_one("#transcript", RichLog)
         prompt = self.query_one("#prompt", Input)
         try:
-            async for event in self.agent.run_turn(self.history, user_text):
-                if isinstance(event, SpeechChunk):
-                    transcript.write(Markdown(event.text))
-                elif isinstance(event, ToolCallStarted):
-                    transcript.write(Text(f"→ {event.name}({event.args})", style="dim"))
-                elif isinstance(event, Citation):
-                    transcript.write(Text(f"📍 {event.file}:{event.line}", style="green"))
-                    self.show_citation(event)
-                elif isinstance(event, ScreenArtifact):
-                    # M0/M1 never emit these; rendered plainly until M3 refines per-kind.
-                    transcript.write(Markdown(event.content))
+            async for event in self.session.run_turn(user_text):
+                self._render_event(event)
         except Exception as exc:
             # A failed turn must not kill the session (Textual workers
             # default to exit_on_error=True): show it and hand back the prompt.
@@ -132,7 +176,7 @@ class PyrrhonApp(App):
             prompt.focus()
 
 
-def run_tui(repo: str) -> None:
+def run_tui(repo: str, voice: bool = False) -> None:
     """Entry point for the default (TUI) channel."""
     # Imported here, not at module top: repl.py is the single agent factory
     # and importing it lazily keeps tui importable without the REPL's deps.
@@ -147,4 +191,4 @@ def run_tui(repo: str) -> None:
     except MissingAPIKeyError as exc:
         print(exc)
         raise SystemExit(1)
-    PyrrhonApp(repo_root=repo_root, agent=agent).run()
+    PyrrhonApp(repo_root=repo_root, agent=agent, start_voice=voice).run()
