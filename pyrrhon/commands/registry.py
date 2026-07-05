@@ -8,6 +8,7 @@ into the same table. Handlers return response strings (errors prefixed
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from pyrrhon.core.agent.loop import Agent
+    from pyrrhon.core.session import Session
 
 
 @dataclass
@@ -22,6 +24,10 @@ class CommandContext:
     repo_root: Path
     agent: "Agent"
     ui: object  # duck-typed: needs notify(text: str); may carry last_citation
+    session: "Session | None" = None
+    # Duck-typed VoiceController (start() -> str, async stop() -> str);
+    # None in channels without a persistent voice pipeline (the plain REPL).
+    voice: object | None = None
 
 
 @dataclass(frozen=True)
@@ -44,8 +50,14 @@ def command(name: str, help_text: str):
     return register
 
 
-def dispatch(line: str, ctx: CommandContext) -> str | None:
-    """Route `line` to a command. None means 'not a command — send to the agent'."""
+async def dispatch(line: str, ctx: CommandContext) -> str | None:
+    """Route `line` to a command. None means 'not a command — send to the agent'.
+
+    Handlers may be sync or async — async ones exist for commands that must
+    await real teardown before answering (M3's /voice off waits for the
+    audio pipeline to release the mic). Both channels call dispatch from
+    async code, so awaiting here costs nothing.
+    """
     line = line.strip()
     if not line.startswith("/"):
         return None
@@ -53,7 +65,10 @@ def dispatch(line: str, ctx: CommandContext) -> str | None:
     cmd = _COMMANDS.get(name)
     if cmd is None:
         return f"Unknown command '/{name}' — try /help."
-    return cmd.handler(args.strip(), ctx)
+    result = cmd.handler(args.strip(), ctx)
+    if inspect.isawaitable(result):
+        result = await result
+    return result
 
 
 @command("help", "List available commands")
