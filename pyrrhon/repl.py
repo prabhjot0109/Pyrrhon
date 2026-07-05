@@ -17,18 +17,35 @@ from pyrrhon.core.events import Citation, SpeechChunk, ToolCallStarted
 from pyrrhon.core.grounding.gate import GroundingGate
 from pyrrhon.core.providers.llm import MissingAPIKeyError, create_llm
 from pyrrhon.core.session import Session
+from pyrrhon.core.tools.ast_index import FindReferencesTool, FindSymbolTool, SymbolIndex
+from pyrrhon.core.tools.git import GitBlameTool, GitLogTool, GitShowTool
 from pyrrhon.core.tools.memory import RememberTool
 from pyrrhon.core.tools.repo import GlobTool, GrepTool, ReadFileTool
+from pyrrhon.core.tools.web import WebFetchTool, WebSearchTool
 
 
-def build_agent(repo_root: Path, llm=None) -> Agent:
+def build_agent(repo_root: Path, llm=None, deep_llm=None) -> Agent:
     settings = load_settings(repo_root)
     llm = llm or create_llm(settings.fast, settings)
+    if deep_llm is None:
+        try:
+            # deep_slot falls back to fast when [deep] is unset (Settings rule).
+            deep_llm = create_llm(settings.deep_slot, settings)
+        except MissingAPIKeyError:
+            deep_llm = None  # no key for the deep slot -> think_deeper not registered
+    index = SymbolIndex(repo_root)
     tools = [
         ReadFileTool(repo_root),
         GrepTool(repo_root),
         GlobTool(repo_root),
         RememberTool(repo_root),
+        FindSymbolTool(index),
+        FindReferencesTool(index),
+        GitLogTool(repo_root),
+        GitBlameTool(repo_root),
+        GitShowTool(repo_root),
+        WebSearchTool(),
+        WebFetchTool(),
     ]
     return Agent(
         llm=llm,
@@ -38,6 +55,7 @@ def build_agent(repo_root: Path, llm=None) -> Agent:
         grounding_gate=GroundingGate(repo_root),
         # REPL is a screen channel → default allow_retry=True. M3's speech
         # path constructs its Agent with allow_retry=False (spec split-path).
+        deep_llm=deep_llm,
     )
 
 

@@ -24,7 +24,8 @@ def test_init_creates_soul_template_once(tmp_path: Path):
 async def test_build_agent_wires_tools_and_answers(tmp_path: Path):
     fake = FakeLLM([LLMReply(text="app.py:1 imports greet.")])
     agent = build_agent(FIXTURE, llm=fake)
-    assert set(agent.tools) == {"read_file", "grep", "glob", "remember"}
+    # M0/M1 tools are always present; M4 adds more (see test_build_agent_m4.py).
+    assert {"read_file", "grep", "glob", "remember"} <= set(agent.tools)
 
     events = [event async for event in agent.run_turn([], "hi")]
     texts = [e.text for e in events if hasattr(e, "text")]

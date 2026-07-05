@@ -44,9 +44,9 @@ Python >= 3.12 (`.python-version`, `pyproject.toml`).
 - Run the grounding eval (real LLM, needs an API key):
   `uv run python -m pyrrhon.evals.grounding evals/grounding.yaml`
 
-There is no lint config yet. Current state: M3 (voice: Pipecat pipeline,
-barge-in, TruncateSpeech) — see
-`docs/superpowers/plans/2026-07-03-pyrrhon-m3-pipecat-voice.md`.
+There is no lint config yet. Current state: M4 (deep reasoning: tree-sitter
+symbol index, git history tools, web search/fetch, think_deeper escalation) —
+see `docs/superpowers/plans/2026-07-03-pyrrhon-m4-deep-reasoning-tools.md`.
 
 
 ## Design constraints (do not violate without discussion)
