@@ -50,6 +50,32 @@ def test_custom_provider_in_config(tmp_path: Path):
     assert settings.provider_for(settings.fast).base_url == "http://localhost:8000/v1"
 
 
+def test_voice_provider_settings_defaults_and_override(tmp_path: Path):
+    voice = load_settings(tmp_path).voice
+    assert voice.stt_provider == "groq"
+    assert voice.tts_provider == "openai"
+    (tmp_path / ".pyrrhon.toml").write_text(
+        '[voice]\ntts_provider = "cartesia"\ntts_voice = "some-voice-id"\n'
+        'tts_model = "sonic-2"\nstt_provider = "whisper-local"\n',
+        encoding="utf-8",
+    )
+    voice = load_settings(tmp_path).voice
+    assert voice.tts_provider == "cartesia"
+    assert voice.tts_model == "sonic-2"
+    assert voice.stt_provider == "whisper-local"
+
+
+def test_local_llm_providers_are_builtin_and_keyless():
+    from pyrrhon.config.settings import BUILTIN_PROVIDERS
+
+    assert BUILTIN_PROVIDERS["ollama"].base_url == "http://localhost:11434/v1"
+    assert BUILTIN_PROVIDERS["ollama"].api_key_env == ""
+    assert BUILTIN_PROVIDERS["lmstudio"].base_url == "http://localhost:1234/v1"
+    # Hosted fast-inference providers stay available alongside the local ones.
+    assert BUILTIN_PROVIDERS["cerebras"].base_url == "https://api.cerebras.ai/v1"
+    assert BUILTIN_PROVIDERS["cerebras"].api_key_env == "CEREBRAS_API_KEY"
+
+
 def test_context_settings_defaults_and_override(tmp_path: Path):
     assert load_settings(tmp_path).context.budget_tokens == 32000
     (tmp_path / ".pyrrhon.toml").write_text(

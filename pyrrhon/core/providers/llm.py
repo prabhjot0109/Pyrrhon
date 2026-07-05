@@ -72,11 +72,14 @@ def create_llm(
     slot: ModelSlot, settings: Settings, max_retries: int = 2
 ) -> OpenAICompatLLM:
     provider = settings.provider_for(slot)
-    api_key = os.environ.get(provider.api_key_env, "")
-    if not api_key:
-        raise MissingAPIKeyError(
-            f"Set {provider.api_key_env} to use provider '{slot.provider}'."
-        )
+    if provider.api_key_env:
+        api_key = os.environ.get(provider.api_key_env, "")
+        if not api_key:
+            raise MissingAPIKeyError(
+                f"Set {provider.api_key_env} to use provider '{slot.provider}'."
+            )
+    else:
+        api_key = "local"  # SDK requires non-empty; local servers ignore it
     return OpenAICompatLLM(
         model=slot.model,
         api_key=api_key,

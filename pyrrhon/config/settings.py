@@ -15,7 +15,7 @@ class ModelSlot(BaseModel):
 
 class ProviderConfig(BaseModel):
     base_url: str | None = None
-    api_key_env: str
+    api_key_env: str = ""  # empty: provider needs no key (local servers)
 
 
 class MCPServerConfig(BaseModel):
@@ -50,14 +50,26 @@ BUILTIN_PROVIDERS: dict[str, ProviderConfig] = {
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
         api_key_env="GEMINI_API_KEY",
     ),
+    "ollama": ProviderConfig(base_url="http://localhost:11434/v1", api_key_env=""),
+    "lmstudio": ProviderConfig(base_url="http://localhost:1234/v1", api_key_env=""),
 }
 
 
 class VoiceSettings(BaseModel):
-    """M3 voice-channel knobs (TOML section [voice])."""
+    """M3/M8 voice-channel knobs (TOML section [voice]).
 
-    stt_model: str = "whisper-large-v3-turbo"  # Groq Whisper model
-    tts_voice: str = "nova"                    # OpenAI TTS voice
+    stt_provider: groq | openai | deepgram | whisper-local
+    tts_provider: openai | cartesia | elevenlabs | deepgram | piper
+    tts_voice is provider-specific: an OpenAI voice name ("nova"), a
+    Cartesia/ElevenLabs voice id, a Deepgram voice model, or ignored (piper).
+    """
+
+    stt_provider: str = "groq"
+    stt_model: str = "whisper-large-v3-turbo"
+    tts_provider: str = "openai"
+    tts_model: str | None = None               # provider default when unset
+    tts_voice: str = "nova"
+    tts_url: str | None = None                 # local TTS server (piper)
     chars_per_sec: float = 15.0                # played-text estimator rate
 
 

@@ -65,3 +65,10 @@ def test_create_llm_uses_provider_base_url(monkeypatch):
     settings = Settings()
     llm = create_llm(ModelSlot(provider="groq", model="m"), settings)
     assert llm.model == "m"
+
+
+def test_create_llm_allows_keyless_local_provider(monkeypatch):
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    slot = ModelSlot(provider="ollama", model="qwen3:8b")
+    llm = create_llm(slot, Settings())
+    assert llm.model == "qwen3:8b"  # no MissingAPIKeyError for keyless providers
