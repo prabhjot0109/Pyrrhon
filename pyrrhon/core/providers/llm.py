@@ -7,12 +7,16 @@ endpoint — a new provider is a config entry, not new code.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass
 
-from openai import AsyncOpenAI
+import httpx
+from openai import APIConnectionError, APIStatusError, AsyncOpenAI
 
 from pyrrhon.config.settings import ModelSlot, Settings
+
+logger = logging.getLogger("pyrrhon.providers")
 
 
 class MissingAPIKeyError(RuntimeError):
@@ -33,9 +37,17 @@ class LLMReply:
 
 
 class OpenAICompatLLM:
-    def __init__(self, model: str, api_key: str, base_url: str | None = None):
+    def __init__(
+        self,
+        model: str,
+        api_key: str,
+        base_url: str | None = None,
+        max_retries: int = 2,
+    ):
         self.model = model
-        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self._client = AsyncOpenAI(
+            api_key=api_key, base_url=base_url, max_retries=max_retries
+        )
 
     async def chat(
         self, messages: list[dict], tools: list[dict] | None = None
@@ -56,11 +68,103 @@ class OpenAICompatLLM:
         return LLMReply(text=message.content, tool_calls=calls)
 
 
-def create_llm(slot: ModelSlot, settings: Settings) -> OpenAICompatLLM:
+def create_llm(
+    slot: ModelSlot, settings: Settings, max_retries: int = 2
+) -> OpenAICompatLLM:
     provider = settings.provider_for(slot)
     api_key = os.environ.get(provider.api_key_env, "")
     if not api_key:
         raise MissingAPIKeyError(
             f"Set {provider.api_key_env} to use provider '{slot.provider}'."
         )
-    return OpenAICompatLLM(model=slot.model, api_key=api_key, base_url=provider.base_url)
+    return OpenAICompatLLM(
+        model=slot.model,
+        api_key=api_key,
+        base_url=provider.base_url,
+        max_retries=max_retries,
+    )
+
+
+# Failures the fallback chain inspects. The openai SDK wraps httpx transport
+# errors in APIConnectionError (APITimeoutError subclasses it); we catch the
+# raw httpx layer too so a bare httpx error from a future adapter also falls
+# over. APIStatusError is in the tuple, but chat() only falls over on 5xx —
+# 4xx re-raises.
+_FALLBACK_ERRORS = (
+    httpx.ConnectError,
+    httpx.TimeoutException,
+    APIConnectionError,
+    APIStatusError,
+)
+
+
+class FallbackLLM:
+    """A chain of OpenAICompatLLMs behind the agent's duck-typed chat().
+
+    Sticky: once a provider fails we stay on its successor for the rest of
+    the session instead of paying a connect timeout on every turn (spec:
+    "provider failure -> configured fallback chain with a one-sentence
+    spoken notice"). 4xx errors re-raise immediately — a bad key is user
+    error, not an outage.
+    """
+
+    def __init__(self, chain: list[OpenAICompatLLM], on_switch=None):
+        if not chain:
+            raise ValueError("FallbackLLM needs at least one provider in the chain")
+        self.chain = list(chain)
+        self.on_switch = on_switch  # callable(provider_index) | None
+        self._active = 0
+
+    @property
+    def model(self) -> str:
+        return self.chain[self._active].model
+
+    async def chat(
+        self, messages: list[dict], tools: list[dict] | None = None
+    ) -> LLMReply:
+        index = self._active
+        while True:
+            try:
+                return await self.chain[index].chat(messages, tools=tools)
+            except _FALLBACK_ERRORS as exc:
+                if isinstance(exc, APIStatusError) and exc.status_code < 500:
+                    raise  # 4xx: not a provider outage — never fall over
+                if index + 1 >= len(self.chain):
+                    raise  # chain exhausted: re-raise the last error
+                index += 1
+                self._active = index
+                logger.warning(
+                    "provider failed (%s); switching to '%s'",
+                    type(exc).__name__,
+                    self.chain[index].model,
+                )
+                if self.on_switch is not None:
+                    self.on_switch(index)
+
+
+def create_llm_with_fallbacks(
+    slot_name: str, settings: Settings
+) -> FallbackLLM | OpenAICompatLLM:
+    """Build the LLM for a slot, honoring [fallbacks] from settings."""
+    slots = {"fast": settings.fast, "deep": settings.deep_slot}
+    if slot_name not in slots:
+        raise KeyError(f"unknown model slot '{slot_name}' (expected 'fast' or 'deep')")
+    slot = slots[slot_name]
+
+    entries = settings.fallbacks.get(slot_name, [])
+    if not entries:
+        return create_llm(slot, settings)
+
+    # The chain replaces the SDK's internal retries (max_retries=0): retrying
+    # a dead provider before falling back doubles worst-case latency.
+    chain = [create_llm(slot, settings, max_retries=0)]
+    for entry in entries:
+        provider, sep, model = entry.partition("/")
+        entry_slot = ModelSlot(provider=provider, model=model if sep else slot.model)
+        try:
+            chain.append(create_llm(entry_slot, settings, max_retries=0))
+        except MissingAPIKeyError as exc:
+            logger.warning("skipping fallback provider '%s': %s", provider, exc)
+    if len(chain) == 1:
+        return chain[0]  # nothing usable behind the primary — behave like M0
+    return FallbackLLM(chain)
