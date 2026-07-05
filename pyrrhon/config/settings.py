@@ -36,10 +36,19 @@ BUILTIN_PROVIDERS: dict[str, ProviderConfig] = {
 }
 
 
+class VoiceSettings(BaseModel):
+    """M3 voice-channel knobs (TOML section [voice])."""
+
+    stt_model: str = "whisper-large-v3-turbo"  # Groq Whisper model
+    tts_voice: str = "nova"                    # OpenAI TTS voice
+    chars_per_sec: float = 15.0                # played-text estimator rate
+
+
 class Settings(BaseModel):
     fast: ModelSlot = ModelSlot(provider="groq", model="llama-3.3-70b-versatile")
     deep: ModelSlot | None = None
     providers: dict[str, ProviderConfig] = {}
+    voice: VoiceSettings = VoiceSettings()
 
     @property
     def deep_slot(self) -> ModelSlot:

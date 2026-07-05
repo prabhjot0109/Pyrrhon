@@ -48,3 +48,16 @@ def test_custom_provider_in_config(tmp_path: Path):
     )
     settings = load_settings(repo_root=repo, home=tmp_path / "nohome")
     assert settings.provider_for(settings.fast).base_url == "http://localhost:8000/v1"
+
+
+def test_voice_settings_defaults_and_override(tmp_path: Path):
+    settings = load_settings(repo_root=tmp_path, home=tmp_path / "nohome")
+    assert settings.voice.tts_voice == "nova"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".pyrrhon.toml").write_text(
+        '[voice]\ntts_voice = "onyx"\nchars_per_sec = 12.5\n', encoding="utf-8"
+    )
+    settings = load_settings(repo_root=repo, home=tmp_path / "nohome")
+    assert settings.voice.tts_voice == "onyx"
+    assert settings.voice.chars_per_sec == 12.5
