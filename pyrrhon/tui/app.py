@@ -17,7 +17,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal
 from textual.widgets import Input, RichLog
 
-from pyrrhon.commands import builtin, debug_cmd, mcp_cmd, mode_cmd, voice_cmd  # noqa: F401 — registers commands
+from pyrrhon.commands import builtin, debug_cmd, mcp_cmd, mode_cmd, plugins_cmd, voice_cmd  # noqa: F401 — registers commands
 from pyrrhon.commands.registry import CommandContext, dispatch
 from pyrrhon.config.settings import load_settings
 from pyrrhon.core.agent.loop import Agent
@@ -153,6 +153,7 @@ class PyrrhonApp(App):
             session=self.session,
             voice=self.voice,
             mcp=self.mcp,
+            plugins=self.plugins,
         )
         response = await dispatch(text, ctx)
         if response is not None:

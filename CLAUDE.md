@@ -44,6 +44,17 @@ Python >= 3.12 (`.python-version`, `pyproject.toml`).
 - Run the grounding eval (real LLM, needs an API key):
   `uv run python -m pyrrhon.evals.grounding evals/grounding.yaml`
 
+## Plugins (M7)
+
+A plugin is a folder with a `plugin.toml` under `~/.pyrrhon/plugins/` (global)
+or `<repo>/.pyrrhon/plugins/` (repo-level), contributing prompts (markdown
+appended to the system prompt), tools/commands (Python entry points), MCP
+servers, and providers. Prompts and config load from anywhere; repo-level
+plugin *code* runs only after one consent prompt per repo, recorded in
+`<repo>/.pyrrhon/trusted`. `/plugins` lists what loaded. Worked example:
+`tests/fixtures/plugins/hello-reviewer/`; plan:
+`docs/superpowers/plans/2026-07-03-pyrrhon-m7-plugin-loader.md`.
+
 There is no lint config yet. Current state: M4 (deep reasoning: tree-sitter
 symbol index, git history tools, web search/fetch, think_deeper escalation) —
 see `docs/superpowers/plans/2026-07-03-pyrrhon-m4-deep-reasoning-tools.md`.

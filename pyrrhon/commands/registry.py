@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from pyrrhon.core.agent.loop import Agent
     from pyrrhon.core.mcp import MCPManager
     from pyrrhon.core.session import Session
+    from pyrrhon.plugins import LoadedPlugin
 
 
 @dataclass
@@ -31,6 +32,8 @@ class CommandContext:
     voice: object | None = None
     # The channel-owned MCPManager; None when no channel wired one (tests).
     mcp: "MCPManager | None" = None
+    # Plugins the channel loaded at startup (M7); /plugins renders them.
+    plugins: "list[LoadedPlugin]" = field(default_factory=list)
 
 
 @dataclass(frozen=True)

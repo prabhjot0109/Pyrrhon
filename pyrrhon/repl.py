@@ -9,7 +9,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.markdown import Markdown
 
-from pyrrhon.commands import builtin, debug_cmd, mcp_cmd, mode_cmd, voice_cmd  # noqa: F401 — registers commands
+from pyrrhon.commands import builtin, debug_cmd, mcp_cmd, mode_cmd, plugins_cmd, voice_cmd  # noqa: F401 — registers commands
 from pyrrhon.commands.registry import CommandContext, dispatch
 from pyrrhon.config.settings import Settings, load_settings
 from pyrrhon.core.agent.loop import Agent
@@ -234,7 +234,12 @@ async def _repl_loop(
     session = Session(agent)
     # voice stays None: the plain REPL is a text channel; /voice answers honestly.
     ctx = CommandContext(
-        repo_root=repo_root, agent=agent, ui=ui, session=session, mcp=mcp
+        repo_root=repo_root,
+        agent=agent,
+        ui=ui,
+        session=session,
+        mcp=mcp,
+        plugins=plugins or [],
     )
     while True:
         try:
