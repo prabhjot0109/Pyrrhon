@@ -15,6 +15,8 @@ import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+from pyrrhon.core.agent.escalate import ThinkDeeperTool
+from pyrrhon.core.agent.prompts import ESCALATION_NOTE
 from pyrrhon.core.events import (
     Event,
     SpeechChunk,
@@ -53,6 +55,7 @@ class Agent:
         max_tool_rounds: int = 8,
         grounding_gate: GroundingGate | None = None,
         allow_retry: bool = True,
+        deep_llm=None,
     ):
         self.llm = llm
         self.tools = {tool.name: tool for tool in tools}
@@ -61,6 +64,10 @@ class Agent:
         self.max_tool_rounds = max_tool_rounds
         self.grounding_gate = grounding_gate
         self.allow_retry = allow_retry
+        if deep_llm is not None:
+            deep_tool = ThinkDeeperTool(deep_llm)
+            self.tools[deep_tool.name] = deep_tool
+            self.system_prompt = system_prompt + "\n" + ESCALATION_NOTE
 
     async def run_turn(
         self, history: list[dict], user_text: str
