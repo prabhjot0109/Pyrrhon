@@ -28,6 +28,7 @@ from pyrrhon.core.tools.ast_index import (
     DependenciesTool,
     FindReferencesTool,
     FindSymbolTool,
+    RepoMapTool,
     SymbolIndex,
 )
 from pyrrhon.core.tools.git import GitBlameTool, GitLogTool, GitShowTool
@@ -80,6 +81,7 @@ def build_agent(
         FindSymbolTool(index),
         FindReferencesTool(index),
         DependenciesTool(index),
+        RepoMapTool(index),
         GitLogTool(repo_root),
         GitBlameTool(repo_root),
         GitShowTool(repo_root),

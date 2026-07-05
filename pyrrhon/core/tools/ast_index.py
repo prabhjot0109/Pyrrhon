@@ -144,6 +144,9 @@ class SymbolIndex:
     async def find_importers(self, rel_file: str) -> list[str]:
         return await asyncio.to_thread(self._sync_find_importers, rel_file)
 
+    async def build_repo_map(self, max_chars: int = 6000) -> str:
+        return await asyncio.to_thread(self._sync_build_repo_map, max_chars)
+
     # -- everything below runs in a worker thread ---------------------------
 
     def _connect(self) -> sqlite3.Connection:
@@ -264,6 +267,47 @@ class SymbolIndex:
             conn.close()
         return [file for (file,) in rows]
 
+    def _sync_build_repo_map(self, max_chars: int) -> str:
+        """Aider-style repo map: files ordered by how much the rest of the
+        repo references their symbols; top symbols listed per file. Pure
+        counting over the refs table — no graph traversal, so import cycles
+        cannot recurse."""
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT s.file, s.name, s.kind, s.line,
+                       (SELECT COUNT(*) FROM refs r
+                         WHERE r.name = s.name AND r.file != s.file) AS uses
+                FROM symbols s
+                ORDER BY s.file, uses DESC, s.line
+                """
+            ).fetchall()
+        finally:
+            conn.close()
+        by_file: dict[str, list[tuple[str, str, int, int]]] = {}
+        for file, name, kind, line, uses in rows:
+            by_file.setdefault(file, []).append((name, kind, line, uses))
+        ranked = sorted(
+            by_file.items(),
+            key=lambda item: sum(u for *_ignored, u in item[1]),
+            reverse=True,
+        )
+        lines: list[str] = []
+        used = 0
+        for file, symbols in ranked:
+            block = [f"{file}:"]
+            for name, kind, line, uses in symbols[:8]:
+                suffix = f" ({uses} refs)" if uses else ""
+                block.append(f"  {kind} {name}:{line}{suffix}")
+            chunk = "\n".join(block)
+            if used + len(chunk) + 1 > max_chars:
+                lines.append("…[truncated — ask about specific files]")
+                break
+            lines.append(chunk)
+            used += len(chunk) + 1
+        return "\n".join(lines) or "No symbols indexed yet."
+
 
 class FindSymbolTool(Tool):
     name = "find_symbol"
@@ -344,3 +388,20 @@ class DependenciesTool(Tool):
         lines.append("imported by:")
         lines += [f"  {f}" for f in importers] or ["  (none)"]
         return "\n".join(lines)
+
+
+class RepoMapTool(Tool):
+    name = "repo_map"
+    description = (
+        "Ranked overview of the whole repo: the most-referenced classes and "
+        "functions per file, hottest files first. Call this FIRST on a "
+        "codebase you haven't explored — it tells you where to look."
+    )
+    parameters = {"type": "object", "properties": {}}
+
+    def __init__(self, index: SymbolIndex):
+        self.index = index
+
+    async def run(self) -> str:
+        await self.index.ensure_fresh()
+        return await self.index.build_repo_map()
