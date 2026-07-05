@@ -17,7 +17,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal
 from textual.widgets import Input, RichLog
 
-from pyrrhon.commands import builtin, debug_cmd, mcp_cmd, mode_cmd, voice_cmd  # noqa: F401 — registers commands
+from pyrrhon.commands import builtin, debug_cmd, mcp_cmd, mode_cmd, plugins_cmd, voice_cmd  # noqa: F401 — registers commands
 from pyrrhon.commands.registry import CommandContext, dispatch
 from pyrrhon.config.settings import load_settings
 from pyrrhon.core.agent.loop import Agent
@@ -66,11 +66,13 @@ class PyrrhonApp(App):
         agent: Agent,
         start_voice: bool = False,
         mcp: MCPManager | None = None,
+        plugins: list | None = None,
     ):
         super().__init__()
         self.repo_root = repo_root
         self.session = Session(agent)
         self.mcp = mcp
+        self.plugins = plugins or []
         self.last_citation: Citation | None = None
         self.last_command_response: str | None = None
         self._start_voice = start_voice
@@ -151,6 +153,7 @@ class PyrrhonApp(App):
             session=self.session,
             voice=self.voice,
             mcp=self.mcp,
+            plugins=self.plugins,
         )
         response = await dispatch(text, ctx)
         if response is not None:
@@ -208,28 +211,40 @@ def run_tui(repo: str, voice: bool = False) -> None:
     if not repo_root.is_dir():
         print(f"Not a directory: {repo_root}")
         raise SystemExit(1)
+    # Imported here, not at module top: repl.py is the single agent factory
+    # and importing it lazily keeps tui importable without the REPL's deps.
+    from pyrrhon.repl import load_channel_plugins
+
+    def _ask(question: str) -> bool:
+        # Textual has not taken over the terminal yet — plain input works.
+        return input(f"{question} ").strip().lower() in {"y", "yes"}
+
+    plugins, settings = load_channel_plugins(repo_root, _ask)
     try:
         # One asyncio.run for MCP lifecycle + Textual: the manager's start()
         # and stop() must be awaited from the same task (anyio rule), so the
         # app runs via run_async() inside that task instead of App.run().
-        asyncio.run(_tui_main(repo_root, voice))
+        asyncio.run(_tui_main(repo_root, voice, plugins, settings))
     except MissingAPIKeyError as exc:
         print(exc)
         raise SystemExit(1)
 
 
-async def _tui_main(repo_root: Path, voice: bool) -> None:
-    # Imported here, not at module top: repl.py is the single agent factory
-    # and importing it lazily keeps tui importable without the REPL's deps.
+async def _tui_main(repo_root: Path, voice: bool, plugins, settings) -> None:
     from pyrrhon.repl import build_agent
 
-    settings = load_settings(repo_root)
     manager = MCPManager(settings.mcp_servers)
     mcp_tools = await manager.start()  # never raises; dead servers log one warning
     try:
-        agent = build_agent(repo_root, extra_tools=mcp_tools)
+        agent = build_agent(
+            repo_root, extra_tools=mcp_tools, settings=settings, plugins=plugins
+        )
         app = PyrrhonApp(
-            repo_root=repo_root, agent=agent, start_voice=voice, mcp=manager
+            repo_root=repo_root,
+            agent=agent,
+            start_voice=voice,
+            mcp=manager,
+            plugins=plugins,
         )
         await app.run_async()
     finally:
