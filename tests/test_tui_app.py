@@ -52,3 +52,4 @@ async def test_show_citation_escaping_path_is_rejected():
         await pilot.pause()
         viewer = app.query_one(CodeViewer)
         assert viewer.current_file is None  # escape rejected, app still alive
+        assert "escapes the repo" in str(viewer.render())

@@ -52,6 +52,7 @@ def test_model_bad_usage_and_unknown_provider():
     assert dispatch("/model fast", ctx).startswith("ERROR: usage:")
     assert dispatch("/model warp openai/gpt-4.1-mini", ctx).startswith("ERROR: usage:")
     assert dispatch("/model fast doesnotexist/m", ctx).startswith("ERROR:")
+    assert dispatch("/model fast openai/", ctx).startswith("ERROR: usage:")
 
 
 def test_model_missing_key_is_error(monkeypatch):

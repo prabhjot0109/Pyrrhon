@@ -36,6 +36,8 @@ def model_command(args: str, ctx: CommandContext) -> str:
     # First path segment is the provider; the rest is the model (OpenRouter
     # model ids contain slashes, e.g. deepseek/deepseek-r1).
     provider, _, model = spec.partition("/")
+    if not model:
+        return usage
     settings = load_settings(ctx.repo_root)
     try:
         llm = create_llm(ModelSlot(provider=provider, model=model), settings)
