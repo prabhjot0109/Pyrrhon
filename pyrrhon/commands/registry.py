@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from pyrrhon.core.agent.loop import Agent
+    from pyrrhon.core.mcp import MCPManager
     from pyrrhon.core.session import Session
 
 
@@ -28,6 +29,8 @@ class CommandContext:
     # Duck-typed VoiceController (start() -> str, async stop() -> str);
     # None in channels without a persistent voice pipeline (the plain REPL).
     voice: object | None = None
+    # The channel-owned MCPManager; None when no channel wired one (tests).
+    mcp: "MCPManager | None" = None
 
 
 @dataclass(frozen=True)

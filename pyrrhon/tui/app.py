@@ -7,6 +7,7 @@ from M3 the same loop carries audio (spec: real-time discipline).
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from rich.markdown import Markdown
@@ -16,7 +17,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal
 from textual.widgets import Input, RichLog
 
-from pyrrhon.commands import builtin, debug_cmd, voice_cmd  # noqa: F401 — registers commands
+from pyrrhon.commands import builtin, debug_cmd, mcp_cmd, voice_cmd  # noqa: F401 — registers commands
 from pyrrhon.commands.registry import CommandContext, dispatch
 from pyrrhon.config.settings import load_settings
 from pyrrhon.core.agent.loop import Agent
@@ -27,7 +28,8 @@ from pyrrhon.core.events import (
     ToolCallStarted,
     TruncateSpeech,
 )
-from pyrrhon.core.providers.llm import MissingAPIKeyError
+from pyrrhon.core.mcp import MCPManager
+from pyrrhon.core.providers.llm import FallbackLLM, MissingAPIKeyError
 from pyrrhon.core.session import Session
 from pyrrhon.tui.widgets import CodeViewer, StatusBar
 from pyrrhon.voice import VoiceController
@@ -57,13 +59,29 @@ class PyrrhonApp(App):
     }
     """
 
-    def __init__(self, repo_root: Path, agent: Agent, start_voice: bool = False):
+    def __init__(
+        self,
+        repo_root: Path,
+        agent: Agent,
+        start_voice: bool = False,
+        mcp: MCPManager | None = None,
+    ):
         super().__init__()
         self.repo_root = repo_root
         self.session = Session(agent)
+        self.mcp = mcp
         self.last_citation: Citation | None = None
         self.last_command_response: str | None = None
         self._start_voice = start_voice
+        if isinstance(agent.llm, FallbackLLM):
+            llm = agent.llm
+            # Spec: provider failure -> one-sentence notice. on_switch fires
+            # inside a worker on this app's loop; call_later hands the toast
+            # to Textual's own scheduling.
+            llm.on_switch = lambda i: self.call_later(
+                self.notify,
+                f"My primary model stopped responding — switching to {llm.chain[i].model}.",
+            )
         self.voice = VoiceController(
             self.session,
             load_settings(repo_root),
@@ -129,6 +147,7 @@ class PyrrhonApp(App):
             ui=self,
             session=self.session,
             voice=self.voice,
+            mcp=self.mcp,
         )
         response = await dispatch(text, ctx)
         if response is not None:
@@ -178,17 +197,33 @@ class PyrrhonApp(App):
 
 def run_tui(repo: str, voice: bool = False) -> None:
     """Entry point for the default (TUI) channel."""
-    # Imported here, not at module top: repl.py is the single agent factory
-    # and importing it lazily keeps tui importable without the REPL's deps.
-    from pyrrhon.repl import build_agent
-
     repo_root = Path(repo).resolve()
     if not repo_root.is_dir():
         print(f"Not a directory: {repo_root}")
         raise SystemExit(1)
     try:
-        agent = build_agent(repo_root)
+        # One asyncio.run for MCP lifecycle + Textual: the manager's start()
+        # and stop() must be awaited from the same task (anyio rule), so the
+        # app runs via run_async() inside that task instead of App.run().
+        asyncio.run(_tui_main(repo_root, voice))
     except MissingAPIKeyError as exc:
         print(exc)
         raise SystemExit(1)
-    PyrrhonApp(repo_root=repo_root, agent=agent, start_voice=voice).run()
+
+
+async def _tui_main(repo_root: Path, voice: bool) -> None:
+    # Imported here, not at module top: repl.py is the single agent factory
+    # and importing it lazily keeps tui importable without the REPL's deps.
+    from pyrrhon.repl import build_agent
+
+    settings = load_settings(repo_root)
+    manager = MCPManager(settings.mcp_servers)
+    mcp_tools = await manager.start()  # never raises; dead servers log one warning
+    try:
+        agent = build_agent(repo_root, extra_tools=mcp_tools)
+        app = PyrrhonApp(
+            repo_root=repo_root, agent=agent, start_voice=voice, mcp=manager
+        )
+        await app.run_async()
+    finally:
+        await manager.stop()
