@@ -9,12 +9,17 @@ description = "A voice-first senior-engineer agent for understanding and designi
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "ddgs>=9.14.4",
+    "html2text>=2025.4.15",
+    "httpx>=0.28.1",
     "openai>=2.44.0",
     "pipecat-ai[groq,local,openai,silero]>=1.5.0",
     "pydantic>=2.12.5",
     "pyyaml>=6.0.3",
     "rich>=14.3.1",
     "textual>=8.2.8",
+    "tree-sitter>=0.26.0",
+    "tree-sitter-language-pack>=1.12.2",
 ]
 
 [project.scripts]
