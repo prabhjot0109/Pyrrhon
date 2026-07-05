@@ -19,6 +19,7 @@ from pathlib import Path
 from tree_sitter import Parser, Query, QueryCursor
 from tree_sitter_language_pack import get_language
 
+from pyrrhon.core.tools.base import Tool
 from pyrrhon.core.tools.repo import SKIP_DIRS
 
 _PY_LANGUAGE = get_language("python")
@@ -151,3 +152,53 @@ class SymbolIndex:
         finally:
             conn.close()
         return [(file, line) for file, line in rows]
+
+
+class FindSymbolTool(Tool):
+    name = "find_symbol"
+    description = (
+        "Find where a function or class is defined. Returns 'path:line: kind name' "
+        "for each definition — cite these locations."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "Exact symbol name, e.g. 'greet'"},
+        },
+        "required": ["name"],
+    }
+
+    def __init__(self, index: SymbolIndex):
+        self.index = index
+
+    async def run(self, name: str) -> str:
+        await self.index.ensure_fresh()
+        rows = await self.index.find_symbol(name)
+        if not rows:
+            return "No matches."
+        return "\n".join(f"{file}:{line}: {kind} {name}" for file, line, kind in rows)
+
+
+class FindReferencesTool(Tool):
+    name = "find_references"
+    description = (
+        "Find call sites of a function or method by name. Returns 'path:line' per "
+        "reference — answers 'what calls this?' / 'what breaks if I change this?'."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "Exact symbol name, e.g. 'greet'"},
+        },
+        "required": ["name"],
+    }
+
+    def __init__(self, index: SymbolIndex):
+        self.index = index
+
+    async def run(self, name: str) -> str:
+        await self.index.ensure_fresh()
+        rows = await self.index.find_references(name)
+        if not rows:
+            return "No matches."
+        return "\n".join(f"{file}:{line}" for file, line in rows)
