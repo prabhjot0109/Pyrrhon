@@ -12,6 +12,7 @@ dependencies = [
     "ddgs>=9.14.4",
     "html2text>=2025.4.15",
     "httpx>=0.28.1",
+    "mcp>=1.10,<2",
     "openai>=2.44.0",
     "pipecat-ai[groq,local,openai,silero]>=1.5.0",
     "pydantic>=2.12.5",
