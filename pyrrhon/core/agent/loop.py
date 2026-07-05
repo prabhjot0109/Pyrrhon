@@ -12,12 +12,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import AsyncIterator
 from pathlib import Path
 
 from pyrrhon.core.agent.escalate import ThinkDeeperTool
 from pyrrhon.core.agent.prompts import ESCALATION_NOTE
 from pyrrhon.core.events import (
+    AskUser,
     Event,
     SpeechChunk,
     ToolCallFinished,
@@ -29,6 +31,22 @@ from pyrrhon.core.providers.llm import LLMReply
 from pyrrhon.core.tools.base import Tool
 
 PREVIEW_LEN = 200
+
+_SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
+
+
+def extract_question(text: str) -> str | None:
+    """Return the reply's final sentence if the reply ends with a question.
+
+    Pure and deliberately dumb: only a stripped trailing '?' counts, and the
+    "last sentence" is whatever follows the final .!?-plus-whitespace
+    boundary. Channels use the result to render/say Pyrrhon's Socratic
+    question distinctly (the AskUser event).
+    """
+    stripped = text.strip()
+    if not stripped.endswith("?"):
+        return None
+    return _SENTENCE_BOUNDARY.split(stripped)[-1]
 
 
 def _retry_prompt(unverified: tuple[str, ...]) -> str:
@@ -56,6 +74,7 @@ class Agent:
         grounding_gate: GroundingGate | None = None,
         allow_retry: bool = True,
         deep_llm=None,
+        mode: str = "understand",
     ):
         self.llm = llm
         self.tools = {tool.name: tool for tool in tools}
@@ -64,6 +83,8 @@ class Agent:
         self.max_tool_rounds = max_tool_rounds
         self.grounding_gate = grounding_gate
         self.allow_retry = allow_retry
+        # Mutable: Session.set_mode reassigns it on /mode switches.
+        self.mode = mode
         if deep_llm is not None:
             deep_tool = ThinkDeeperTool(deep_llm)
             self.tools[deep_tool.name] = deep_tool
@@ -90,6 +111,10 @@ class Agent:
                         extract_citations, text, self.repo_root
                     ):
                         yield citation
+                    if self.mode == "design":
+                        question = extract_question(text)
+                        if question is not None:
+                            yield AskUser(question=question)
                     return
 
                 gated = await self.grounding_gate.check(text)
@@ -113,6 +138,10 @@ class Agent:
                 yield SpeechChunk(text=gated.speech_text)
                 for citation in gated.citations:
                     yield citation
+                if self.mode == "design":
+                    question = extract_question(gated.speech_text)
+                    if question is not None:
+                        yield AskUser(question=question)
                 return
 
             history.append(_assistant_tool_message(reply))

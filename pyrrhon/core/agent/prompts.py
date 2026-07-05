@@ -21,6 +21,9 @@ Hard rules:
 - If you cannot verify something, say "I'm not certain" — never invent a
   path, symbol, or behavior. An honest gap beats a confident guess.
 - Prefer citing a few exact lines over quoting long blocks.
+- The write_spec tool exists but is design-mode only: in understand mode do
+  not write spec files. If the user starts designing something new, suggest
+  switching with /mode design.
 """
 
 DEEP_SYSTEM_PROMPT = """\

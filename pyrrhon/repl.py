@@ -8,12 +8,12 @@ from pathlib import Path
 from rich.console import Console
 from rich.markdown import Markdown
 
-from pyrrhon.commands import builtin, debug_cmd, mcp_cmd, voice_cmd  # noqa: F401 — registers commands
+from pyrrhon.commands import builtin, debug_cmd, mcp_cmd, mode_cmd, voice_cmd  # noqa: F401 — registers commands
 from pyrrhon.commands.registry import CommandContext, dispatch
 from pyrrhon.config.settings import load_settings
 from pyrrhon.core.agent.loop import Agent
 from pyrrhon.core.agent.soul import build_system_prompt
-from pyrrhon.core.events import Citation, SpeechChunk, ToolCallStarted
+from pyrrhon.core.events import AskUser, Citation, SpeechChunk, ToolCallStarted
 from pyrrhon.core.grounding.gate import GroundingGate
 from pyrrhon.core.mcp import MCPManager
 from pyrrhon.core.providers.llm import (
@@ -27,6 +27,7 @@ from pyrrhon.core.tools.ast_index import FindReferencesTool, FindSymbolTool, Sym
 from pyrrhon.core.tools.git import GitBlameTool, GitLogTool, GitShowTool
 from pyrrhon.core.tools.memory import RememberTool
 from pyrrhon.core.tools.repo import GlobTool, GrepTool, ReadFileTool
+from pyrrhon.core.tools.spec_writer import WriteSpecTool
 from pyrrhon.core.tools.web import WebFetchTool, WebSearchTool
 
 
@@ -58,6 +59,9 @@ def build_agent(
         GitShowTool(repo_root),
         WebSearchTool(),
         WebFetchTool(),
+        # Always registered: DESIGN_PROMPT instructs its use, and the
+        # understand-mode prompt forbids writing spec files.
+        WriteSpecTool(repo_root),
         *(extra_tools or []),  # MCP adapters join here
     ]
     return Agent(
@@ -166,3 +170,6 @@ async def _turn(session: Session, user: str, console: Console, ui: ConsoleUI) ->
         elif isinstance(event, Citation):
             ui.last_citation = event  # /code opens the most recent citation
             console.print(f"[green]📍 {event.file}:{event.line}[/green]")
+        elif isinstance(event, AskUser):
+            # Design mode's Socratic question, rendered distinctly (spec: M6).
+            console.print(f"[bold magenta]? {event.question}[/bold magenta]")
