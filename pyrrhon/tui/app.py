@@ -130,7 +130,9 @@ class PyrrhonApp(App):
     def refresh_status(self) -> None:
         fast = getattr(self.agent.llm, "model", "unknown")
         deep = getattr(getattr(self.agent, "deep_llm", None), "model", "= fast")
-        self.query_one(StatusBar).show_status("understand", fast, deep)
+        self.query_one(StatusBar).show_status(
+            "understand", fast, deep, latency_ms=self.session.last_turn_latency_ms
+        )
 
     @on(Input.Submitted, "#prompt")
     async def on_prompt_submitted(self, event: Input.Submitted) -> None:
@@ -191,6 +193,7 @@ class PyrrhonApp(App):
             # default to exit_on_error=True): show it and hand back the prompt.
             transcript.write(Text(f"ERROR: turn failed: {exc}", style="red"))
         finally:
+            self.refresh_status()  # picks up the turn's latency measurement
             prompt.disabled = False
             prompt.focus()
 

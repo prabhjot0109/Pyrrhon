@@ -62,6 +62,15 @@ class StatusBar(Static):
         super().__init__(**kwargs)
         self.status_text: str = ""
 
-    def show_status(self, mode: str, fast_model: str, deep_model: str) -> None:
+    def show_status(
+        self,
+        mode: str,
+        fast_model: str,
+        deep_model: str,
+        latency_ms: float | None = None,
+    ) -> None:
         self.status_text = f"mode: {mode} · fast: {fast_model} · deep: {deep_model}"
+        if latency_ms is not None:
+            # Spec "live latency": last turn's user text -> first SpeechChunk.
+            self.status_text += f" · {latency_ms:.0f} ms"
         self.update(self.status_text)

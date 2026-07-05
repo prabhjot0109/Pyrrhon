@@ -151,6 +151,10 @@ async def _repl_loop(
             console.print(response)
             continue
         await _turn(session, user, console, ui)
+        if session.last_turn_latency_ms is not None:
+            console.print(
+                f"[dim](first response in {session.last_turn_latency_ms:.0f} ms)[/dim]"
+            )
 
 
 async def _turn(session: Session, user: str, console: Console, ui: ConsoleUI) -> None:
