@@ -1006,32 +1006,22 @@ class ConsoleUI:
         self._console.print(text)
 ```
 
-3. Replace the `run_repl` and `_turn` functions with:
+3. Replace `_repl_loop` with the two functions below, and update `run_repl`'s
+   banner line to read `"Commands: /help, /quit"`. **Drift note (2026-07-04):**
+   the plan originally rewrote `run_repl` around per-turn `asyncio.run(_turn(...))`,
+   but M0's review landed a single event loop owning the whole session
+   (`run_repl` → `asyncio.run(_repl_loop(...))`, input via `asyncio.to_thread`) —
+   commit 9387350. Keep that structure; only the loop body changes:
 
 ```python
-def run_repl(repo: str) -> None:
-    console = Console()
-    repo_root = Path(repo).resolve()
-    if not repo_root.is_dir():
-        console.print(f"[red]Not a directory: {repo_root}[/red]")
-        raise SystemExit(1)
-    try:
-        agent = build_agent(repo_root)
-    except MissingAPIKeyError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise SystemExit(1)
-
+async def _repl_loop(agent: Agent, console: Console, repo_root: Path) -> None:
     ui = ConsoleUI(console)
     ctx = CommandContext(repo_root=repo_root, agent=agent, ui=ui)
-    console.print(
-        f"[bold]Pyrrhon[/bold] — discussing [cyan]{repo_root.name}[/cyan]. "
-        "Commands: /help, /quit"
-    )
     history: list[dict] = []
     while True:
         try:
-            user = console.input("[bold cyan]you> [/bold cyan]").strip()
-        except (EOFError, KeyboardInterrupt):
+            user = (await asyncio.to_thread(console.input, "[bold cyan]you> [/bold cyan]")).strip()
+        except EOFError:
             break
         if not user:
             continue
@@ -1041,7 +1031,7 @@ def run_repl(repo: str) -> None:
         if response is not None:
             console.print(response)
             continue
-        asyncio.run(_turn(agent, history, user, console, ui))
+        await _turn(agent, history, user, console, ui)
 
 
 async def _turn(agent: Agent, history: list[dict], user: str, console: Console, ui: ConsoleUI) -> None:
