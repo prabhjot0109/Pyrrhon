@@ -18,7 +18,7 @@ from pathlib import Path
 
 from pyrrhon.config.settings import VoiceSettings
 
-STT_PROVIDERS = ("groq", "openai", "deepgram", "whisper-local")
+STT_PROVIDERS = ("groq", "openai", "gemini", "deepgram", "whisper-local")
 TTS_PROVIDERS = ("openai", "cartesia", "elevenlabs", "deepgram", "piper")
 
 
@@ -59,6 +59,16 @@ def create_stt(voice: VoiceSettings):
         if voice.stt_model:
             kwargs["model"] = voice.stt_model
         return OpenAISTTService(**kwargs)
+    if provider == "gemini":
+        key = _key("GEMINI_API_KEY", "Gemini STT")
+        try:
+            from pyrrhon.voice.gemini import GeminiSTTService
+        except ImportError as exc:
+            raise VoiceUnavailableError(
+                f"Voice dependency missing ({exc}). Run: uv add google-genai "
+                "— staying in text mode."
+            ) from exc
+        return GeminiSTTService(api_key=key, model=voice.stt_model or "gemini-2.5-flash")
     if provider == "deepgram":
         key = _key("DEEPGRAM_API_KEY", "Deepgram STT")
         try:

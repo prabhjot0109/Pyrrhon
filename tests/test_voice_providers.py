@@ -125,6 +125,21 @@ def test_piper_runs_in_process_by_default(monkeypatch, tmp_path):
     assert captured["download_dir"] == tmp_path / ".pyrrhon" / "piper"
 
 
+def test_gemini_stt_requires_gemini_api_key(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    with pytest.raises(VoiceUnavailableError) as exc:
+        create_stt(VoiceSettings(stt_provider="gemini"))
+    assert "GEMINI_API_KEY" in str(exc.value)
+
+
+def test_gemini_stt_builds_with_key_and_default_model(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    captured: dict = {}
+    _install_fake(monkeypatch, "pyrrhon.voice.gemini", "GeminiSTTService", captured)
+    create_stt(VoiceSettings(stt_provider="gemini"))
+    assert captured == {"api_key": "k", "model": "gemini-2.5-flash"}
+
+
 def test_piper_uses_http_service_when_tts_url_is_set(monkeypatch):
     captured: dict = {}
     module = types.ModuleType("pipecat.services.piper.tts")
