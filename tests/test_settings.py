@@ -100,7 +100,7 @@ def test_context_settings_defaults_and_override(tmp_path: Path):
 
 def test_voice_settings_defaults_and_override(tmp_path: Path):
     settings = load_settings(repo_root=tmp_path, home=tmp_path / "nohome")
-    assert settings.voice.tts_voice == "nova"
+    assert settings.voice.tts_voice is None
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / ".pyrrhon.toml").write_text(

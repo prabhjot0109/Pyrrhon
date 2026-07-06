@@ -47,14 +47,17 @@ def create_stt(voice: VoiceSettings):
             from pipecat.services.groq.stt import GroqSTTService
         except ImportError as exc:
             raise _import_error(exc, "groq") from exc
-        return GroqSTTService(api_key=key, model=voice.stt_model)
+        return GroqSTTService(api_key=key, model=voice.stt_model or "whisper-large-v3-turbo")
     if provider == "openai":
         key = _key("OPENAI_API_KEY", "OpenAI STT")
         try:
             from pipecat.services.openai.stt import OpenAISTTService
         except ImportError as exc:
             raise _import_error(exc, "openai") from exc
-        return OpenAISTTService(api_key=key, model=voice.stt_model)
+        kwargs = {"api_key": key}
+        if voice.stt_model:
+            kwargs["model"] = voice.stt_model
+        return OpenAISTTService(**kwargs)
     if provider == "deepgram":
         key = _key("DEEPGRAM_API_KEY", "Deepgram STT")
         try:
@@ -67,7 +70,12 @@ def create_stt(voice: VoiceSettings):
             from pipecat.services.whisper.stt import WhisperSTTService
         except ImportError as exc:
             raise _import_error(exc, "whisper") from exc
-        return WhisperSTTService()  # faster-whisper, runs locally, no key
+        # faster-whisper, runs locally, no key. stt_model picks the size:
+        # tiny | base | small | medium | large-v3, or an HF id such as
+        # "Systran/faster-distil-whisper-medium.en".
+        if voice.stt_model:
+            return WhisperSTTService(model=voice.stt_model)
+        return WhisperSTTService()
     raise VoiceUnavailableError(
         f"Unknown stt_provider '{provider}'. Valid: {', '.join(STT_PROVIDERS)}."
     )
@@ -81,12 +89,17 @@ def create_tts(voice: VoiceSettings):
             from pipecat.services.openai.tts import OpenAITTSService
         except ImportError as exc:
             raise _import_error(exc, "openai") from exc
-        kwargs = {"api_key": key, "voice": voice.tts_voice}
+        kwargs = {"api_key": key, "voice": voice.tts_voice or "nova"}
         if voice.tts_model:
             kwargs["model"] = voice.tts_model
         return OpenAITTSService(**kwargs)
     if provider == "cartesia":
         key = _key("CARTESIA_API_KEY", "Cartesia TTS")
+        if not voice.tts_voice:
+            raise VoiceUnavailableError(
+                f"{provider} TTS needs tts_voice set to one of your voice ids "
+                "in [voice] — staying in text mode."
+            )
         try:
             from pipecat.services.cartesia.tts import CartesiaTTSService
         except ImportError as exc:
@@ -97,6 +110,11 @@ def create_tts(voice: VoiceSettings):
         return CartesiaTTSService(**kwargs)
     if provider == "elevenlabs":
         key = _key("ELEVENLABS_API_KEY", "ElevenLabs TTS")
+        if not voice.tts_voice:
+            raise VoiceUnavailableError(
+                f"{provider} TTS needs tts_voice set to one of your voice ids "
+                "in [voice] — staying in text mode."
+            )
         try:
             from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
         except ImportError as exc:
@@ -112,7 +130,7 @@ def create_tts(voice: VoiceSettings):
         except ImportError as exc:
             raise _import_error(exc, "deepgram") from exc
         # tts_voice carries the Aura voice model (e.g. "aura-2-thalia-en").
-        return DeepgramTTSService(api_key=key, voice=voice.tts_voice)
+        return DeepgramTTSService(api_key=key, voice=voice.tts_voice or "aura-2-thalia-en")
     if provider == "piper":
         try:
             # Pipecat 1.5.0 ships two Piper services; the HTTP one talks to a
