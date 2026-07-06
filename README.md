@@ -35,13 +35,24 @@ Requires Python ≥ 3.12 and [uv](https://docs.astral.sh/uv/).
 git clone https://github.com/prabhjot0109/Pyrrhon && cd Pyrrhon
 uv sync
 
-# Text/TUI needs one LLM key (Groq is the default provider):
-export GROQ_API_KEY=gsk_...          # PowerShell: $env:GROQ_API_KEY = "gsk_..."
-
+uv run pyrrhon --setup               # pick providers, paste keys (stored owner-only)
 uv run pyrrhon /path/to/some/repo    # Textual TUI (default channel)
 uv run pyrrhon --text .              # plain-text REPL
 uv run pyrrhon --voice .             # TUI with the voice pipeline on
 ```
+
+The first launch without any configuration offers the same wizard
+automatically. Prefer to skip it? Export a key yourself — Text/TUI needs one
+LLM key (Groq is the default provider):
+
+```bash
+export GROQ_API_KEY=gsk_...          # PowerShell: $env:GROQ_API_KEY = "gsk_..."
+```
+
+`/settings` shows what's configured and where each key comes from; `pyrrhon
+--setup` changes it. Keys entered in the wizard are stored owner-only in
+`~/.pyrrhon/credentials.toml`, never in project config; environment variables
+always win.
 
 Voice additionally needs `OPENAI_API_KEY` (TTS) — STT runs on the same Groq
 key. Inside the TUI, `/voice on|off` toggles the pipeline; just start talking,
@@ -72,29 +83,47 @@ api_key_env = "MYLLM_KEY"
 command = "docs-mcp"                    # stdio — or: url = "http://..." (HTTP)
 ```
 
-Built-in providers: `groq`, `openai`, `openrouter`, `cerebras`, `gemini` —
-each just needs its `*_API_KEY` env var (Cerebras, for example: set
-`CEREBRAS_API_KEY` and point a slot at `provider = "cerebras"`). Two keyless
-local providers ship too: `ollama` (`http://localhost:11434/v1`) and
-`lmstudio` (`http://localhost:1234/v1`). Drop markdown "soul files" in
-`~/.pyrrhon/` or `<repo>/.pyrrhon/` (scaffold with `/init`) to give Pyrrhon
-standing context about you or the repo.
+Built-in providers: `groq`, `openai`, `gemini`, `deepseek`, `cerebras`,
+`openrouter`, `huggingface` — each just needs its `*_API_KEY` env var
+(Cerebras, for example: set `CEREBRAS_API_KEY` and point a slot at `provider =
+"cerebras"`; Hugging Face uses `HF_TOKEN` against the Inference Providers
+router). Two keyless local providers ship too: `ollama`
+(`http://localhost:11434/v1`) and `lmstudio` (`http://localhost:1234/v1`).
+Drop markdown "soul files" in `~/.pyrrhon/` or `<repo>/.pyrrhon/` (scaffold
+with `/init`) to give Pyrrhon standing context about you or the repo.
 
 ### Voice providers
 
 ```toml
 [voice]
-stt_provider = "groq"          # groq | openai | deepgram | whisper-local (no key, on-device)
-tts_provider = "cartesia"      # openai (default) | cartesia | elevenlabs | deepgram | piper (local)
-tts_voice = "<voice-id>"       # OpenAI voice name, Cartesia/ElevenLabs voice id, or Deepgram Aura voice
+stt_provider = "groq"          # groq | openai | gemini | deepgram | whisper-local (no key, on-device)
+tts_provider = "cartesia"      # openai (default) | gemini | cartesia | elevenlabs | deepgram | piper (local)
+tts_voice = "<voice-id>"       # OpenAI voice name, Gemini voice (Kore/Puck/...), Cartesia/ElevenLabs id, or Deepgram Aura voice
 tts_model = "sonic-2"          # optional provider-specific model
-# tts_url = "http://localhost:5000"   # piper only
+# tts_url = "http://localhost:5000"   # piper HTTP-server mode only (default is in-process)
 ```
 
 OpenAI TTS is the zero-setup default; for real-time conversation Cartesia or
 ElevenLabs are noticeably snappier (~100-300ms to first audio vs 400ms+).
-Local, keyless operation: `stt_provider = "whisper-local"`, `tts_provider =
-"piper"`, and a local LLM via `[fast] provider = "ollama"` (or `lmstudio`).
+Local, keyless operation: `stt_provider = "whisper-local"` (picks any
+faster-whisper size via `stt_model`), `tts_provider = "piper"` (in-process,
+auto-downloads voices — no server), and a local LLM via `[fast] provider =
+"ollama"` (or `lmstudio`). Gemini STT/TTS ride a plain `GEMINI_API_KEY`.
+
+| Task | Cloud (API key) | Local (keyless) |
+|---|---|---|
+| LLM | Groq, OpenAI, Gemini, DeepSeek, Cerebras, OpenRouter, Hugging Face | Ollama, LM Studio |
+| STT | Groq Whisper, OpenAI, Gemini, Deepgram | whisper-local (faster-whisper: tiny→large-v3, distil, any HF id) |
+| TTS | OpenAI, Gemini, Cartesia, ElevenLabs, Deepgram Aura | Piper (in-process, auto-downloads voices) |
+
+Any OpenAI-compatible endpoint works as a custom provider via
+`[providers.<name>]` (`base_url` + `api_key_env`).
+
+**Why no Gemini Live speech-to-speech?** Gemini Live generates speech directly
+from audio, which would bypass Pyrrhon's agent loop — and with it the
+grounding gate that verifies every `file:line` claim before it is spoken.
+Confident hallucination out loud is Pyrrhon's worst failure mode, so Gemini
+participates as LLM/STT/TTS (each behind the gate) instead.
 
 ### Context budget
 

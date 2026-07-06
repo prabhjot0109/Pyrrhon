@@ -65,6 +65,15 @@ an STT/TTS provider registry (`pyrrhon/voice/providers.py`) plus keyless
 local LLM providers (`ollama`, `lmstudio`). See
 `docs/superpowers/plans/2026-07-06-pyrrhon-m8-context-engineering-subagent-harness.md`.
 
+M9 (provider expansion + onboarding) — DeepSeek/Hugging Face LLM providers,
+Gemini STT/TTS via plain API key (`pyrrhon/voice/gemini.py`), in-process
+Piper, per-provider voice defaults, a first-run setup wizard
+(`pyrrhon/config/wizard.py`, `pyrrhon --setup`) with owner-only key storage
+(`pyrrhon/config/credentials.py`), `/settings`, the branding banner
+(`pyrrhon/branding.py`), and safety-invariant tests (`tests/test_safety.py`).
+Gemini Live speech-to-speech is parked: it would bypass the grounding gate.
+See `docs/superpowers/plans/2026-07-06-pyrrhon-m9-providers-onboarding-polish.md`.
+
 
 ## Design constraints (do not violate without discussion)
 
