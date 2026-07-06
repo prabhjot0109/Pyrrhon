@@ -23,6 +23,7 @@ TruncateSpeech to the screen channel.
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Callable
 
 from pyrrhon.voice._logging import route_pipecat_logs_to_file
@@ -34,6 +35,7 @@ route_pipecat_logs_to_file()
 from pipecat.frames.frames import (  # noqa: E402 — intentional: after log routing
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
+    ErrorFrame,
     Frame,
     InterimTranscriptionFrame,
     InterruptionFrame,
@@ -46,9 +48,32 @@ from pipecat.frames.frames import (  # noqa: E402 — intentional: after log rou
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-from pyrrhon.core.events import Event, SpeechChunk, TruncateSpeech
+from pyrrhon.core.events import (
+    Event,
+    SpeechChunk,
+    Transcription,
+    TruncateSpeech,
+    VoiceNotice,
+)
 from pyrrhon.core.session import Session
 from pyrrhon.voice.playback import PlaybackTracker
+
+
+def humanize_voice_error(text: str) -> str:
+    """Turn a raw pipecat/provider ErrorFrame string into one actionable line.
+
+    The common case here is a Groq hosted TTS/STT model gated behind a
+    one-time terms click — the raw 400 buries an accept-terms URL inside a
+    JSON blob. Pull it out and tell the user exactly what to do."""
+    if "terms acceptance" in text or "model_terms_required" in text:
+        match = re.search(r"https?://\S+", text)
+        link = match.group(0).rstrip("'\".,)") if match else "https://console.groq.com"
+        return (
+            f"This voice model needs a one-time terms acceptance. Open {link} , "
+            "accept, then run /voice off and /voice on again "
+            "(or switch TTS with /settings tts <provider>)."
+        )
+    return f"Voice pipeline error: {text}"
 
 
 class PyrrhonBridgeProcessor(FrameProcessor):
@@ -86,9 +111,19 @@ class PyrrhonBridgeProcessor(FrameProcessor):
             await self._on_interruption()
             await self.push_frame(frame, direction)
         elif isinstance(frame, TranscriptionFrame):
-            self._start_turn(frame.text)  # consumed: the utterance IS the turn
+            # Show the user what was heard (closes the feedback loop), then
+            # run the turn. Consumed: the utterance IS the turn, not passed on.
+            self._on_event(Transcription(text=frame.text))
+            self._start_turn(frame.text)
         elif isinstance(frame, InterimTranscriptionFrame):
             pass  # partials never start turns
+        elif isinstance(frame, ErrorFrame):
+            # A provider error (e.g. TTS 400) is non-fatal to Pipecat and only
+            # hits the log file — surface it so voice never fails silently.
+            self._on_event(
+                VoiceNotice(humanize_voice_error(str(frame.error)), is_error=True)
+            )
+            await self.push_frame(frame, direction)  # let the task see it too
         elif isinstance(frame, BotStartedSpeakingFrame):
             self._bot_speaking = True
             self.tracker.playback_started()
@@ -119,8 +154,10 @@ class PyrrhonBridgeProcessor(FrameProcessor):
         await self.push_frame(LLMFullResponseStartFrame())
         async for event in self._session.run_turn(text):
             if isinstance(event, SpeechChunk):
-                # Speakable prose → TTS. Everything else is screen-bound.
+                # Speakable prose → TTS *and* the screen, so the transcript
+                # shows what Pyrrhon is saying, not just plays it.
                 self.tracker.speech_queued(event.text)
+                self._on_event(event)
                 await self.push_frame(TextFrame(event.text))
             else:
                 self._on_event(event)

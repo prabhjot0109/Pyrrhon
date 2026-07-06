@@ -27,13 +27,26 @@ from pyrrhon.core.events import (
     ScreenArtifact,
     SpeechChunk,
     ToolCallStarted,
+    Transcription,
     TruncateSpeech,
+    VoiceNotice,
 )
 from pyrrhon.core.mcp import MCPManager
 from pyrrhon.core.providers.llm import FallbackLLM, MissingAPIKeyError
 from pyrrhon.core.session import Session
 from pyrrhon.tui.widgets import CodeViewer, StatusBar
 from pyrrhon.voice import VoiceController
+
+
+def _redact_secret_echo(text: str) -> str:
+    """Never render a pasted API key in the transcript (RichLog persists it).
+
+    Masks the value in `/settings key <ENV> <secret>` before it is echoed;
+    the credential itself is still stored owner-only by the command."""
+    parts = text.split()
+    if len(parts) >= 4 and parts[0] == "/settings" and parts[1] == "key":
+        return " ".join(parts[:3]) + " ****"
+    return text
 
 
 class PyrrhonApp(App):
@@ -148,7 +161,7 @@ class PyrrhonApp(App):
         if not text:
             return
         transcript = self.query_one("#transcript", RichLog)
-        transcript.write(Text(f"you> {text}", style="bold cyan"))
+        transcript.write(Text(f"you> {_redact_secret_echo(text)}", style="bold cyan"))
 
         ctx = CommandContext(
             repo_root=self.repo_root,
@@ -175,7 +188,15 @@ class PyrrhonApp(App):
         """Render one core event into the panes — agent turns and the M3
         voice bridge (via VoiceController's on_event) both land here."""
         transcript = self.query_one("#transcript", RichLog)
-        if isinstance(event, SpeechChunk):
+        if isinstance(event, Transcription):
+            # What STT heard — mirrors the typed "you>" so voice and text read
+            # the same in the transcript. The 🎙 marks it as spoken input.
+            transcript.write(Text(f"🎙 you> {event.text}", style="bold cyan"))
+        elif isinstance(event, VoiceNotice):
+            style = "bold red" if event.is_error else "yellow"
+            transcript.write(Text(event.text, style=style))
+            self.notify(event.text, severity="error" if event.is_error else "information")
+        elif isinstance(event, SpeechChunk):
             transcript.write(Markdown(event.text))
         elif isinstance(event, ToolCallStarted):
             transcript.write(Text(f"→ {event.name}({event.args})", style="dim"))

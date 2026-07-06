@@ -3,6 +3,7 @@ from pathlib import Path
 
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
+    ErrorFrame,
     InterimTranscriptionFrame,
     InterruptionFrame,
     LLMFullResponseEndFrame,
@@ -14,10 +15,16 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection
 
 from pyrrhon.core.agent.loop import Agent
-from pyrrhon.core.events import Citation, TruncateSpeech
+from pyrrhon.core.events import (
+    Citation,
+    SpeechChunk,
+    Transcription,
+    TruncateSpeech,
+    VoiceNotice,
+)
 from pyrrhon.core.providers.llm import LLMReply, ToolCall
 from pyrrhon.core.session import INTERRUPTED_MARKER, Session
-from pyrrhon.voice.bridge import PyrrhonBridgeProcessor
+from pyrrhon.voice.bridge import PyrrhonBridgeProcessor, humanize_voice_error
 from pyrrhon.voice.playback import PlaybackTracker
 from tests.helpers import FakeLLM
 from tests.test_playback import FakeClock
@@ -78,6 +85,56 @@ async def test_final_transcription_runs_a_turn_and_pushes_speech_to_tts():
     # Screen-bound events went to the TUI callback, not to TTS:
     assert Citation(file="utils/helpers.py", line=1) in seen
     assert session.history[-1]["content"] == "greet is defined at utils/helpers.py:1."
+
+
+async def test_transcription_and_answer_both_reach_the_screen():
+    # The screen must show BOTH what STT heard and what Pyrrhon says back —
+    # otherwise a working voice loop looks like a dead mic.
+    bridge, session, seen = make_bridge([LLMReply(text="It defines a greeting.")])
+    await bridge._handle_frame(transcription("what does this do"), DOWN)
+    await asyncio.wait_for(bridge._turn_task, timeout=2)
+
+    assert Transcription(text="what does this do") in seen
+    assert SpeechChunk(text="It defines a greeting.") in seen
+    # The user transcription is emitted before the turn's answer.
+    assert seen.index(Transcription(text="what does this do")) < seen.index(
+        SpeechChunk(text="It defines a greeting.")
+    )
+    # Still spoken, too (regression guard on the TTS path):
+    assert any(
+        isinstance(f, TextFrame) and f.text == "It defines a greeting."
+        for f in bridge.pushed
+    )
+
+
+async def test_error_frame_surfaces_actionable_notice():
+    bridge, session, seen = make_bridge([])
+    raw = (
+        "Error code: 400 - {'error': {'message': 'The model requires terms "
+        "acceptance. Please accept at https://console.groq.com/playground?"
+        "model=canopylabs%2Forpheus-v1-english', 'code': 'model_terms_required'}}"
+    )
+    await bridge._handle_frame(ErrorFrame(error=raw, fatal=False), DOWN)
+
+    notices = [e for e in seen if isinstance(e, VoiceNotice)]
+    assert len(notices) == 1
+    assert notices[0].is_error is True
+    assert "console.groq.com/playground" in notices[0].text
+    assert "/voice off" in notices[0].text
+    # The error frame is still passed on so the pipeline task can react.
+    assert any(isinstance(f, ErrorFrame) for f in bridge.pushed)
+
+
+def test_humanize_voice_error_extracts_terms_link_or_falls_back():
+    terms = humanize_voice_error(
+        "requires terms acceptance at https://console.groq.com/x?m=y', 'code': 1"
+    )
+    assert "https://console.groq.com/x?m=y" in terms
+    assert "terms acceptance" in terms
+    # Non-terms errors pass through as a plain pipeline-error line.
+    assert humanize_voice_error("connection reset") == (
+        "Voice pipeline error: connection reset"
+    )
 
 
 async def test_interim_transcriptions_never_start_turns():

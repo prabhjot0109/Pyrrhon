@@ -53,6 +53,33 @@ class AskUser:
 
 
 @dataclass(frozen=True)
+class Transcription:
+    """What STT heard the user say — the recognized text of a spoken turn.
+
+    Screen-only: it has already been said aloud, so it is never re-spoken.
+    Showing it closes the voice feedback loop — the user can see they were
+    heard (and where they were *mis*heard). Without it, a working STT is
+    indistinguishable from a dead mic.
+    """
+
+    text: str
+
+
+@dataclass(frozen=True)
+class VoiceNotice:
+    """An out-of-band message from the voice pipeline for the screen: a
+    provider error or status the user must see.
+
+    Voice failures are otherwise silent — Pipecat marks provider errors
+    non-fatal and only writes them to ~/.pyrrhon/logs/voice.log, so a TTS
+    that 400s looks identical to a pipeline that never ran. This surfaces it.
+    """
+
+    text: str
+    is_error: bool = False
+
+
+@dataclass(frozen=True)
 class TruncateSpeech:
     """The one reverse-direction event (channel → core).
 
@@ -73,5 +100,7 @@ Event = (
     | ToolCallStarted
     | ToolCallFinished
     | AskUser
+    | Transcription
+    | VoiceNotice
     | TruncateSpeech
 )

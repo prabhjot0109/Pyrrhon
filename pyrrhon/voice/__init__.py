@@ -37,6 +37,13 @@ class VoiceController:
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
+    def update_settings(self, settings: Settings) -> None:
+        """Swap the settings a future /voice on will build the pipeline from.
+
+        Takes effect on the next start() — the pipeline reads providers/keys at
+        build time, so a live pipeline keeps its config until toggled off/on."""
+        self._settings = settings
+
     def start(self) -> str:
         if self.running:
             return "Voice is already on."
@@ -60,9 +67,9 @@ class VoiceController:
         return "Voice: on. Talk normally — barge in whenever you like."
 
     async def stop(self) -> str:
-        if not self.running:
-            return "Voice is not running."
         task = self._task
+        if task is None or task.done():
+            return "Voice is not running."
         task.cancel()
         try:
             await task

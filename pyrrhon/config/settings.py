@@ -5,6 +5,7 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
+import tomli_w
 from pydantic import BaseModel, model_validator
 
 
@@ -129,3 +130,30 @@ def load_settings(repo_root: Path, home: Path | None = None) -> Settings:
         **_read_toml(repo_root / ".pyrrhon.toml"),
     }
     return Settings.model_validate(merged)
+
+
+def config_path(home: Path | None = None) -> Path:
+    return (home or Path.home()) / ".pyrrhon" / "config.toml"
+
+
+def patch_config(updates: dict[str, dict], home: Path | None = None) -> Path:
+    """Deep-merge {section: {key: value}} into the global config.toml.
+
+    Existing sections and keys survive (this is how /settings edits one knob
+    without clobbering the rest); a value of None clears that key. Mirrors the
+    wizard's writer — comments are not preserved, and keys never live here
+    (they go to credentials.toml). Returns the path written.
+    """
+    path = config_path(home)
+    existing = _read_toml(path)
+    for section, kv in updates.items():
+        merged = {**existing.get(section, {}), **kv}
+        existing[section] = {k: v for k, v in merged.items() if v is not None}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as f:
+        f.write(
+            b"# Managed by Pyrrhon (`/settings` and `pyrrhon --setup`). Editing "
+            b"here is fine; rerunning merges sections and drops comments.\n"
+        )
+        tomli_w.dump(existing, f)
+    return path
