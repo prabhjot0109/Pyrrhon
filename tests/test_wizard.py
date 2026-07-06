@@ -25,8 +25,8 @@ def test_full_run_writes_config_and_credentials(tmp_path):
         home=tmp_path,
         console=console,
         # LLM: pick 3 (gemini), accept default model, then voice: yes,
-        # STT: pick 3 (gemini), TTS: pick 2 (gemini), confirm summary.
-        input_fn=scripted("3", "", "y", "3", "2", "y"),
+        # STT: pick 3 (gemini), TTS: pick 3 (gemini), confirm summary.
+        input_fn=scripted("3", "", "y", "3", "3", "y"),
         getpass_fn=scripted("AIza-secret"),
     )
     config = tomllib.loads((tmp_path / ".pyrrhon" / "config.toml").read_text())

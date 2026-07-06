@@ -157,6 +157,49 @@ def test_gemini_stt_builds_with_key_and_default_model(monkeypatch):
     assert captured == {"api_key": "k", "model": "gemini-2.5-flash"}
 
 
+def test_huggingface_stt_requires_token_then_builds(monkeypatch):
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    with pytest.raises(VoiceUnavailableError) as exc:
+        create_stt(VoiceSettings(stt_provider="huggingface"))
+    assert "HF_TOKEN" in str(exc.value)
+
+    monkeypatch.setenv("HF_TOKEN", "hf_k")
+    captured: dict = {}
+    _install_fake(monkeypatch, "pyrrhon.voice.huggingface", "HuggingFaceSTTService", captured)
+    create_stt(VoiceSettings(stt_provider="huggingface"))
+    assert captured == {"api_key": "hf_k", "model": "openai/whisper-large-v3"}
+
+
+def test_groq_tts_requires_key_then_builds_orpheus_autumn(monkeypatch):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    with pytest.raises(VoiceUnavailableError) as exc:
+        create_tts(VoiceSettings(tts_provider="groq"))
+    assert "GROQ_API_KEY" in str(exc.value)
+
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+    captured: dict = {}
+    _install_fake(monkeypatch, "pipecat.services.groq.tts", "GroqTTSService", captured)
+    create_tts(VoiceSettings(tts_provider="groq"))
+    assert captured == {
+        "api_key": "k",
+        "model_name": "canopylabs/orpheus-v1-english",
+        "voice_id": "autumn",
+    }
+
+
+def test_huggingface_tts_requires_token_then_builds(monkeypatch):
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    with pytest.raises(VoiceUnavailableError) as exc:
+        create_tts(VoiceSettings(tts_provider="huggingface"))
+    assert "HF_TOKEN" in str(exc.value)
+
+    monkeypatch.setenv("HF_TOKEN", "hf_k")
+    captured: dict = {}
+    _install_fake(monkeypatch, "pyrrhon.voice.huggingface", "HuggingFaceTTSService", captured)
+    create_tts(VoiceSettings(tts_provider="huggingface"))
+    assert captured == {"api_key": "hf_k", "model": "hexgrad/Kokoro-82M"}
+
+
 def test_piper_uses_http_service_when_tts_url_is_set(monkeypatch):
     captured: dict = {}
     module = types.ModuleType("pipecat.services.piper.tts")

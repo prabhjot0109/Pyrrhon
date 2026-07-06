@@ -1,7 +1,7 @@
 """STT/TTS provider registry: mirrors the LLM slot pattern for audio.
 
-STT: groq | openai | gemini | deepgram | whisper-local
-TTS: openai | gemini | cartesia | elevenlabs | deepgram | piper
+STT: groq | openai | gemini | huggingface | deepgram | whisper-local
+TTS: openai | groq | gemini | huggingface | cartesia | elevenlabs | deepgram | piper
 
 Key check happens BEFORE the pipecat import, and each provider's import is
 lazy — a missing optional extra degrades to text mode with an actionable
@@ -22,8 +22,10 @@ from pathlib import Path
 
 from pyrrhon.config.settings import VoiceSettings
 
-STT_PROVIDERS = ("groq", "openai", "gemini", "deepgram", "whisper-local")
-TTS_PROVIDERS = ("openai", "gemini", "cartesia", "elevenlabs", "deepgram", "piper")
+STT_PROVIDERS = ("groq", "openai", "gemini", "huggingface", "deepgram", "whisper-local")
+TTS_PROVIDERS = (
+    "openai", "groq", "gemini", "huggingface", "cartesia", "elevenlabs", "deepgram", "piper"
+)
 
 
 class VoiceUnavailableError(RuntimeError):
@@ -73,6 +75,18 @@ def create_stt(voice: VoiceSettings):
                 "— staying in text mode."
             ) from exc
         return GeminiSTTService(api_key=key, model=voice.stt_model or "gemini-2.5-flash")
+    if provider == "huggingface":
+        key = _key("HF_TOKEN", "Hugging Face STT")
+        try:
+            from pyrrhon.voice.huggingface import HuggingFaceSTTService
+        except ImportError as exc:
+            raise VoiceUnavailableError(
+                f"Voice dependency missing ({exc}). Run: uv add huggingface_hub "
+                "soundfile — staying in text mode."
+            ) from exc
+        return HuggingFaceSTTService(
+            api_key=key, model=voice.stt_model or "openai/whisper-large-v3"
+        )
     if provider == "deepgram":
         key = _key("DEEPGRAM_API_KEY", "Deepgram STT")
         try:
@@ -108,6 +122,30 @@ def create_tts(voice: VoiceSettings):
         if voice.tts_model:
             kwargs["model"] = voice.tts_model
         return OpenAITTSService(**kwargs)
+    if provider == "groq":
+        key = _key("GROQ_API_KEY", "Groq TTS")
+        try:
+            from pipecat.services.groq.tts import GroqTTSService
+        except ImportError as exc:
+            raise _import_error(exc, "groq") from exc
+        return GroqTTSService(
+            api_key=key,
+            model_name=voice.tts_model or "canopylabs/orpheus-v1-english",
+            voice_id=voice.tts_voice or "autumn",
+        )
+    if provider == "huggingface":
+        key = _key("HF_TOKEN", "Hugging Face TTS")
+        try:
+            from pyrrhon.voice.huggingface import HuggingFaceTTSService
+        except ImportError as exc:
+            raise VoiceUnavailableError(
+                f"Voice dependency missing ({exc}). Run: uv add huggingface_hub "
+                "soundfile — staying in text mode."
+            ) from exc
+        # HF TTS selects a model, not a voice — most HF TTS models take no voice.
+        return HuggingFaceTTSService(
+            api_key=key, model=voice.tts_model or "hexgrad/Kokoro-82M"
+        )
     if provider == "gemini":
         key = _key("GEMINI_API_KEY", "Gemini TTS")
         try:

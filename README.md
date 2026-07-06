@@ -96,10 +96,10 @@ with `/init`) to give Pyrrhon standing context about you or the repo.
 
 ```toml
 [voice]
-stt_provider = "groq"          # groq | openai | gemini | deepgram | whisper-local (no key, on-device)
-tts_provider = "cartesia"      # openai (default) | gemini | cartesia | elevenlabs | deepgram | piper (local)
-tts_voice = "<voice-id>"       # OpenAI voice name, Gemini voice (Kore/Puck/...), Cartesia/ElevenLabs id, or Deepgram Aura voice
-tts_model = "sonic-2"          # optional provider-specific model
+stt_provider = "groq"          # groq | openai | gemini | huggingface | deepgram | whisper-local (no key)
+tts_provider = "cartesia"      # openai (default) | groq | gemini | huggingface | cartesia | elevenlabs | deepgram | piper (local)
+tts_voice = "<voice-id>"       # OpenAI/Groq voice name, Gemini voice (Kore/Puck/...), Cartesia/ElevenLabs id, or Deepgram Aura voice
+tts_model = "sonic-2"          # optional provider-specific model (for huggingface TTS, the HF model id)
 # tts_url = "http://localhost:5000"   # piper HTTP-server mode only (default is in-process)
 ```
 
@@ -113,8 +113,11 @@ auto-downloads voices — no server), and a local LLM via `[fast] provider =
 | Task | Cloud (API key) | Local (keyless) |
 |---|---|---|
 | LLM | Groq, OpenAI, Gemini, DeepSeek, Cerebras, OpenRouter, Hugging Face | Ollama, LM Studio |
-| STT | Groq Whisper, OpenAI, Gemini, Deepgram | whisper-local (faster-whisper: tiny→large-v3, distil, any HF id) |
-| TTS | OpenAI, Gemini, Cartesia, ElevenLabs, Deepgram Aura | Piper (in-process, auto-downloads voices) |
+| STT | Groq Whisper, OpenAI, Gemini, Hugging Face, Deepgram | whisper-local (faster-whisper: tiny→large-v3, distil, any HF id) |
+| TTS | OpenAI, Groq (Orpheus), Gemini, Hugging Face, Cartesia, ElevenLabs, Deepgram Aura | Piper (in-process, auto-downloads voices) |
+
+Hugging Face STT/TTS and the Groq LLM/STT/TTS trio all ride a single key each
+(`HF_TOKEN` / `GROQ_API_KEY`) — one credential covers reasoning *and* voice.
 
 Any OpenAI-compatible endpoint works as a custom provider via
 `[providers.<name>]` (`base_url` + `api_key_env`).

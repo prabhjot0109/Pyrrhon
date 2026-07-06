@@ -1,0 +1,84 @@
+"""Hugging Face voice services over the Inference Providers API (HF_TOKEN).
+
+Pipecat has no native Hugging Face STT/TTS service, so these thin wrappers
+talk to the HF Inference API via huggingface_hub's AsyncInferenceClient — the
+same HF_TOKEN that drives the huggingface LLM provider. The registry checks
+HF_TOKEN before importing this module (M3 error policy), so imports here may
+assume pipecat, huggingface_hub, and soundfile are installed.
+
+HF ASR returns text; HF TTS returns an audio file whose container is
+model-dependent (often FLAC or WAV), so we decode it with soundfile and hand
+pipecat a fresh WAV — its iterator then auto-detects the sample rate from the
+header regardless of what the model emitted.
+"""
+
+from __future__ import annotations
+
+import io
+from collections.abc import AsyncGenerator
+
+import soundfile
+from openai.types.audio import Transcription
+from pipecat.frames.frames import ErrorFrame, Frame
+from pipecat.services.tts_service import TTSService
+from pipecat.services.whisper.base_stt import BaseWhisperSTTService
+
+from huggingface_hub import AsyncInferenceClient
+
+
+class HuggingFaceSTTService(BaseWhisperSTTService):
+    """VAD-segmented STT via HF automatic-speech-recognition.
+
+    Subclasses BaseWhisperSTTService for its segment handling, metrics, and
+    TranscriptionFrame plumbing; the OpenAI client it builds internally is
+    never used (_transcribe is fully overridden).
+    """
+
+    def __init__(self, *, api_key: str, model: str = "openai/whisper-large-v3", **kwargs):
+        super().__init__(model=model, api_key="unused", **kwargs)
+        self._hf = AsyncInferenceClient(token=api_key)
+        self._hf_model = model
+
+    async def _transcribe(self, audio: bytes) -> Transcription:
+        result = await self._hf.automatic_speech_recognition(audio, model=self._hf_model)
+        text = getattr(result, "text", None) or ""
+        return Transcription(text=text.strip())
+
+
+class HuggingFaceTTSService(TTSService):
+    """Non-streaming HF TTS: one text_to_speech call per sentence chunk.
+
+    The pickable thing for HF TTS is the *model* (set via [voice] tts_model),
+    not a voice — most HF TTS models take no voice argument. Latency is one
+    full API round-trip; fine for Pyrrhon's sentence-chunked speech.
+    """
+
+    def __init__(self, *, api_key: str, model: str = "hexgrad/Kokoro-82M", **kwargs):
+        super().__init__(push_start_frame=True, push_stop_frames=True, **kwargs)
+        self._hf = AsyncInferenceClient(token=api_key)
+        self._model = model
+
+    async def _synthesize(self, text: str) -> AsyncGenerator[bytes, None]:
+        """One WAV chunk per call — split out so tests can drive it directly."""
+        raw = await self._hf.text_to_speech(text, model=self._model)
+        data, sample_rate = soundfile.read(io.BytesIO(raw), dtype="int16")
+        if getattr(data, "ndim", 1) > 1:
+            data = data[:, 0]  # collapse to mono
+        buffer = io.BytesIO()
+        soundfile.write(buffer, data, sample_rate, format="WAV", subtype="PCM_16")
+        yield buffer.getvalue()
+
+    async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame, None]:
+        try:
+            await self.start_tts_usage_metrics(text)
+            async for frame in self._stream_audio_frames_from_iterator(
+                self._synthesize(text),
+                strip_wav_header=True,  # rate travels in the WAV header
+                context_id=context_id,
+            ):
+                await self.stop_ttfb_metrics()
+                yield frame
+        except Exception as exc:
+            yield ErrorFrame(error=f"Hugging Face TTS failed: {exc}")
+        finally:
+            await self.stop_ttfb_metrics()

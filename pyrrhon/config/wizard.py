@@ -110,7 +110,7 @@ def run_wizard(home: Path | None = None, console: Console | None = None,
             state.pop("stt", None)
             state.pop("tts", None)
             return
-        stt = _choose(console, ask, "Speech-to-text (your voice → text):",
+        stt = _choose(console, ask, "Speech-to-text (your voice -> text):",
                       STT_CHOICES, stored, allow_back=True)
         state["stt"] = stt
         _collect_key(console, secret, stt, state["keys"], stored)
