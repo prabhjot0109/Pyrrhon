@@ -104,6 +104,29 @@ budget_tokens = 32000       # estimated tokens before old turns are summarized
 keep_last_messages = 8      # recent messages always kept verbatim
 ```
 
+## Security model
+
+Pyrrhon is built so a voice agent *cannot* damage your repo, even when the
+model is wrong:
+
+- **Read-only by construction.** The agent's only write tool is `write_spec`,
+  which accepts exactly six filenames (`PRD.md`, `HLD.md`, `LLD.md`, `api.md`,
+  `database.md`, `risks.md`) and only ever writes under `docs/design/`.
+- **No shell.** Git access is three read-only subcommands (`log`, `blame`,
+  `show`) executed as argv lists — never a shell, so there is nothing to
+  inject. Paths are resolved and rejected if they escape the repo.
+- **Grounded speech.** Every `file:line` claim is verified against the real
+  repo before it is spoken; unverifiable claims are stripped (voice) or
+  corrected once (screen). Pyrrhon says "I'm not certain" instead of guessing.
+- **Keys stay out of the repo.** API keys live in `~/.pyrrhon/credentials.toml`
+  (owner-only permissions), never in project config; environment variables
+  always take precedence.
+- **Consent for third-party code.** Repo-level plugin code runs only after an
+  explicit one-time consent per repo; MCP servers run only if you configured
+  them.
+
+These invariants are pinned by `tests/test_safety.py`.
+
 ## Architecture
 
 Headless core, thin channels. The core never imports a channel; channels

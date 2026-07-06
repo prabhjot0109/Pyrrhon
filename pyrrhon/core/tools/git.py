@@ -2,7 +2,7 @@
 
 Ordinary tools for history-aware questions — explicitly NOT part of citation
 verification (spec amendment 2026-07-03). All subprocess calls use
-asyncio.create_subprocess_exec (argv list, cwd=root); never shell=True, so no
+asyncio.create_subprocess_exec (argv list, cwd=root); never a shell, so no
 quoting/injection surface. Subprocess awaits are natural cancellation points
 for M3's abort_current_turn.
 """
