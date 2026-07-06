@@ -14,6 +14,7 @@ CPU behind its HTTP server.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from pyrrhon.config.settings import VoiceSettings
 
@@ -132,17 +133,27 @@ def create_tts(voice: VoiceSettings):
         # tts_voice carries the Aura voice model (e.g. "aura-2-thalia-en").
         return DeepgramTTSService(api_key=key, voice=voice.tts_voice or "aura-2-thalia-en")
     if provider == "piper":
+        if voice.tts_url:
+            # Explicit server mode: talk to a running `piper --http`.
+            try:
+                from pipecat.services.piper.tts import PiperHttpTTSService
+            except ImportError as exc:
+                raise _import_error(exc, "piper") from exc
+            import aiohttp
+
+            return PiperHttpTTSService(
+                base_url=voice.tts_url, aiohttp_session=aiohttp.ClientSession()
+            )
+        # Default: in-process Piper — downloads the voice model on first use,
+        # nothing else to run. Local, free, keyless.
         try:
-            # Pipecat 1.5.0 ships two Piper services; the HTTP one talks to a
-            # local `piper --http` server, keyless.
-            from pipecat.services.piper.tts import PiperHttpTTSService
+            from pipecat.services.piper.tts import PiperTTSService
         except ImportError as exc:
             raise _import_error(exc, "piper") from exc
-        import aiohttp
 
-        return PiperHttpTTSService(
-            base_url=voice.tts_url or "http://localhost:5000",
-            aiohttp_session=aiohttp.ClientSession(),
+        return PiperTTSService(
+            voice_id=voice.tts_voice or "en_US-lessac-medium",
+            download_dir=Path.home() / ".pyrrhon" / "piper",
         )
     raise VoiceUnavailableError(
         f"Unknown tts_provider '{provider}'. Valid: {', '.join(TTS_PROVIDERS)}."

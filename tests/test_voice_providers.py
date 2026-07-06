@@ -114,3 +114,27 @@ def test_deepgram_tts_defaults_to_aura_thalia(monkeypatch):
     _install_fake(monkeypatch, "pipecat.services.deepgram.tts", "DeepgramTTSService", captured)
     create_tts(VoiceSettings(tts_provider="deepgram"))
     assert captured["voice"] == "aura-2-thalia-en"
+
+
+def test_piper_runs_in_process_by_default(monkeypatch, tmp_path):
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    captured: dict = {}
+    _install_fake(monkeypatch, "pipecat.services.piper.tts", "PiperTTSService", captured)
+    create_tts(VoiceSettings(tts_provider="piper"))
+    assert captured["voice_id"] == "en_US-lessac-medium"
+    assert captured["download_dir"] == tmp_path / ".pyrrhon" / "piper"
+
+
+def test_piper_uses_http_service_when_tts_url_is_set(monkeypatch):
+    captured: dict = {}
+    module = types.ModuleType("pipecat.services.piper.tts")
+    module.PiperHttpTTSService = _fake_service(captured)
+    module.PiperTTSService = _fake_service({})
+    monkeypatch.setitem(sys.modules, "pipecat.services.piper.tts", module)
+    # Fake aiohttp too: real ClientSession() demands a running event loop and
+    # would leak an unclosed session in this sync test.
+    aiohttp_mod = types.ModuleType("aiohttp")
+    aiohttp_mod.ClientSession = lambda: object()
+    monkeypatch.setitem(sys.modules, "aiohttp", aiohttp_mod)
+    create_tts(VoiceSettings(tts_provider="piper", tts_url="http://localhost:5000"))
+    assert captured["base_url"] == "http://localhost:5000"
