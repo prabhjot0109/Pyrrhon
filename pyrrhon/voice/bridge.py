@@ -25,7 +25,13 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 
-from pipecat.frames.frames import (
+from pyrrhon.voice._logging import route_pipecat_logs_to_file
+
+# Must run before the first pipecat import below: pipecat's loguru sink grabs
+# the live terminal on import, so redirect it to a file first (see _logging).
+route_pipecat_logs_to_file()
+
+from pipecat.frames.frames import (  # noqa: E402 — intentional: after log routing
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
     Frame,

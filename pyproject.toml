@@ -23,7 +23,11 @@ dependencies = [
     "soundfile>=0.14.0",
     "textual>=8.2.8",
     "tomli-w>=1.2.0",
-    "tree-sitter>=0.26.0",
+    # Pinned <0.26: tree-sitter 0.26.0 (2026-06-30) broke the C-ABI the
+    # pre-compiled grammars in tree-sitter-language-pack are linked against,
+    # segfaulting SymbolIndex.ensure_fresh. The pack only requires >=0.23, so
+    # an unbounded pin silently resolves to the crashing core.
+    "tree-sitter>=0.25.2,<0.26",
     "tree-sitter-language-pack>=1.12.2",
 ]
 

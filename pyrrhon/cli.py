@@ -3,11 +3,28 @@
 from __future__ import annotations
 
 import argparse
+import sys
 
 from pyrrhon import __version__
 
 
+def _force_utf8_io() -> None:
+    """Windows consoles default to a legacy codepage (cp1252); the banner owl,
+    the `→` tool marker, and 📍/⏹ citation glyphs are outside it and raise
+    UnicodeEncodeError on the first tool call. Force UTF-8 on the real streams
+    once, at the entry point, so every channel (REPL, wizard, TUI) is safe.
+    No-op where the stream is already UTF-8 or lacks reconfigure()."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8")
+            except (ValueError, OSError):
+                pass
+
+
 def main(argv: list[str] | None = None) -> None:
+    _force_utf8_io()
     parser = argparse.ArgumentParser(
         prog="pyrrhon",
         description="Talk to a codebase like a senior engineer is sitting next to you.",

@@ -8,10 +8,12 @@ from collections.abc import Callable
 from pyrrhon.config.settings import Settings
 from pyrrhon.core.events import Event
 from pyrrhon.core.session import Session
-from pyrrhon.voice import pipeline as _pipeline
-from pyrrhon.voice.pipeline import VoiceUnavailableError, run_voice
+# VoiceUnavailableError lives in providers, which imports no pipecat — so the
+# controller (and thus the TUI) imports cleanly without the audio stack. The
+# pipeline (and pipecat) is imported lazily in start(), on the first /voice on.
+from pyrrhon.voice.providers import VoiceUnavailableError
 
-__all__ = ["VoiceController", "VoiceUnavailableError", "run_voice"]
+__all__ = ["VoiceController", "VoiceUnavailableError"]
 
 
 class VoiceController:
@@ -38,6 +40,16 @@ class VoiceController:
     def start(self) -> str:
         if self.running:
             return "Voice is already on."
+        try:
+            # Lazy import: pulling pipecat at TUI startup slows launch, requires
+            # the audio extras just to run in text mode, and lets pipecat's
+            # logger grab the terminal before Textual owns it. Defer to here.
+            from pyrrhon.voice import pipeline as _pipeline
+        except ImportError as exc:
+            return (
+                f"Voice dependencies missing ({exc}). "
+                'Run: uv add "pipecat-ai[local,silero,groq]" — staying in text mode.'
+            )
         # _pipeline.run_voice (module attribute) so tests can monkeypatch it.
         self._task = asyncio.create_task(
             _pipeline.run_voice(

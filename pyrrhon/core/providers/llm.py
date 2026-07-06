@@ -12,7 +12,7 @@ import os
 from dataclasses import dataclass
 
 import httpx
-from openai import APIConnectionError, APIStatusError, AsyncOpenAI
+from openai import APIConnectionError, APIStatusError, AsyncOpenAI, BadRequestError
 
 from pyrrhon.config.settings import ModelSlot, Settings
 
@@ -21,6 +21,20 @@ logger = logging.getLogger("pyrrhon.providers")
 
 class MissingAPIKeyError(RuntimeError):
     pass
+
+
+class InvalidToolCallError(RuntimeError):
+    """The model emitted a tool call the provider rejected as not in the tool
+    list — e.g. gpt-oss on Groq hallucinating its built-in `search`/`python`.
+    Distinct from an outage: the loop recovers by nudging with the real tool
+    names, so it must not be swallowed as a generic 4xx."""
+
+
+def _is_tool_validation_error(exc: BadRequestError) -> bool:
+    if getattr(exc, "code", None) == "tool_use_failed":
+        return True
+    text = str(exc)
+    return "not in request.tools" in text or "Tool call validation failed" in text
 
 
 @dataclass(frozen=True)
@@ -55,7 +69,12 @@ class OpenAICompatLLM:
         kwargs: dict = {"model": self.model, "messages": messages}
         if tools:
             kwargs["tools"] = tools
-        response = await self._client.chat.completions.create(**kwargs)
+        try:
+            response = await self._client.chat.completions.create(**kwargs)
+        except BadRequestError as exc:
+            if _is_tool_validation_error(exc):
+                raise InvalidToolCallError(str(exc)) from exc
+            raise
         message = response.choices[0].message
         calls = tuple(
             ToolCall(

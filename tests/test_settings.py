@@ -51,7 +51,10 @@ def test_custom_provider_in_config(tmp_path: Path):
 
 
 def test_voice_provider_settings_defaults_and_override(tmp_path: Path):
-    voice = load_settings(tmp_path).voice
+    # home= isolates the test from the developer's real ~/.pyrrhon/config.toml,
+    # which otherwise overrides these defaults (matches test_custom_provider).
+    nohome = tmp_path / "nohome"
+    voice = load_settings(tmp_path, home=nohome).voice
     assert voice.stt_provider == "groq"
     assert voice.tts_provider == "openai"
     (tmp_path / ".pyrrhon.toml").write_text(
@@ -59,7 +62,7 @@ def test_voice_provider_settings_defaults_and_override(tmp_path: Path):
         'tts_model = "sonic-2"\nstt_provider = "whisper-local"\n',
         encoding="utf-8",
     )
-    voice = load_settings(tmp_path).voice
+    voice = load_settings(tmp_path, home=nohome).voice
     assert voice.tts_provider == "cartesia"
     assert voice.tts_model == "sonic-2"
     assert voice.stt_provider == "whisper-local"

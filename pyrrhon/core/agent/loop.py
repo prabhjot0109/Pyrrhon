@@ -11,6 +11,7 @@ a retry costs a full LLM turnaround and breaks the voice latency budget.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -19,6 +20,7 @@ from pyrrhon.core.agent.escalate import ThinkDeeperTool
 from pyrrhon.core.agent.guards import DUPLICATE_NOTE, ToolGuard, assistant_tool_message
 from pyrrhon.core.agent.prompts import ESCALATION_NOTE
 from pyrrhon.core.context import compact_tool_results, maybe_summarize
+from pyrrhon.core.providers.llm import InvalidToolCallError
 from pyrrhon.core.events import (
     AskUser,
     Event,
@@ -30,12 +32,34 @@ from pyrrhon.core.grounding.citations import extract_citations
 from pyrrhon.core.grounding.gate import GroundingGate
 from pyrrhon.core.tools.base import Tool
 
+logger = logging.getLogger("pyrrhon.agent")
+
 PREVIEW_LEN = 200
 
 BUDGET_MESSAGE = (
     "I hit my tool budget for this question — ask me to continue "
     "and I'll keep digging."
 )
+
+# A provider error must degrade to an honest spoken line, never a silent turn
+# death (which is what a raw exception here becomes once the producer task
+# swallows it). Voice especially: silence reads as "it's broken."
+PROVIDER_ERROR_MESSAGE = (
+    "I couldn't get a reply from my model just now — it returned an error. "
+    "Try again, or check the provider and model in /settings."
+)
+TOOL_RETRY_EXHAUSTED_MESSAGE = (
+    "My model kept trying to use a tool I don't have. Try rephrasing the "
+    "question, or switch models in /settings."
+)
+
+
+def _invalid_tool_nudge(names: list[str]) -> str:
+    return (
+        "That tool call was rejected: you named a tool that does not exist. "
+        f"Only these tools are available: {', '.join(names)}. "
+        "Call one of those, using its exact name, or answer directly."
+    )
 
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
 
@@ -116,9 +140,29 @@ class Agent:
             )
         schemas = [tool.schema() for tool in self.tools.values()]
         guard = ToolGuard()
+        nudged_invalid_tool = False
 
         for _ in range(self.max_tool_rounds):
-            reply = await self.llm.chat(history, tools=schemas)
+            try:
+                reply = await self.llm.chat(history, tools=schemas)
+            except InvalidToolCallError:
+                # The model called a tool that isn't in our list (a gpt-oss
+                # built-in, typically). Nudge once with the real names and let
+                # it retry; if it happens again, degrade honestly.
+                if not nudged_invalid_tool:
+                    nudged_invalid_tool = True
+                    history.append(
+                        {"role": "user", "content": _invalid_tool_nudge(list(self.tools))}
+                    )
+                    continue
+                async for event in self._emit_final(history, TOOL_RETRY_EXHAUSTED_MESSAGE):
+                    yield event
+                return
+            except Exception as exc:  # provider/network error — never die silently
+                logger.warning("llm.chat failed mid-turn: %s: %s", type(exc).__name__, exc)
+                async for event in self._emit_final(history, PROVIDER_ERROR_MESSAGE):
+                    yield event
+                return
             if not reply.tool_calls:
                 async for event in self._emit_final(history, reply.text or "(no answer)"):
                     yield event
