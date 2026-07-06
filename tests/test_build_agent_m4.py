@@ -40,3 +40,16 @@ def test_build_agent_construction_does_no_index_io(monkeypatch, tmp_path):
     (repo / "a.py").write_text("def f():\n    pass\n", encoding="utf-8")
     build_agent(repo, llm=FakeLLM([]))
     assert not (repo / ".pyrrhon" / "cache.db").exists()
+
+
+def test_build_agent_gives_the_subagent_a_read_only_belt(tmp_path, monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    agent = build_agent(tmp_path, llm=FakeLLM([]), deep_llm=FakeLLM([]))
+    deep_tool = agent.tools["think_deeper"]
+    belt = set(deep_tool.tools)
+    assert {"read_file", "grep", "glob", "find_symbol", "find_references",
+            "list_dependencies", "repo_map", "git_log", "git_blame",
+            "git_show"} <= belt
+    assert "think_deeper" not in belt
+    assert "write_spec" not in belt
+    assert "web_search" not in belt

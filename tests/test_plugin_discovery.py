@@ -107,14 +107,29 @@ def test_merge_plugin_settings_rejects_invalid_configs(tmp_path: Path, caplog):
         name="p",
         version="1.0",
         contributes=PluginContributes(
-            providers={"nokey": {"base_url": "http://x/v1"}},  # api_key_env missing
+            # M8: a missing api_key_env is now VALID (keyless local provider),
+            # so an invalid provider needs a wrongly-typed field instead.
+            providers={"bad": {"base_url": ["not", "a", "string"]}},
             mcp_servers={"both": {"command": "x", "url": "http://y"}},  # not exactly one
         ),
     )
     plugin = LoadedPlugin(manifest=manifest, dir=tmp_path, tools=[], prompt_text="")
     with caplog.at_level(logging.WARNING, logger="pyrrhon.plugins"):
         merged = merge_plugin_settings(Settings(), [plugin])
-    assert "nokey" not in merged.providers
+    assert "bad" not in merged.providers
     assert "both" not in merged.mcp_servers
     assert "invalid provider" in caplog.text
     assert "invalid mcp server" in caplog.text
+
+
+def test_merge_plugin_settings_accepts_keyless_provider(tmp_path: Path):
+    manifest = PluginManifest(
+        name="p",
+        version="1.0",
+        contributes=PluginContributes(
+            providers={"localsrv": {"base_url": "http://x/v1"}},  # keyless: valid since M8
+        ),
+    )
+    plugin = LoadedPlugin(manifest=manifest, dir=tmp_path, tools=[], prompt_text="")
+    merged = merge_plugin_settings(Settings(), [plugin])
+    assert merged.providers["localsrv"].api_key_env == ""

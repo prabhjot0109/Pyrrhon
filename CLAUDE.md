@@ -55,9 +55,15 @@ plugin *code* runs only after one consent prompt per repo, recorded in
 `tests/fixtures/plugins/hello-reviewer/`; plan:
 `docs/superpowers/plans/2026-07-03-pyrrhon-m7-plugin-loader.md`.
 
-There is no lint config yet. Current state: M4 (deep reasoning: tree-sitter
-symbol index, git history tools, web search/fetch, think_deeper escalation) —
-see `docs/superpowers/plans/2026-07-03-pyrrhon-m4-deep-reasoning-tools.md`.
+There is no lint config yet. Current state: M8 (context engineering + deep
+subagent harness) — history compaction and tool-result eviction live inside
+`Agent.run_turn` (`pyrrhon/core/context.py`), per-turn `ToolGuard` budgets
+with a forced final answer (`pyrrhon/core/agent/guards.py`), an import graph
+and ranked repo map over the AST index (`list_dependencies`, `repo_map`),
+`think_deeper` running a bounded read-only subagent loop with narration, and
+an STT/TTS provider registry (`pyrrhon/voice/providers.py`) plus keyless
+local LLM providers (`ollama`, `lmstudio`). See
+`docs/superpowers/plans/2026-07-06-pyrrhon-m8-context-engineering-subagent-harness.md`.
 
 
 ## Design constraints (do not violate without discussion)
