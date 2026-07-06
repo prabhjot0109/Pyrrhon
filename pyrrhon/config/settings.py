@@ -50,6 +50,12 @@ BUILTIN_PROVIDERS: dict[str, ProviderConfig] = {
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
         api_key_env="GEMINI_API_KEY",
     ),
+    "deepseek": ProviderConfig(
+        base_url="https://api.deepseek.com/v1", api_key_env="DEEPSEEK_API_KEY"
+    ),
+    "huggingface": ProviderConfig(
+        base_url="https://router.huggingface.co/v1", api_key_env="HF_TOKEN"
+    ),
     "ollama": ProviderConfig(base_url="http://localhost:11434/v1", api_key_env=""),
     "lmstudio": ProviderConfig(base_url="http://localhost:1234/v1", api_key_env=""),
 }

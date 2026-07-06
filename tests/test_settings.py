@@ -76,6 +76,18 @@ def test_local_llm_providers_are_builtin_and_keyless():
     assert BUILTIN_PROVIDERS["cerebras"].api_key_env == "CEREBRAS_API_KEY"
 
 
+def test_deepseek_and_huggingface_are_builtin_providers():
+    settings = Settings()
+    deepseek = settings.provider_for(ModelSlot(provider="deepseek", model="deepseek-chat"))
+    assert deepseek.base_url == "https://api.deepseek.com/v1"
+    assert deepseek.api_key_env == "DEEPSEEK_API_KEY"
+    hf = settings.provider_for(
+        ModelSlot(provider="huggingface", model="meta-llama/Llama-3.3-70B-Instruct")
+    )
+    assert hf.base_url == "https://router.huggingface.co/v1"
+    assert hf.api_key_env == "HF_TOKEN"
+
+
 def test_context_settings_defaults_and_override(tmp_path: Path):
     assert load_settings(tmp_path).context.budget_tokens == 32000
     (tmp_path / ".pyrrhon.toml").write_text(
