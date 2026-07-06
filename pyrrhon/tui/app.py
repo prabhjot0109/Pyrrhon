@@ -17,7 +17,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal
 from textual.widgets import Input, RichLog
 
-from pyrrhon.commands import builtin, debug_cmd, mcp_cmd, mode_cmd, plugins_cmd, voice_cmd  # noqa: F401 — registers commands
+from pyrrhon.commands import builtin, debug_cmd, mcp_cmd, mode_cmd, plugins_cmd, settings_cmd, voice_cmd  # noqa: F401 — registers commands
 from pyrrhon.commands.registry import CommandContext, dispatch
 from pyrrhon.config.settings import load_settings
 from pyrrhon.core.agent.loop import Agent
@@ -119,8 +119,12 @@ class PyrrhonApp(App):
     def on_mount(self) -> None:
         self.refresh_status()
         self.query_one("#prompt", Input).focus()
-        self.query_one("#transcript", RichLog).write(
-            f"Pyrrhon — discussing {self.repo_root.name}. Type /help for commands."
+        from pyrrhon.branding import banner
+
+        transcript = self.query_one("#transcript", RichLog)
+        transcript.write(Text(banner(), style="bold cyan"))
+        transcript.write(
+            f"Discussing {self.repo_root.name}. Type /help for commands."
         )
         if self._start_voice:
             self.notify(self.voice.start())
@@ -211,6 +215,10 @@ def run_tui(repo: str, voice: bool = False) -> None:
     if not repo_root.is_dir():
         print(f"Not a directory: {repo_root}")
         raise SystemExit(1)
+
+    from pyrrhon.config.wizard import ensure_configured
+
+    ensure_configured()  # stored keys → env; first run offers the wizard
     # Imported here, not at module top: repl.py is the single agent factory
     # and importing it lazily keeps tui importable without the REPL's deps.
     from pyrrhon.repl import load_channel_plugins

@@ -50,26 +50,34 @@ BUILTIN_PROVIDERS: dict[str, ProviderConfig] = {
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
         api_key_env="GEMINI_API_KEY",
     ),
+    "deepseek": ProviderConfig(
+        base_url="https://api.deepseek.com/v1", api_key_env="DEEPSEEK_API_KEY"
+    ),
+    "huggingface": ProviderConfig(
+        base_url="https://router.huggingface.co/v1", api_key_env="HF_TOKEN"
+    ),
     "ollama": ProviderConfig(base_url="http://localhost:11434/v1", api_key_env=""),
     "lmstudio": ProviderConfig(base_url="http://localhost:1234/v1", api_key_env=""),
 }
 
 
 class VoiceSettings(BaseModel):
-    """M3/M8 voice-channel knobs (TOML section [voice]).
+    """M3/M8/M9 voice-channel knobs (TOML section [voice]).
 
-    stt_provider: groq | openai | deepgram | whisper-local
-    tts_provider: openai | cartesia | elevenlabs | deepgram | piper
-    tts_voice is provider-specific: an OpenAI voice name ("nova"), a
-    Cartesia/ElevenLabs voice id, a Deepgram voice model, or ignored (piper).
+    stt_provider: groq | openai | gemini | deepgram | whisper-local
+    tts_provider: openai | gemini | cartesia | elevenlabs | deepgram | piper
+    stt_model / tts_voice are provider-specific; when unset each provider
+    applies its own sensible default (see pyrrhon/voice/providers.py).
+    Cartesia and ElevenLabs have no meaningful default voice — they require
+    an explicit tts_voice (a voice id from your account).
     """
 
     stt_provider: str = "groq"
-    stt_model: str = "whisper-large-v3-turbo"
+    stt_model: str | None = None               # provider default when unset
     tts_provider: str = "openai"
     tts_model: str | None = None               # provider default when unset
-    tts_voice: str = "nova"
-    tts_url: str | None = None                 # local TTS server (piper)
+    tts_voice: str | None = None               # provider default when unset
+    tts_url: str | None = None                 # local TTS server (piper HTTP mode)
     chars_per_sec: float = 15.0                # played-text estimator rate
 
 

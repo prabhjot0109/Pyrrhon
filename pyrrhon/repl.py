@@ -9,7 +9,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.markdown import Markdown
 
-from pyrrhon.commands import builtin, debug_cmd, mcp_cmd, mode_cmd, plugins_cmd, voice_cmd  # noqa: F401 — registers commands
+from pyrrhon.commands import builtin, debug_cmd, mcp_cmd, mode_cmd, plugins_cmd, settings_cmd, voice_cmd  # noqa: F401 — registers commands
 from pyrrhon.commands.registry import CommandContext, dispatch
 from pyrrhon.config.settings import Settings, load_settings
 from pyrrhon.core.agent.loop import Agent
@@ -196,6 +196,10 @@ def run_repl(repo: str, voice: bool = False) -> None:
     if not repo_root.is_dir():
         console.print(f"[red]Not a directory: {repo_root}[/red]")
         raise SystemExit(1)
+
+    from pyrrhon.config.wizard import ensure_configured
+
+    ensure_configured()  # stored keys → env; first run offers the wizard
     if voice:
         # Voice is a TUI-channel feature; the plain REPL stays text-only.
         console.print(
@@ -231,9 +235,11 @@ async def _repl_main(
         agent = build_agent(
             repo_root, extra_tools=mcp_tools, settings=settings, plugins=plugins
         )
+        from pyrrhon.branding import banner
+
+        console.print(f"[bold cyan]{banner()}[/bold cyan]")
         console.print(
-            f"[bold]Pyrrhon[/bold] — discussing [cyan]{repo_root.name}[/cyan]. "
-            "Commands: /help, /quit"
+            f"Discussing [cyan]{repo_root.name}[/cyan]. Commands: /help, /quit"
         )
         if plugins:
             loaded = ", ".join(f"{p.manifest.name}@{p.manifest.version}" for p in plugins)
