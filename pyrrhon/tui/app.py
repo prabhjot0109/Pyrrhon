@@ -119,8 +119,12 @@ class PyrrhonApp(App):
     def on_mount(self) -> None:
         self.refresh_status()
         self.query_one("#prompt", Input).focus()
-        self.query_one("#transcript", RichLog).write(
-            f"Pyrrhon — discussing {self.repo_root.name}. Type /help for commands."
+        from pyrrhon.branding import banner
+
+        transcript = self.query_one("#transcript", RichLog)
+        transcript.write(Text(banner(), style="bold cyan"))
+        transcript.write(
+            f"Discussing {self.repo_root.name}. Type /help for commands."
         )
         if self._start_voice:
             self.notify(self.voice.start())

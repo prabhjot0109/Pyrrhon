@@ -235,9 +235,11 @@ async def _repl_main(
         agent = build_agent(
             repo_root, extra_tools=mcp_tools, settings=settings, plugins=plugins
         )
+        from pyrrhon.branding import banner
+
+        console.print(f"[bold cyan]{banner()}[/bold cyan]")
         console.print(
-            f"[bold]Pyrrhon[/bold] — discussing [cyan]{repo_root.name}[/cyan]. "
-            "Commands: /help, /quit"
+            f"Discussing [cyan]{repo_root.name}[/cyan]. Commands: /help, /quit"
         )
         if plugins:
             loaded = ", ".join(f"{p.manifest.name}@{p.manifest.version}" for p in plugins)
