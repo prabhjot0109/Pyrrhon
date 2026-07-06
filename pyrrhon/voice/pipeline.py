@@ -1,7 +1,7 @@
 """run_voice: the Pipecat pipeline over the headless core.
 
-local mic → Silero VAD → Groq Whisper STT → PyrrhonBridgeProcessor
-→ OpenAI TTS → PlaybackObserver → local speakers
+local mic → Silero VAD → STT ([voice] stt_provider) → PyrrhonBridgeProcessor
+→ TTS ([voice] tts_provider) → PlaybackObserver → local speakers
 
 Error policy (spec): voice failures — no mic, missing key, missing audio
 stack — degrade to text mode with a clear message via VoiceUnavailableError.
@@ -17,18 +17,14 @@ not a PipelineParams switch.
 from __future__ import annotations
 
 import contextlib
-import os
 from collections.abc import Callable
 
-from pyrrhon.config.settings import Settings
+from pyrrhon.config.settings import Settings, VoiceSettings
 from pyrrhon.core.events import Event
 from pyrrhon.core.session import Session
 from pyrrhon.voice.bridge import PlaybackObserver, PyrrhonBridgeProcessor
 from pyrrhon.voice.playback import PlaybackTracker
-
-
-class VoiceUnavailableError(RuntimeError):
-    """Voice could not start or died; the caller stays in text mode."""
+from pyrrhon.voice.providers import VoiceUnavailableError, create_stt, create_tts
 
 
 @contextlib.contextmanager
@@ -46,15 +42,6 @@ def speech_path(session: Session):
         session.agent.allow_retry = previous
 
 
-def _require_env(name: str, what: str) -> str:
-    value = os.environ.get(name, "")
-    if not value:
-        raise VoiceUnavailableError(
-            f"{what} needs {name} set — staying in text mode."
-        )
-    return value
-
-
 async def run_voice(
     session: Session,
     settings: Settings,
@@ -62,8 +49,12 @@ async def run_voice(
     on_event: Callable[[Event], None] | None = None,
 ) -> None:
     """Build and run the voice pipeline until cancelled (/voice off)."""
-    groq_key = _require_env("GROQ_API_KEY", "Groq Whisper STT")
-    openai_key = _require_env("OPENAI_API_KEY", "OpenAI TTS")
+    # Provider factories run first: key checks fail with an actionable
+    # message before any audio-stack import is attempted.
+    voice = getattr(settings, "voice", None) or VoiceSettings()
+    stt = create_stt(voice)
+    tts = create_tts(voice)
+    chars_per_sec = voice.chars_per_sec
 
     try:
         # Imported here, not at module top: the `local` extra (PyAudio) may
@@ -74,8 +65,6 @@ async def run_voice(
         from pipecat.pipeline.runner import PipelineRunner
         from pipecat.pipeline.task import PipelineTask
         from pipecat.processors.audio.vad_processor import VADProcessor
-        from pipecat.services.groq.stt import GroqSTTService
-        from pipecat.services.openai.tts import OpenAITTSService
         from pipecat.transports.local.audio import (
             LocalAudioTransport,
             LocalAudioTransportParams,
@@ -86,19 +75,12 @@ async def run_voice(
             'Run: uv add "pipecat-ai[local,silero,groq,openai]" — staying in text mode.'
         ) from exc
 
-    voice = getattr(settings, "voice", None)
-    stt_model = voice.stt_model if voice else "whisper-large-v3-turbo"
-    tts_voice = voice.tts_voice if voice else "nova"
-    chars_per_sec = voice.chars_per_sec if voice else 15.0
-
     transport = LocalAudioTransport(
         LocalAudioTransportParams(audio_in_enabled=True, audio_out_enabled=True)
     )
     vad = VADProcessor(
         vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2))
     )
-    stt = GroqSTTService(api_key=groq_key, model=stt_model)
-    tts = OpenAITTSService(api_key=openai_key, voice=tts_voice)
     tracker = PlaybackTracker(chars_per_sec=chars_per_sec)
     bridge = PyrrhonBridgeProcessor(session, on_event=on_event, tracker=tracker)
 

@@ -73,9 +73,36 @@ command = "docs-mcp"                    # stdio — or: url = "http://..." (HTTP
 ```
 
 Built-in providers: `groq`, `openai`, `openrouter`, `cerebras`, `gemini` —
-each just needs its `*_API_KEY` env var. Drop markdown "soul files" in
+each just needs its `*_API_KEY` env var (Cerebras, for example: set
+`CEREBRAS_API_KEY` and point a slot at `provider = "cerebras"`). Two keyless
+local providers ship too: `ollama` (`http://localhost:11434/v1`) and
+`lmstudio` (`http://localhost:1234/v1`). Drop markdown "soul files" in
 `~/.pyrrhon/` or `<repo>/.pyrrhon/` (scaffold with `/init`) to give Pyrrhon
 standing context about you or the repo.
+
+### Voice providers
+
+```toml
+[voice]
+stt_provider = "groq"          # groq | openai | deepgram | whisper-local (no key, on-device)
+tts_provider = "cartesia"      # openai (default) | cartesia | elevenlabs | deepgram | piper (local)
+tts_voice = "<voice-id>"       # OpenAI voice name, Cartesia/ElevenLabs voice id, or Deepgram Aura voice
+tts_model = "sonic-2"          # optional provider-specific model
+# tts_url = "http://localhost:5000"   # piper only
+```
+
+OpenAI TTS is the zero-setup default; for real-time conversation Cartesia or
+ElevenLabs are noticeably snappier (~100-300ms to first audio vs 400ms+).
+Local, keyless operation: `stt_provider = "whisper-local"`, `tts_provider =
+"piper"`, and a local LLM via `[fast] provider = "ollama"` (or `lmstudio`).
+
+### Context budget
+
+```toml
+[context]
+budget_tokens = 32000       # estimated tokens before old turns are summarized
+keep_last_messages = 8      # recent messages always kept verbatim
+```
 
 ## Architecture
 
