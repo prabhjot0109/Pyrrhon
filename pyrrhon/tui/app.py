@@ -211,6 +211,10 @@ def run_tui(repo: str, voice: bool = False) -> None:
     if not repo_root.is_dir():
         print(f"Not a directory: {repo_root}")
         raise SystemExit(1)
+
+    from pyrrhon.config.wizard import ensure_configured
+
+    ensure_configured()  # stored keys → env; first run offers the wizard
     # Imported here, not at module top: repl.py is the single agent factory
     # and importing it lazily keeps tui importable without the REPL's deps.
     from pyrrhon.repl import load_channel_plugins

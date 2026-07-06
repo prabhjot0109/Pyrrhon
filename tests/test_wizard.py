@@ -86,3 +86,39 @@ def test_needs_setup(tmp_path, monkeypatch):
     (tmp_path / ".pyrrhon").mkdir()
     (tmp_path / ".pyrrhon" / "config.toml").write_text("", encoding="utf-8")
     assert needs_setup(home=tmp_path) is False
+
+
+def test_ensure_configured_loads_credentials_and_skips_wizard_when_configured(
+    tmp_path, monkeypatch
+):
+    from pyrrhon.config.credentials import save_credentials
+    from pyrrhon.config.wizard import ensure_configured
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    (tmp_path / ".pyrrhon").mkdir()
+    (tmp_path / ".pyrrhon" / "config.toml").write_text("", encoding="utf-8")
+    save_credentials({"GEMINI_API_KEY": "gem"}, home=tmp_path)
+
+    ensure_configured(home=tmp_path, ask=lambda prompt: (_ for _ in ()).throw(
+        AssertionError("wizard offered despite existing config")))
+    import os
+    assert os.environ["GEMINI_API_KEY"] == "gem"
+
+
+def test_ensure_configured_offers_wizard_on_first_run(tmp_path, monkeypatch):
+    from pyrrhon.config import wizard as wizard_mod
+
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    ran = {}
+    monkeypatch.setattr(wizard_mod, "run_wizard", lambda home: ran.setdefault("home", home))
+    wizard_mod.ensure_configured(home=tmp_path, ask=lambda prompt: "y")
+    assert ran["home"] == tmp_path
+
+
+def test_ensure_configured_respects_a_no(tmp_path, monkeypatch):
+    from pyrrhon.config import wizard as wizard_mod
+
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.setattr(wizard_mod, "run_wizard",
+                        lambda home: (_ for _ in ()).throw(AssertionError("ran anyway")))
+    wizard_mod.ensure_configured(home=tmp_path, ask=lambda prompt: "n")

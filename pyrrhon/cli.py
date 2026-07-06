@@ -23,8 +23,18 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Start with the voice pipeline on (equivalent to /voice on)",
     )
+    parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="Run the provider/API-key setup wizard, then start",
+    )
     parser.add_argument("--version", action="version", version=f"pyrrhon {__version__}")
     args = parser.parse_args(argv)
+
+    if args.setup:
+        from pyrrhon.config.wizard import run_wizard
+
+        run_wizard()
 
     # Channels imported lazily so `--version` works without touching them.
     if args.text:

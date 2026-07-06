@@ -196,6 +196,10 @@ def run_repl(repo: str, voice: bool = False) -> None:
     if not repo_root.is_dir():
         console.print(f"[red]Not a directory: {repo_root}[/red]")
         raise SystemExit(1)
+
+    from pyrrhon.config.wizard import ensure_configured
+
+    ensure_configured()  # stored keys → env; first run offers the wizard
     if voice:
         # Voice is a TUI-channel feature; the plain REPL stays text-only.
         console.print(

@@ -40,3 +40,13 @@ def test_voice_flag_reaches_the_tui(monkeypatch):
     )
     main(["--voice", "some/repo"])
     assert launched == [("some/repo", True)]
+
+
+def test_setup_flag_runs_the_wizard_then_launches(monkeypatch):
+    calls = []
+    monkeypatch.setattr("pyrrhon.config.wizard.run_wizard", lambda: calls.append("wizard") or "ok")
+    monkeypatch.setattr("pyrrhon.tui.app.run_tui", lambda repo, voice=False: calls.append("tui"))
+    from pyrrhon.cli import main
+
+    main(["--setup"])
+    assert calls == ["wizard", "tui"]

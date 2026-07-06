@@ -167,3 +167,23 @@ def _write_config(home: Path, state: dict) -> None:
         f.write(b"# Managed by `pyrrhon --setup` (rerunning merges sections,"
                 b" comments are not preserved).\n")
         tomli_w.dump(existing, f)
+
+
+def ensure_configured(home: Path | None = None, ask=None) -> None:
+    """Channel startup hook: stored keys → env; offer the wizard on first run.
+
+    Runs before the event loop exists (plain input is fine — same stage as
+    the plugin-consent prompt). Declining is remembered only for this
+    process: next launch offers again until a config exists or a key is set.
+    """
+    from pyrrhon.config.credentials import load_credentials
+
+    load_credentials(home)
+    if not needs_setup(home):
+        return
+    answer = (ask or input)(
+        "No Pyrrhon configuration found. Run the setup wizard now? [Y/n] "
+    ).strip().lower()
+    if answer in ("", "y", "yes"):
+        run_wizard(home=home)
+        load_credentials(home)
