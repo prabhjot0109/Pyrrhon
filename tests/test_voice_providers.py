@@ -116,6 +116,23 @@ def test_deepgram_tts_defaults_to_aura_thalia(monkeypatch):
     assert captured["voice"] == "aura-2-thalia-en"
 
 
+def test_gemini_tts_requires_key_then_builds_with_defaults(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    with pytest.raises(VoiceUnavailableError) as exc:
+        create_tts(VoiceSettings(tts_provider="gemini"))
+    assert "GEMINI_API_KEY" in str(exc.value)
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    captured: dict = {}
+    _install_fake(monkeypatch, "pyrrhon.voice.gemini", "GeminiTTSService", captured)
+    create_tts(VoiceSettings(tts_provider="gemini"))
+    assert captured == {
+        "api_key": "k",
+        "voice": "Kore",
+        "model": "gemini-2.5-flash-preview-tts",
+    }
+
+
 def test_piper_runs_in_process_by_default(monkeypatch, tmp_path):
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
     captured: dict = {}

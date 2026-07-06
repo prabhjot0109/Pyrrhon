@@ -56,3 +56,25 @@ async def test_transcribe_sends_wav_and_returns_text(fake_genai):
     call = fake_genai.aio.models.generate_content.call_args
     assert call.kwargs["model"] == "gemini-2.5-flash"
     assert call.kwargs["contents"][0]["mime_type"] == "audio/wav"
+
+
+async def test_tts_requests_audio_with_the_configured_voice(fake_genai):
+    from pyrrhon.voice import gemini as gem
+
+    pcm = b"\x00\x01" * 480
+    part = types.SimpleNamespace(inline_data=types.SimpleNamespace(data=pcm))
+    response = types.SimpleNamespace(
+        candidates=[types.SimpleNamespace(
+            content=types.SimpleNamespace(parts=[part]))]
+    )
+    fake_genai.aio.models.generate_content = AsyncMock(return_value=response)
+
+    service = gem.GeminiTTSService.__new__(gem.GeminiTTSService)  # skip pipecat init
+    service._client = fake_genai
+    service._model = "gemini-2.5-flash-preview-tts"
+    service._voice = "Puck"
+
+    chunks = [c async for c in service._synthesize("hello")]
+    assert chunks == [pcm]
+    config = fake_genai.aio.models.generate_content.call_args.kwargs["config"]
+    assert config.kwargs["response_modalities"] == ["AUDIO"]

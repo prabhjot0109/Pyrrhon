@@ -1,14 +1,18 @@
 """STT/TTS provider registry: mirrors the LLM slot pattern for audio.
 
+STT: groq | openai | gemini | deepgram | whisper-local
+TTS: openai | gemini | cartesia | elevenlabs | deepgram | piper
+
 Key check happens BEFORE the pipecat import, and each provider's import is
 lazy — a missing optional extra degrades to text mode with an actionable
 message instead of crashing at import time (M3 error policy).
 
 Latency notes for the config-curious (Coval/CodeSOTA 2026 benchmarks):
 OpenAI TTS ~380ms+ to first audio (default only because it needs no new
-key); cartesia (~90-190ms) is the recommended real-time choice; elevenlabs
-Flash ~75-290ms; deepgram Aura-2 ~120-313ms; piper is local, free, ~35ms on
-CPU behind its HTTP server.
+key); gemini TTS is one full round-trip (~1s, no streaming); cartesia
+(~90-190ms) is the recommended real-time choice; elevenlabs Flash
+~75-290ms; deepgram Aura-2 ~120-313ms; piper is local, free, in-process
+(~35ms on CPU).
 """
 
 from __future__ import annotations
@@ -19,7 +23,7 @@ from pathlib import Path
 from pyrrhon.config.settings import VoiceSettings
 
 STT_PROVIDERS = ("groq", "openai", "gemini", "deepgram", "whisper-local")
-TTS_PROVIDERS = ("openai", "cartesia", "elevenlabs", "deepgram", "piper")
+TTS_PROVIDERS = ("openai", "gemini", "cartesia", "elevenlabs", "deepgram", "piper")
 
 
 class VoiceUnavailableError(RuntimeError):
@@ -104,6 +108,20 @@ def create_tts(voice: VoiceSettings):
         if voice.tts_model:
             kwargs["model"] = voice.tts_model
         return OpenAITTSService(**kwargs)
+    if provider == "gemini":
+        key = _key("GEMINI_API_KEY", "Gemini TTS")
+        try:
+            from pyrrhon.voice.gemini import GeminiTTSService
+        except ImportError as exc:
+            raise VoiceUnavailableError(
+                f"Voice dependency missing ({exc}). Run: uv add google-genai "
+                "— staying in text mode."
+            ) from exc
+        return GeminiTTSService(
+            api_key=key,
+            voice=voice.tts_voice or "Kore",
+            model=voice.tts_model or "gemini-2.5-flash-preview-tts",
+        )
     if provider == "cartesia":
         key = _key("CARTESIA_API_KEY", "Cartesia TTS")
         if not voice.tts_voice:
