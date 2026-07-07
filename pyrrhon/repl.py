@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
 from pathlib import Path
 
@@ -44,6 +45,29 @@ from pyrrhon.plugins import (
     record_trusted,
 )
 from pyrrhon.plugins.loader import log as plugin_log
+
+log = logging.getLogger("pyrrhon.repl")
+
+
+def warm_index_in_background(agent: Agent) -> asyncio.Task | None:
+    """Kick off the symbol index's cold build so the first index-using turn
+    doesn't pay for it (it overlaps startup / the user's first utterance).
+
+    Fire-and-forget: any failure is swallowed because the index rebuilds
+    lazily on first real use regardless. Returns the task so the caller can
+    hold a reference (keeping it from being garbage-collected mid-build)."""
+    tool = agent.tools.get("find_symbol")
+    index = getattr(tool, "index", None)
+    if index is None:
+        return None
+
+    async def _warm() -> None:
+        try:
+            await index.ensure_fresh()
+        except Exception:  # pragma: no cover - defensive; lazy build still works
+            log.debug("index warm-up failed; will build lazily", exc_info=True)
+
+    return asyncio.create_task(_warm())
 
 
 def build_agent(
@@ -235,6 +259,7 @@ async def _repl_main(
         agent = build_agent(
             repo_root, extra_tools=mcp_tools, settings=settings, plugins=plugins
         )
+        warm = warm_index_in_background(agent)  # noqa: F841 — hold ref; builds during startup
         from pyrrhon.branding import banner
 
         console.print(f"[bold cyan]{banner()}[/bold cyan]")

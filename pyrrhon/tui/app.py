@@ -139,6 +139,11 @@ class PyrrhonApp(App):
         transcript.write(
             f"Discussing {self.repo_root.name}. Type /help for commands."
         )
+        # Build the symbol index now so the first index-using turn doesn't wait
+        # on the cold walk; held on self so the task isn't GC'd mid-build.
+        from pyrrhon.repl import warm_index_in_background
+
+        self._warm_task = warm_index_in_background(self.agent)
         if self._start_voice:
             self.notify(self.voice.start())
 

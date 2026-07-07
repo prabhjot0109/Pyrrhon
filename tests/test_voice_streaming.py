@@ -2,6 +2,7 @@
 spoken as it completes (low time-to-first-token), tools still run, and grounding
 holds per sentence. Text mode / non-streaming providers are untouched."""
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -101,6 +102,68 @@ async def test_streamed_sentences_pass_through_the_grounding_gate():
     speech = [e.text for e in events if isinstance(e, SpeechChunk)]
     # Every spoken sentence went through the gate before reaching TTS.
     assert speech == ["[gated] Alpha here.", "[gated] Beta there."]
+
+
+async def test_streaming_tool_narration_leaves_clean_history():
+    # Round 1 streams narration AND calls a tool; the narration slot must be
+    # dropped so history is [system, user, assistant(tool_calls), tool,
+    # assistant(final)] — no orphan assistant message.
+    llm = StreamingFakeLLM([
+        (["Let me look. "],
+         LLMReply(text="Let me look.",
+                  tool_calls=(ToolCall(id="c1", name="echo", arguments={"text": "x"}),))),
+        (["Here it is."], LLMReply(text="Here it is.")),
+    ])
+    agent = make_agent(llm, tools=[EchoTool()])
+    history: list[dict] = []
+    events = [e async for e in agent.run_turn(history, "q")]
+    roles = [(m["role"], "tool_calls" in m) for m in history]
+    assert roles == [
+        ("system", False),
+        ("user", False),
+        ("assistant", True),   # the tool_calls message
+        ("tool", False),
+        ("assistant", False),  # the final streamed answer
+    ]
+    assert history[-1]["content"] == "Here it is."
+
+
+class BlockingStreamLLM:
+    """Streams one sentence, then blocks forever — to simulate a barge-in
+    mid-answer (the turn task is cancelled while streaming)."""
+
+    def __init__(self):
+        self.spoke = asyncio.Event()
+
+    async def stream(self, messages, tools=None):
+        yield ("text", "First part is here. ")
+        self.spoke.set()
+        await asyncio.Event().wait()  # hang until cancelled
+        yield ("reply", LLMReply(text="never"))
+
+
+async def test_barge_in_mid_stream_leaves_partial_answer_in_history():
+    llm = BlockingStreamLLM()
+    agent = make_agent(llm)
+    history: list[dict] = []
+
+    async def drive():
+        async for _ in agent.run_turn(history, "q"):
+            pass
+
+    task = asyncio.create_task(drive())
+    await asyncio.wait_for(llm.spoke.wait(), timeout=2)
+    await asyncio.sleep(0)  # let the sentence flush into history
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    # The partial spoken answer is recorded as a plain assistant message, so the
+    # voice channel's truncate_last_assistant can rewrite it to what was heard.
+    assert history[-1]["role"] == "assistant"
+    assert history[-1]["content"] == "First part is here."
 
 
 async def test_non_streaming_provider_in_voice_uses_whole_reply():

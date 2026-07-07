@@ -194,12 +194,13 @@ class Agent:
 
         for _ in range(self.max_tool_rounds):
             spoken_text: str | None = None
+            stream_slot: dict | None = None
             try:
                 if streaming:
                     sink: list = []
                     async for event in self._stream_round(history, schemas, sink):
                         yield event
-                    reply, spoken_text = sink[0]
+                    reply, spoken_text, stream_slot = sink[0]
                 else:
                     reply = await self.llm.chat(history, tools=schemas)
             except InvalidToolCallError:
@@ -246,11 +247,13 @@ class Agent:
                 return
             if not reply.tool_calls:
                 if streaming:
-                    # Sentences were gated + spoken (and their citations
-                    # emitted) inside _stream_round. Just record the answer and,
-                    # in design mode, surface the Socratic question.
+                    # Sentences were gated + spoken (and citations emitted, and
+                    # the answer written into stream_slot in history) inside
+                    # _stream_round. Just backfill an empty slot and, in design
+                    # mode, surface the Socratic question.
                     answer = spoken_text or reply.text or "(no answer)"
-                    history.append({"role": "assistant", "content": answer})
+                    if stream_slot is None:
+                        history.append({"role": "assistant", "content": answer})
                     if self.mode == "design":
                         question = extract_question(answer)
                         if question is not None:
@@ -260,10 +263,15 @@ class Agent:
                     yield event
                 return
 
-            if reply.text and not streaming:
+            if streaming:
+                # The streamed text was narration, not a standalone answer —
+                # drop its live slot; assistant_tool_message(reply) carries the
+                # same text alongside the tool calls.
+                if stream_slot is not None and history and history[-1] is stream_slot:
+                    history.pop()
+            elif reply.text:
                 # Narration spoken while tools run. It passes the gate too:
                 # a fabricated citation must never be spoken, even mid-turn.
-                # (Streaming already spoke the gated narration in _stream_round.)
                 narration = reply.text
                 if self.grounding_gate is not None:
                     narration = (await self.grounding_gate.check(narration)).speech_text
@@ -365,16 +373,23 @@ class Agent:
         return gated.speech_text, list(gated.citations)
 
     async def _stream_round(
-        self, messages: list[dict], schemas: list, sink: list
+        self, history: list[dict], schemas: list, sink: list
     ) -> AsyncIterator[Event]:
         """Stream one LLM round, emitting gated SpeechChunk/Citation events as
         each sentence completes (low time-to-first-token). Appends
-        (reply, spoken_text) to `sink` so the caller can drive the tool loop and
-        record the assistant message. Voice-only; the retry path is off here
-        (allow_retry is False under speech_path), so streamed speech is final."""
+        (reply, spoken_text, slot) to `sink` so the caller drives the tool loop.
+
+        As sentences are spoken they are also written into a live assistant
+        message in `history` (`slot`), so a mid-answer barge-in can truncate
+        history to exactly what was heard — parity with the non-streaming path.
+        If the round turns out to be a tool call, the caller drops that slot
+        (the text was narration, captured in the tool_calls message instead).
+        Voice-only; allow_retry is False under speech_path, so streamed speech
+        is final (no self-correction round)."""
         buffer = ""
         spoken: list[str] = []
-        async for kind, payload in self.llm.stream(messages, tools=schemas):
+        slot: dict | None = None
+        async for kind, payload in self.llm.stream(history, tools=schemas):
             if kind == "text":
                 buffer += payload
                 sentences, buffer = _pop_sentences(buffer)
@@ -384,11 +399,15 @@ class Agent:
                 speech, citations = await self._gate_sentence(sentence)
                 if speech.strip():
                     spoken.append(speech)
+                    if slot is None:
+                        slot = {"role": "assistant", "content": ""}
+                        history.append(slot)
+                    slot["content"] = " ".join(spoken)
                     yield SpeechChunk(text=speech)
                 for citation in citations:
                     yield citation
             if kind == "reply":
-                sink.append((payload, " ".join(spoken).strip()))
+                sink.append((payload, " ".join(spoken).strip(), slot))
                 return
 
     async def _run_tool(self, name: str, args: dict) -> str:

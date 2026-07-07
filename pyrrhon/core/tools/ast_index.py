@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sqlite3
+import threading
 import time
 from pathlib import Path
 
@@ -138,6 +139,10 @@ class SymbolIndex:
         self.db_path = self.root / ".pyrrhon" / "cache.db"
         self._lock = asyncio.Lock()  # serializes concurrent ensure_fresh calls
         self._last_fresh_at: float | None = None  # monotonic; None = never walked
+        self._db: sqlite3.Connection | None = None
+        # Every DB touch runs in a to_thread worker; serialize the one shared
+        # connection across those threads with a plain Lock.
+        self._db_lock = threading.Lock()
 
     async def ensure_fresh(self, force: bool = False) -> None:
         async with self._lock:
@@ -168,11 +173,17 @@ class SymbolIndex:
 
     # -- everything below runs in a worker thread ---------------------------
 
-    def _connect(self) -> sqlite3.Connection:
-        self.db_path.parent.mkdir(exist_ok=True)
-        conn = sqlite3.connect(self.db_path)
-        conn.executescript(_SCHEMA)
-        return conn
+    def _db_conn(self) -> sqlite3.Connection:
+        """The one persistent connection, shared across to_thread workers and
+        serialized by _db_lock. Opened lazily; the schema runs once. Replaces the
+        old connect()+executescript() that ran on every single query."""
+        if self._db is None:
+            self.db_path.parent.mkdir(exist_ok=True)
+            # check_same_thread=False: to_thread runs us on pool threads. Safe
+            # because every use below is wrapped in `with self._db_lock`.
+            self._db = sqlite3.connect(self.db_path, check_same_thread=False)
+            self._db.executescript(_SCHEMA)
+        return self._db
 
     def _iter_files_with_mtime(self):
         """Yield (path, mtime) for every repo .py file, pruning SKIP_DIRS.
@@ -199,8 +210,8 @@ class SymbolIndex:
                         yield Path(entry.path), entry.stat().st_mtime
 
     def _sync_ensure_fresh(self) -> None:
-        conn = self._connect()
-        try:
+        with self._db_lock:
+            conn = self._db_conn()
             known: dict[str, float] = dict(
                 conn.execute("SELECT path, mtime FROM files")
             )
@@ -218,36 +229,39 @@ class SymbolIndex:
             for rel in set(known) - seen:  # files deleted since last index
                 self._forget(conn, rel)
             conn.commit()
-        finally:
-            conn.close()
 
     def _reparse(self, conn: sqlite3.Connection, parser, path: Path, rel: str, mtime: float) -> None:
         tree = parser.parse(path.read_bytes())
         conn.execute("DELETE FROM symbols WHERE file = ?", (rel,))
         conn.execute("DELETE FROM refs WHERE file = ?", (rel,))
-        for capture_name, nodes in QueryCursor(_DEF_QUERY).captures(tree.root_node).items():
-            kind = capture_name.removeprefix("def.")  # "function" | "class"
-            for node in nodes:
-                conn.execute(
-                    "INSERT INTO symbols (name, kind, file, line) VALUES (?, ?, ?, ?)",
-                    (node.text.decode("utf-8"), kind, rel, node.start_point.row + 1),
-                )
-        for nodes in QueryCursor(_REF_QUERY).captures(tree.root_node).values():
-            for node in nodes:
-                conn.execute(
-                    "INSERT INTO refs (name, file, line) VALUES (?, ?, ?)",
-                    (node.text.decode("utf-8"), rel, node.start_point.row + 1),
-                )
         conn.execute("DELETE FROM imports WHERE file = ?", (rel,))
+        symbols = [
+            (node.text.decode("utf-8"), capture_name.removeprefix("def."), rel,
+             node.start_point.row + 1)
+            for capture_name, nodes in QueryCursor(_DEF_QUERY).captures(tree.root_node).items()
+            for node in nodes
+        ]
+        if symbols:  # one executemany beats N executes on a cold build
+            conn.executemany(
+                "INSERT INTO symbols (name, kind, file, line) VALUES (?, ?, ?, ?)",
+                symbols,
+            )
+        refs = [
+            (node.text.decode("utf-8"), rel, node.start_point.row + 1)
+            for nodes in QueryCursor(_REF_QUERY).captures(tree.root_node).values()
+            for node in nodes
+        ]
+        if refs:
+            conn.executemany("INSERT INTO refs (name, file, line) VALUES (?, ?, ?)", refs)
         package = _package_of(rel)
-        for nodes in QueryCursor(_IMPORT_QUERY).captures(tree.root_node).values():
-            for node in nodes:
-                stmt = node.text.decode("utf-8")
-                for module in _modules_from_import(stmt, package):
-                    conn.execute(
-                        "INSERT INTO imports (file, module) VALUES (?, ?)",
-                        (rel, module),
-                    )
+        imports = [
+            (rel, module)
+            for nodes in QueryCursor(_IMPORT_QUERY).captures(tree.root_node).values()
+            for node in nodes
+            for module in _modules_from_import(node.text.decode("utf-8"), package)
+        ]
+        if imports:
+            conn.executemany("INSERT INTO imports (file, module) VALUES (?, ?)", imports)
         conn.execute("INSERT OR REPLACE INTO files (path, mtime) VALUES (?, ?)", (rel, mtime))
 
     def _forget(self, conn: sqlite3.Connection, rel: str) -> None:
@@ -257,49 +271,37 @@ class SymbolIndex:
         conn.execute("DELETE FROM files WHERE path = ?", (rel,))
 
     def _sync_find_symbol(self, name: str) -> list[tuple[str, int, str]]:
-        conn = self._connect()
-        try:
-            rows = conn.execute(
+        with self._db_lock:
+            rows = self._db_conn().execute(
                 "SELECT file, line, kind FROM symbols WHERE name = ? ORDER BY file, line",
                 (name,),
             ).fetchall()
-        finally:
-            conn.close()
         return [(file, line, kind) for file, line, kind in rows]
 
     def _sync_find_references(self, name: str) -> list[tuple[str, int]]:
-        conn = self._connect()
-        try:
-            rows = conn.execute(
+        with self._db_lock:
+            rows = self._db_conn().execute(
                 "SELECT file, line FROM refs WHERE name = ? ORDER BY file, line",
                 (name,),
             ).fetchall()
-        finally:
-            conn.close()
         return [(file, line) for file, line in rows]
 
     def _sync_list_imports(self, rel_file: str) -> list[str]:
-        conn = self._connect()
-        try:
-            rows = conn.execute(
+        with self._db_lock:
+            rows = self._db_conn().execute(
                 "SELECT DISTINCT module FROM imports WHERE file = ? ORDER BY module",
                 (rel_file,),
             ).fetchall()
-        finally:
-            conn.close()
         return [module for (module,) in rows]
 
     def _sync_find_importers(self, rel_file: str) -> list[str]:
         module = _module_name(rel_file)
-        conn = self._connect()
-        try:
-            rows = conn.execute(
+        with self._db_lock:
+            rows = self._db_conn().execute(
                 "SELECT DISTINCT file FROM imports WHERE module = ? "
                 "AND file != ? ORDER BY file",
                 (module, rel_file),
             ).fetchall()
-        finally:
-            conn.close()
         return [file for (file,) in rows]
 
     def _sync_build_repo_map(self, max_chars: int) -> str:
@@ -307,9 +309,8 @@ class SymbolIndex:
         repo references their symbols; top symbols listed per file. Pure
         counting over the refs table — no graph traversal, so import cycles
         cannot recurse."""
-        conn = self._connect()
-        try:
-            rows = conn.execute(
+        with self._db_lock:
+            rows = self._db_conn().execute(
                 """
                 SELECT s.file, s.name, s.kind, s.line,
                        (SELECT COUNT(*) FROM refs r
@@ -318,8 +319,6 @@ class SymbolIndex:
                 ORDER BY s.file, uses DESC, s.line
                 """
             ).fetchall()
-        finally:
-            conn.close()
         by_file: dict[str, list[tuple[str, str, int, int]]] = {}
         for file, name, kind, line, uses in rows:
             by_file.setdefault(file, []).append((name, kind, line, uses))

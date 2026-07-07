@@ -8,6 +8,7 @@ loop — the sync body is offloaded via asyncio.to_thread(), because in M3 a
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 from pathlib import Path
 
@@ -30,11 +31,27 @@ def _resolve_inside(root: Path, rel: str) -> Path | None:
 
 
 def _iter_files(root: Path):
-    for path in sorted(root.rglob("*")):
-        if any(part in SKIP_DIRS for part in path.parts):
-            continue
-        if path.is_file():
-            yield path
+    """Yield repo files in sorted order, pruning SKIP_DIRS at the directory
+    level with os.scandir so huge ignored trees (.venv, node_modules) are never
+    descended into. Same result set as the old sorted(rglob('*')) filter, but
+    the sort is now over the pruned set — not every file in the tree — which is
+    the grep-latency win on large repos. Order stays deterministic (stable
+    truncation at MAX_GREP_MATCHES)."""
+    files: list[Path] = []
+    stack = [str(root)]
+    while stack:
+        try:
+            scan = os.scandir(stack.pop())
+        except OSError:
+            continue  # unreadable dir: skip, don't abort the whole walk
+        with scan:
+            for entry in scan:
+                if entry.is_dir(follow_symlinks=False):
+                    if entry.name not in SKIP_DIRS:
+                        stack.append(entry.path)
+                elif entry.is_file(follow_symlinks=False):
+                    files.append(Path(entry.path))
+    yield from sorted(files)
 
 
 class ReadFileTool(Tool):
