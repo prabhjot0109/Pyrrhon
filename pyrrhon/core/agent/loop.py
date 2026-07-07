@@ -18,7 +18,7 @@ from pathlib import Path
 
 from pyrrhon.core.agent.escalate import ThinkDeeperTool
 from pyrrhon.core.agent.guards import DUPLICATE_NOTE, ToolGuard, assistant_tool_message
-from pyrrhon.core.agent.prompts import ESCALATION_NOTE
+from pyrrhon.core.agent.prompts import ESCALATION_NOTE, TEXT_STYLE, VOICE_STYLE
 from pyrrhon.core.context import compact_tool_results, maybe_summarize
 from pyrrhon.core.providers.llm import InvalidToolCallError
 from pyrrhon.core.events import (
@@ -102,6 +102,7 @@ class Agent:
         max_tool_rounds: int = 8,
         grounding_gate: GroundingGate | None = None,
         allow_retry: bool = True,
+        voice_active: bool = False,
         deep_llm=None,
         deep_tools: list[Tool] | None = None,
         mode: str = "understand",
@@ -115,6 +116,10 @@ class Agent:
         self.max_tool_rounds = max_tool_rounds
         self.grounding_gate = grounding_gate
         self.allow_retry = allow_retry
+        # Mutable, like allow_retry: the voice pipeline's speech_path() flips
+        # this on /voice on and restores it on /voice off. It selects the
+        # spoken vs. written delivery style appended to the prompt each turn.
+        self.voice_active = voice_active
         # Mutable: Session.set_mode reassigns it on /mode switches.
         self.mode = mode
         self.context_budget_tokens = context_budget_tokens
@@ -127,8 +132,20 @@ class Agent:
     async def run_turn(
         self, history: list[dict], user_text: str
     ) -> AsyncIterator[Event]:
+        # The base prompt is channel-agnostic; the delivery style (spoken vs.
+        # written) is chosen per turn from the current voice_active flag and
+        # refreshed on the leading system message. Refreshing (not just
+        # injecting on empty history) lets a live /voice on|off toggle change
+        # the style mid-session. maybe_summarize always keeps history[0], so it
+        # stays the base system message we can safely rewrite here.
+        style = VOICE_STYLE if self.voice_active else TEXT_STYLE
+        system_content = f"{self.system_prompt}\n{style}"
         if not history:
-            history.append({"role": "system", "content": self.system_prompt})
+            history.append({"role": "system", "content": system_content})
+        elif history[0].get("role") == "system":
+            history[0]["content"] = system_content
+        else:
+            history.insert(0, {"role": "system", "content": system_content})
         history.append({"role": "user", "content": user_text})
         compact_tool_results(history)
         if self.context_budget_tokens:

@@ -29,17 +29,22 @@ from pyrrhon.voice.providers import VoiceUnavailableError, create_stt, create_tt
 
 @contextlib.contextmanager
 def speech_path(session: Session):
-    """Split-path grounding policy (spec): while voice drives the session,
-    the agent must never take the grounding retry loop — a retry costs a
-    full LLM turnaround and breaks the latency budget. The grounding *gate*
+    """Split-path grounding + delivery policy (spec): while voice drives the
+    session, the agent must never take the grounding retry loop — a retry costs
+    a full LLM turnaround and breaks the latency budget. The grounding *gate*
     still runs; unverifiable file:line claims are stripped from speech and
-    replaced with an honest 'I couldn't verify that.'"""
-    previous = session.agent.allow_retry
+    replaced with an honest 'I couldn't verify that.' We also mark the agent
+    voice-active so run_turn appends the spoken (VOICE_STYLE) delivery instead
+    of the written one; both flip back on /voice off."""
+    previous_retry = session.agent.allow_retry
+    previous_voice = session.agent.voice_active
     session.agent.allow_retry = False
+    session.agent.voice_active = True
     try:
         yield
     finally:
-        session.agent.allow_retry = previous
+        session.agent.allow_retry = previous_retry
+        session.agent.voice_active = previous_voice
 
 
 async def run_voice(
