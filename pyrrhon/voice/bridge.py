@@ -23,6 +23,7 @@ TruncateSpeech to the screen channel.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import re
 from collections.abc import Callable
 
@@ -58,6 +59,18 @@ from pyrrhon.core.events import (
 from pyrrhon.core.session import Session
 from pyrrhon.voice.playback import PlaybackTracker
 
+# If the agent produces no speech within this window (a slow first LLM reply, a
+# long tool run before any narration), speak a short filler so the user never
+# hears dead air — the Azure Voice Live / Amazon Lex "interim response" pattern.
+# Complements the speech-first prompt: that covers mid-turn tool narration; this
+# covers the initial gap nothing else fills.
+FILLER_DELAY_SEC = 1.6
+FILLERS = (
+    "Let me take a look…",
+    "One sec, digging into that…",
+    "Looking through the code now…",
+)
+
 
 def humanize_voice_error(text: str) -> str:
     """Turn a raw pipecat/provider ErrorFrame string into one actionable line.
@@ -90,6 +103,8 @@ class PyrrhonBridgeProcessor(FrameProcessor):
         self.tracker = tracker or PlaybackTracker()
         self._turn_task: asyncio.Task | None = None
         self._bot_speaking = False
+        self._spoke_this_turn = False
+        self._filler_idx = 0
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -152,16 +167,45 @@ class PyrrhonBridgeProcessor(FrameProcessor):
 
     async def _run_turn(self, text: str) -> None:
         await self.push_frame(LLMFullResponseStartFrame())
-        async for event in self._session.run_turn(text):
-            if isinstance(event, SpeechChunk):
-                # Speakable prose → TTS *and* the screen, so the transcript
-                # shows what Pyrrhon is saying, not just plays it.
-                self.tracker.speech_queued(event.text)
-                self._on_event(event)
-                await self.push_frame(TextFrame(event.text))
-            else:
-                self._on_event(event)
+        self._spoke_this_turn = False
+        filler = asyncio.create_task(self._filler_watchdog())
+        try:
+            async for event in self._session.run_turn(text):
+                if isinstance(event, SpeechChunk):
+                    # First real speech cancels the pending filler.
+                    if not self._spoke_this_turn:
+                        self._spoke_this_turn = True
+                        filler.cancel()
+                    # Speakable prose → TTS *and* the screen, so the transcript
+                    # shows what Pyrrhon is saying, not just plays it.
+                    self.tracker.speech_queued(event.text)
+                    self._on_event(event)
+                    await self.push_frame(TextFrame(event.text))
+                else:
+                    self._on_event(event)
+        finally:
+            filler.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await filler
         await self.push_frame(LLMFullResponseEndFrame())
+
+    async def _filler_watchdog(self) -> None:
+        """Speak one bridging line if the agent is still silent after the delay.
+
+        Ephemeral: the filler is NOT registered with the PlaybackTracker, so a
+        barge-in's truncate_last_assistant never folds it into the grounded
+        assistant message in history — it is throwaway audio, not an answer.
+        """
+        try:
+            await asyncio.sleep(FILLER_DELAY_SEC)
+        except asyncio.CancelledError:
+            return
+        if self._spoke_this_turn:
+            return
+        text = FILLERS[self._filler_idx % len(FILLERS)]
+        self._filler_idx += 1
+        self._on_event(SpeechChunk(text=text))
+        await self.push_frame(TextFrame(text))
 
     async def _on_interruption(self) -> None:
         if not self._interruptible():

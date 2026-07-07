@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sqlite3
+import time
 from pathlib import Path
 
 from tree_sitter import Parser, Query, QueryCursor
@@ -121,6 +122,14 @@ def _resolve_relative(module: str, package: str) -> str:
     return remainder or base
 
 
+# Within one model turn the index tools (repo_map, find_symbol,
+# list_dependencies) fire back-to-back, and each ensure_fresh() re-walks the
+# whole tree stat'ing every .py file. Collapsing calls inside this window into
+# one walk is the biggest per-turn latency lever on large repos; a couple of
+# seconds of staleness is invisible in a voice conversation (turns are slower).
+INDEX_FRESH_TTL_SEC = 2.0
+
+
 class SymbolIndex:
     """Lazy per-repo symbol index. __init__ does no I/O — first use builds it."""
 
@@ -128,10 +137,19 @@ class SymbolIndex:
         self.root = root.resolve()
         self.db_path = self.root / ".pyrrhon" / "cache.db"
         self._lock = asyncio.Lock()  # serializes concurrent ensure_fresh calls
+        self._last_fresh_at: float | None = None  # monotonic; None = never walked
 
-    async def ensure_fresh(self) -> None:
+    async def ensure_fresh(self, force: bool = False) -> None:
         async with self._lock:
+            now = time.monotonic()
+            if (
+                not force
+                and self._last_fresh_at is not None
+                and now - self._last_fresh_at < INDEX_FRESH_TTL_SEC
+            ):
+                return  # walked moments ago (same turn) — skip the re-scan
             await asyncio.to_thread(self._sync_ensure_fresh)
+            self._last_fresh_at = time.monotonic()
 
     async def find_symbol(self, name: str) -> list[tuple[str, int, str]]:
         return await asyncio.to_thread(self._sync_find_symbol, name)

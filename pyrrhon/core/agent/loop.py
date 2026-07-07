@@ -19,8 +19,15 @@ from pathlib import Path
 from pyrrhon.core.agent.escalate import ThinkDeeperTool
 from pyrrhon.core.agent.guards import DUPLICATE_NOTE, ToolGuard, assistant_tool_message
 from pyrrhon.core.agent.prompts import ESCALATION_NOTE, TEXT_STYLE, VOICE_STYLE
-from pyrrhon.core.context import compact_tool_results, maybe_summarize
-from pyrrhon.core.providers.llm import InvalidToolCallError
+from pyrrhon.core.context import (
+    compact_tool_results,
+    hard_compact_tool_results,
+    maybe_summarize,
+)
+from pyrrhon.core.providers.llm import (
+    ContextLengthExceededError,
+    InvalidToolCallError,
+)
 from pyrrhon.core.events import (
     AskUser,
     Event,
@@ -52,6 +59,14 @@ TOOL_RETRY_EXHAUSTED_MESSAGE = (
     "My model kept trying to use a tool I don't have. Try rephrasing the "
     "question, or switch models in /settings."
 )
+CONTEXT_FULL_MESSAGE = (
+    "This thread got too big for my model's context, even after trimming. "
+    "Start a fresh question, or switch to a larger-context model in /settings."
+)
+
+# How many times one turn may recover from a context-window overflow by
+# compacting and retrying before it gives up honestly.
+MAX_CONTEXT_RECOVERIES = 2
 
 
 def _invalid_tool_nudge(names: list[str]) -> str:
@@ -62,6 +77,19 @@ def _invalid_tool_nudge(names: list[str]) -> str:
     )
 
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
+
+
+def _pop_sentences(buffer: str) -> tuple[list[str], str]:
+    """Split completed sentences off the front of a streaming buffer.
+
+    Returns (complete_sentences, remainder). A sentence is "complete" once a
+    .!? is followed by whitespace, so the trailing fragment (still being
+    generated) stays in the buffer until its terminator streams in.
+    """
+    parts = _SENTENCE_BOUNDARY.split(buffer)
+    if len(parts) == 1:
+        return [], buffer
+    return parts[:-1], parts[-1]
 
 
 def extract_question(text: str) -> str | None:
@@ -158,10 +186,22 @@ class Agent:
         schemas = [tool.schema() for tool in self.tools.values()]
         guard = ToolGuard()
         nudged_invalid_tool = False
+        context_recoveries = 0
+        # Stream gated sentences to speech (low time-to-first-token) only when
+        # voice drives the turn and the provider supports streaming; text
+        # channels and test doubles keep the whole-reply path unchanged.
+        streaming = self.voice_active and hasattr(self.llm, "stream")
 
         for _ in range(self.max_tool_rounds):
+            spoken_text: str | None = None
             try:
-                reply = await self.llm.chat(history, tools=schemas)
+                if streaming:
+                    sink: list = []
+                    async for event in self._stream_round(history, schemas, sink):
+                        yield event
+                    reply, spoken_text = sink[0]
+                else:
+                    reply = await self.llm.chat(history, tools=schemas)
             except InvalidToolCallError:
                 # The model called a tool that isn't in our list (a gpt-oss
                 # built-in, typically). Nudge once with the real names and let
@@ -175,19 +215,55 @@ class Agent:
                 async for event in self._emit_final(history, TOOL_RETRY_EXHAUSTED_MESSAGE):
                     yield event
                 return
+            except ContextLengthExceededError:
+                # The prompt outgrew the model's window mid-turn. Reclaim room
+                # (elide bulky tool results + summarize old turns) and retry the
+                # same round instead of stranding the turn. Codex's pattern.
+                if context_recoveries < MAX_CONTEXT_RECOVERIES:
+                    context_recoveries += 1
+                    elided = hard_compact_tool_results(history)
+                    summarized = await maybe_summarize(
+                        history,
+                        self.llm,
+                        # Force a summarize pass even if the estimate is under
+                        # budget — the provider just told us we're over.
+                        budget_tokens=1,
+                        keep_last=self.context_keep_last,
+                    )
+                    logger.warning(
+                        "context overflow: recovered (elided=%d, summarized=%s, "
+                        "attempt=%d)", elided, summarized, context_recoveries
+                    )
+                    if elided or summarized:
+                        continue
+                async for event in self._emit_final(history, CONTEXT_FULL_MESSAGE):
+                    yield event
+                return
             except Exception as exc:  # provider/network error — never die silently
                 logger.warning("llm.chat failed mid-turn: %s: %s", type(exc).__name__, exc)
                 async for event in self._emit_final(history, PROVIDER_ERROR_MESSAGE):
                     yield event
                 return
             if not reply.tool_calls:
+                if streaming:
+                    # Sentences were gated + spoken (and their citations
+                    # emitted) inside _stream_round. Just record the answer and,
+                    # in design mode, surface the Socratic question.
+                    answer = spoken_text or reply.text or "(no answer)"
+                    history.append({"role": "assistant", "content": answer})
+                    if self.mode == "design":
+                        question = extract_question(answer)
+                        if question is not None:
+                            yield AskUser(question=question)
+                    return
                 async for event in self._emit_final(history, reply.text or "(no answer)"):
                     yield event
                 return
 
-            if reply.text:
+            if reply.text and not streaming:
                 # Narration spoken while tools run. It passes the gate too:
                 # a fabricated citation must never be spoken, even mid-turn.
+                # (Streaming already spoke the gated narration in _stream_round.)
                 narration = reply.text
                 if self.grounding_gate is not None:
                     narration = (await self.grounding_gate.check(narration)).speech_text
@@ -274,6 +350,46 @@ class Agent:
             question = extract_question(gated.speech_text)
             if question is not None:
                 yield AskUser(question=question)
+
+    async def _gate_sentence(self, sentence: str) -> tuple[str, list]:
+        """Gate one streamed sentence before it is spoken. Returns its
+        speakable text (unverifiable citations stripped) and its verified
+        citations. Grounding is preserved token-stream or not: nothing reaches
+        TTS until the gate has cleared it."""
+        stripped = sentence.strip()
+        if not stripped:
+            return "", []
+        if self.grounding_gate is None:
+            return stripped, []
+        gated = await self.grounding_gate.check(stripped)
+        return gated.speech_text, list(gated.citations)
+
+    async def _stream_round(
+        self, messages: list[dict], schemas: list, sink: list
+    ) -> AsyncIterator[Event]:
+        """Stream one LLM round, emitting gated SpeechChunk/Citation events as
+        each sentence completes (low time-to-first-token). Appends
+        (reply, spoken_text) to `sink` so the caller can drive the tool loop and
+        record the assistant message. Voice-only; the retry path is off here
+        (allow_retry is False under speech_path), so streamed speech is final."""
+        buffer = ""
+        spoken: list[str] = []
+        async for kind, payload in self.llm.stream(messages, tools=schemas):
+            if kind == "text":
+                buffer += payload
+                sentences, buffer = _pop_sentences(buffer)
+            else:  # ("reply", LLMReply): flush the trailing fragment
+                sentences, buffer = ([buffer] if buffer.strip() else []), ""
+            for sentence in sentences:
+                speech, citations = await self._gate_sentence(sentence)
+                if speech.strip():
+                    spoken.append(speech)
+                    yield SpeechChunk(text=speech)
+                for citation in citations:
+                    yield citation
+            if kind == "reply":
+                sink.append((payload, " ".join(spoken).strip()))
+                return
 
     async def _run_tool(self, name: str, args: dict) -> str:
         tool = self.tools.get(name)
