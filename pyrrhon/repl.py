@@ -262,7 +262,7 @@ async def _repl_main(
         warm = warm_index_in_background(agent)  # noqa: F841 — hold ref; builds during startup
         from pyrrhon.branding import banner
 
-        console.print(f"[bold cyan]{banner()}[/bold cyan]")
+        console.print(banner())  # pre-styled Text; an outer style would flatten it
         console.print(
             f"Discussing [cyan]{repo_root.name}[/cyan]. Commands: /help, /quit"
         )

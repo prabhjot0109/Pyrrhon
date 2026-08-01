@@ -135,7 +135,7 @@ class PyrrhonApp(App):
         from pyrrhon.branding import banner
 
         transcript = self.query_one("#transcript", RichLog)
-        transcript.write(Text(banner(), style="bold cyan"))
+        transcript.write(banner())  # pre-styled Text; an outer style would flatten it
         transcript.write(
             f"Discussing {self.repo_root.name}. Type /help for commands."
         )
