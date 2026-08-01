@@ -17,7 +17,7 @@ from rich.text import Text
 
 from pyrrhon import __version__
 
-_FACE = "#2950da"  # Color of the letter faces, a rich blue. Can be changed to any valid Rich colour.
+_FACE = "#305eff"  # Color of the letter faces, a rich blue. Can be changed to any valid Rich colour.
 _SHADOW = "bold white"
 _SHADOW_GLYPHS = frozenset("═║╔╗╚╝")
 
