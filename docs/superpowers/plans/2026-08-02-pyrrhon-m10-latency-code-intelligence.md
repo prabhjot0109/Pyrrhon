@@ -1,5 +1,10 @@
 # Pyrrhon M10: low-latency agent harness + code-intelligence rebuild
 
+> **Status (2026-08-02): Stages 0, 1, 2 and 4 are implemented and landed on
+> `m10-latency-harness`. Stage 3 (code intelligence) is deferred by decision.**
+> See the *Implementation record* at the end for what changed, what was
+> measured, and the four places where the plan was wrong.
+
 ## Context
 
 Pyrrhon is voice-first, so latency *is* the product. `VISION.md:98-100` says it
@@ -485,3 +490,112 @@ Stage 3.3 (multi-language) is the largest and least-specified item in the plan:
 each grammar needs its own `_DEF_QUERY` / `_REF_QUERY` / import query with
 different node names per language, plus the extension-set change noted above.
 It should land last, and per-language, behind its own tests — not as one change.
+
+---
+
+# Implementation record (2026-08-02)
+
+Branch `m10-latency-harness`, eight commits. **460 tests pass** (from 341, and
+the suite was red on `beta` before any of this — see commit 1).
+
+| Stage | Status | Commit |
+|---|---|---|
+| — baseline test fixes | done | `a91826d` |
+| 0 telemetry | done | `bbec16b` |
+| 1.1 stream everywhere | done | `450ee34` |
+| 1.2 model knobs, 1.3 async compaction, A2 warm-up | done | `d00eccd` |
+| 1.4 gate/generation overlap | **not done** — measured, see below | — |
+| 2.1 parallel tools | done | `2a080e7` |
+| 2.2 soul cap + schema memo | partly — see below | `0eaa4c6` |
+| 2.3 ripgrep | done | `d97681f` |
+| 2.4 caches | done | `236b900` |
+| 3 code intelligence | **deferred by decision** | — |
+| 4 conversational partner + gate policy | done | `2c4909b` |
+| verification harness | done | `de93294` |
+
+## What was measured
+
+Same synthetic turn (three 80ms tools, real grounding gate), before and after:
+
+```
+before   turn 269ms   tool wall 264ms   total 264ms   speedup 1.00x
+after    turn 101ms   tool wall  96ms   total 287ms   speedup 2.99x
+```
+
+Component measurements:
+
+| | before | after |
+|---|---|---|
+| grounding gate, warm (`_check_sync`) | 0.72 ms | 0.025 ms (29x) |
+| grounding gate end-to-end | 1.02 ms | 0.36 ms |
+| soul prompt with a full `memory.md` | 26 427 chars / ~6 606 tok | 8 871 / ~2 217 (−66%) |
+| grep, 13k-file tree, common pattern | 470 ms | 40 ms (11.9x) |
+| grep, 13k-file tree, rare pattern | 4 964 ms | 857 ms (5.8x) |
+
+## Four places the plan was wrong
+
+Recorded because the reasoning matters more than the conclusions.
+
+1. **"The prompt prefix is never stable" (defect #3) — false.** `system_content`
+   derives from immutable inputs, so `history[0]` was already byte-identical
+   across turns, and rebuilding the schema list already produced identical
+   JSON. Re-assigning the same string changes nothing on the wire. The
+   compare-before-assign was dropped as a no-op; the schema memo was kept, but
+   documented as the CPU tidy it actually is. The *real* win in Stage 2.2 was
+   the soul cap, which the plan itself ranked highest.
+
+2. **Stage 1.4 (gate/generation overlap) is not worth doing.** A gate check
+   costs ~1 ms against 50–500 ms of token generation between chunks — under 1%
+   of the gap. Worse, deferring emission to the next stream event means a model
+   that streams a chunk then stalls leaves it unspoken and absent from history,
+   so a barge-in has nothing to truncate;
+   `test_barge_in_mid_stream_leaves_partial_answer_in_history` caught it. Stage
+   2.4's cache attacked the same millisecond and won 29x with no structural
+   risk.
+
+3. **ripgrep was initially *slower* than pure Python**, on every real query.
+   The Python scan stops at `MAX_GREP_MATCHES` and abandons the walk; rg has no
+   global `--max-count` and scanned the whole tree. Fixed by reading rg's stdout
+   incrementally and killing it at the cap — 842 ms → 40 ms on the common case.
+   Also: rg's text output format is genuinely ambiguous for filenames
+   containing `-` or `:`, so the implementation uses `--json`.
+
+4. **The gate policy change was narrower than predicted.** The plan expected
+   `tests/test_agent_gate.py:69-91` to break; it didn't. Those cases cite files
+   that genuinely do not exist, which still get the broad hedge. Only the
+   out-of-range case changed.
+
+## Decisions taken during implementation
+
+- **Compaction is cancelled, not awaited** (addendum A1, agreed up front).
+  Awaiting would hand turn N+1 the round trip removed from turn N.
+- **`[model] max_tokens` defaults to None**, not a voice-appropriate cap. The
+  plan's rationale was that unbounded generation drives time-to-first-output;
+  Stage 1.1 severed that link, and a hard cap now only risks truncating
+  mid-sentence. It is an opt-in runaway guard.
+- **Gate out-of-range → bare path + narrowed hedge** (signed off).
+- **Multi-language scope, when Stage 3 lands: TypeScript/JavaScript and Go.**
+
+## Two bugs found in existing code
+
+- **`time.monotonic()` has ~15.6 ms resolution on Windows**, so every telemetry
+  span shorter than a tick measured exactly 0.0 — and `last_turn_latency_ms`,
+  the voice budget metric, was quantising to the same tick. Both moved to
+  `time.perf_counter()` (also monotonic, ~100 ns).
+- **The suite was red before any M10 work**, for three unrelated reasons: a
+  stale hex pinned in `test_branding`, `test_build_agent_m4` leaking the
+  developer's real `~/.pyrrhon/config.toml`, and the TUI suites indexing the
+  checked-in fixture repo — writing a gitignored `cache.db` that survived into
+  later runs. `tests/conftest.py` now fences `tests/fixtures/` and fails the
+  test that writes into it.
+
+## What Stage 3 still owes
+
+`symbol_context` (three round trips → one), PageRank repo map personalised by
+conversation mentions, multi-language indexing (TS/JS + Go), the orientation
+brief, and slimming the belt. `evals/understanding.yaml` is deferred with it —
+it exists to prove Stage 3's quality claim and measures nothing without it.
+
+Note `ast_index.py:_iter_files_with_mtime` hardcodes `.py`; the extension set
+must become table-driven in the same change, or new grammars will never see a
+file.
