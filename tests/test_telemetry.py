@@ -158,11 +158,12 @@ async def test_tool_round_records_each_call_and_the_round_wall_clock():
     tool_round = trace.rounds[0]
     assert set(tool_round.tool_ms) == {"slow_a", "slow_b"}
     assert all(span.ms > 0.0 for span in tool_round.tools)
-    # Sequential dispatch: the round takes about as long as the sum of its
-    # calls. Stage 2.1 makes this ratio climb toward the number of calls, which
-    # is precisely what the two counters exist to show.
-    assert tool_round.tool_wall_ms >= tool_round.tool_total_ms * 0.9
-    assert tool_round.parallel_speedup < 1.5
+    # Concurrent dispatch (Stage 2.1): the round costs about the slowest call,
+    # not the sum. Two equal-length tools should land near 2x; assert well
+    # under that so a loaded machine can't make this flaky, while still
+    # failing loudly if dispatch ever goes back to being sequential.
+    assert tool_round.parallel_speedup > 1.5
+    assert tool_round.tool_wall_ms < tool_round.tool_total_ms * 0.75
 
 
 async def test_gate_time_is_attributed_to_the_round():

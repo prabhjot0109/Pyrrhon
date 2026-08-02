@@ -26,7 +26,7 @@ from contextlib import nullcontext
 from pathlib import Path
 
 from pyrrhon.core.agent.escalate import ThinkDeeperTool
-from pyrrhon.core.agent.guards import DUPLICATE_NOTE, ToolGuard, assistant_tool_message
+from pyrrhon.core.agent.guards import ToolGuard, assistant_tool_message, run_tool_round
 from pyrrhon.core.agent.prompts import ESCALATION_NOTE, TEXT_STYLE, VOICE_STYLE
 from pyrrhon.core.context import (
     compact_tool_results,
@@ -378,25 +378,28 @@ class Agent:
                     yield SpeechChunk(text=narration)
 
             history.append(assistant_tool_message(reply))
+            # Every start before dispatch, every finish after it, both in call
+            # order. Forced anyway — an async generator cannot yield from
+            # inside a task — and free: ToolCallFinished has no render branch
+            # in either channel, so only tests observe the ordering.
+            for call in reply.tool_calls:
+                yield ToolCallStarted(name=call.name, args=call.arguments)
             # tool_wall_ms brackets the whole phase while time_tool() records
-            # each call. They are equal while dispatch is sequential; when
-            # Stage 2.1 makes it concurrent, wall drops toward max() and the
-            # gap between the two IS the measured win.
+            # each call. Now that dispatch is concurrent, wall approaches
+            # max() while total stays sum() — the gap between the two is the
+            # measured win.
             with round_trace.time_tool_round():
-                for call in reply.tool_calls:
-                    yield ToolCallStarted(name=call.name, args=call.arguments)
-                    if guard.is_duplicate(call.name, call.arguments):
-                        result = DUPLICATE_NOTE.format(name=call.name)
-                    else:
-                        with round_trace.time_tool(call.name):
-                            result = await self._run_tool(call.name, call.arguments)
-                        result = guard.clip(result)
-                    history.append(
-                        {"role": "tool", "tool_call_id": call.id, "content": result}
-                    )
-                    yield ToolCallFinished(
-                        name=call.name, result_preview=result[:PREVIEW_LEN]
-                    )
+                results = await run_tool_round(
+                    reply.tool_calls, self._run_tool, guard, round_trace
+                )
+            history.extend(
+                {"role": "tool", "tool_call_id": call.id, "content": result}
+                for call, result in zip(reply.tool_calls, results)
+            )
+            for call, result in zip(reply.tool_calls, results):
+                yield ToolCallFinished(
+                    name=call.name, result_preview=result[:PREVIEW_LEN]
+                )
             if guard.exhausted:
                 break
 
