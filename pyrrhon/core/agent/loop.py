@@ -6,6 +6,14 @@ channels construct the Agent with allow_retry=True and get one
 self-correction LLM round-trip; the M3 speech channel constructs it with
 allow_retry=False and unverifiable references are stripped immediately —
 a retry costs a full LLM turnaround and breaks the voice latency budget.
+
+Amended 2026-08-02 (M10): the retry is additionally conditional on the turn
+NOT having streamed. Streaming is now on for every channel, not just voice,
+and once a chunk has been printed or spoken there is no coherent way to
+un-say it — rewriting it would violate "history records what was heard".
+So a streamed turn strips and hedges rather than re-asking the model.
+allow_retry still governs the non-streaming path, which is what test doubles
+and providers without stream() take.
 """
 
 from __future__ import annotations
@@ -87,11 +95,55 @@ def _pop_sentences(buffer: str) -> tuple[list[str], str]:
     Returns (complete_sentences, remainder). A sentence is "complete" once a
     .!? is followed by whitespace, so the trailing fragment (still being
     generated) stays in the buffer until its terminator streams in.
+
+    This is the VOICE splitter: a sentence is the natural unit to hand TTS.
+    Text channels use _pop_blocks instead — see why there.
     """
     parts = _SENTENCE_BOUNDARY.split(buffer)
     if len(parts) == 1:
         return [], buffer
     return parts[:-1], parts[-1]
+
+
+_FENCE = "```"
+
+
+def _pop_blocks(buffer: str) -> tuple[list[str], str]:
+    """Split completed markdown blocks off the front of a streaming buffer.
+
+    The TEXT splitter. Sentence-splitting is wrong on screen: TEXT_STYLE
+    explicitly invites tables and fenced code blocks, and half a table or half
+    a code fence renders as garbage — the REPL calls Markdown() once per
+    SpeechChunk, so a chunk boundary is a rendering boundary.
+
+    A block ends at a *blank* line (i.e. "\\n\\n", not a single line break)
+    that is not inside a ``` fence. Because that is the only place we ever
+    cut, the buffer always begins outside a fence — which is what makes fence
+    state recomputable from the buffer alone, with no state threaded between
+    calls.
+
+    A blank line also terminates a markdown table and a list, so "blank line
+    outside a fence" is sufficient on its own to avoid splitting either.
+    """
+    lines = buffer.split("\n")
+    blocks: list[str] = []
+    in_fence = False
+    cut = 0  # index just past the last line we flushed
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith(_FENCE):
+            in_fence = not in_fence
+            continue
+        # `i < len(lines) - 1` is load-bearing: the final element is the text
+        # after the last newline and is still being generated, so an empty one
+        # is a trailing "\n", not a paragraph break. Flushing on it would split
+        # a paragraph mid-way on every line ending.
+        if not in_fence and not stripped and i < len(lines) - 1:
+            block = "\n".join(lines[cut:i]).strip()
+            if block:
+                blocks.append(block)
+            cut = i + 1
+    return blocks, "\n".join(lines[cut:])
 
 
 def extract_question(text: str) -> str | None:
@@ -214,10 +266,12 @@ class Agent:
         guard = ToolGuard()
         nudged_invalid_tool = False
         context_recoveries = 0
-        # Stream gated sentences to speech (low time-to-first-token) only when
-        # voice drives the turn and the provider supports streaming; text
-        # channels and test doubles keep the whole-reply path unchanged.
-        streaming = self.voice_active and hasattr(self.llm, "stream")
+        # Stream on EVERY channel, not just voice: buffering a whole reply
+        # makes time-to-first-output equal to time-to-last-token, which is the
+        # single biggest source of "it feels slow" on the screen paths too.
+        # The hasattr guard is what keeps this safe — tests/helpers.py:FakeLLM
+        # exposes only chat(), so every test double keeps the whole-reply path.
+        streaming = hasattr(self.llm, "stream")
         trace.streamed = streaming
 
         for _ in range(self.max_tool_rounds):
@@ -250,7 +304,7 @@ class Agent:
                     )
                     continue
                 async for event in self._emit_final(
-                    history, TOOL_RETRY_EXHAUSTED_MESSAGE, trace
+                    history, TOOL_RETRY_EXHAUSTED_MESSAGE, trace, streaming
                 ):
                     yield event
                 return
@@ -276,14 +330,14 @@ class Agent:
                     if elided or summarized:
                         continue
                 async for event in self._emit_final(
-                    history, CONTEXT_FULL_MESSAGE, trace
+                    history, CONTEXT_FULL_MESSAGE, trace, streaming
                 ):
                     yield event
                 return
             except Exception as exc:  # provider/network error — never die silently
                 logger.warning("llm.chat failed mid-turn: %s: %s", type(exc).__name__, exc)
                 async for event in self._emit_final(
-                    history, PROVIDER_ERROR_MESSAGE, trace
+                    history, PROVIDER_ERROR_MESSAGE, trace, streaming
                 ):
                     yield event
                 return
@@ -302,7 +356,7 @@ class Agent:
                             yield AskUser(question=question)
                     return
                 async for event in self._emit_final(
-                    history, reply.text or "(no answer)", trace
+                    history, reply.text or "(no answer)", trace, streaming
                 ):
                     yield event
                 return
@@ -352,7 +406,7 @@ class Agent:
         # the evidence gathered so far isn't wasted on a canned apology.
         with trace.time_forced_answer():
             text = await self._forced_answer(history)
-        async for event in self._emit_final(history, text, trace):
+        async for event in self._emit_final(history, text, trace, streaming):
             yield event
 
     async def _forced_answer(self, history: list[dict]) -> str:
@@ -373,7 +427,11 @@ class Agent:
         return reply.text or BUDGET_MESSAGE
 
     async def _emit_final(
-        self, history: list[dict], text: str, trace: TurnTrace | None = None
+        self,
+        history: list[dict],
+        text: str,
+        trace: TurnTrace | None = None,
+        streaming: bool = False,
     ) -> AsyncIterator[Event]:
         """Gate, record, and emit the turn's final text (was inline in run_turn).
 
@@ -403,8 +461,15 @@ class Agent:
 
         with time_gate():
             gated = await self.grounding_gate.check(text)
-        if gated.unverified and self.allow_retry:
+        if gated.unverified and self.allow_retry and not streaming:
             # Exactly ONE self-correction round-trip (screen path).
+            #
+            # `not streaming`: on a streaming turn the model's narration is
+            # already on screen or already spoken, so a turn that reaches here
+            # (forced answer after budget exhaustion, or a provider error) has
+            # made the user wait once already. Spending another full round trip
+            # to polish citations the gate is about to strip anyway is the
+            # wrong trade — strip, hedge, and get out.
             # The draft and the correction never enter `history` —
             # history records what the user was shown, not drafts.
             retry_messages = [
@@ -456,16 +521,27 @@ class Agent:
         round_trace: RoundTrace | None = None,
     ) -> AsyncIterator[Event]:
         """Stream one LLM round, emitting gated SpeechChunk/Citation events as
-        each sentence completes (low time-to-first-token). Appends
+        each chunk completes (low time-to-first-token). Appends
         (reply, spoken_text, slot) to `sink` so the caller drives the tool loop.
 
-        As sentences are spoken they are also written into a live assistant
+        The chunk unit is channel-dependent: a sentence for voice (the natural
+        unit for TTS), a markdown block for text (the natural unit for
+        Markdown() rendering). Both feed the same _gate_sentence, so grounding
+        is identical either way.
+
+        As chunks are emitted they are also written into a live assistant
         message in `history` (`slot`), so a mid-answer barge-in can truncate
         history to exactly what was heard — parity with the non-streaming path.
         If the round turns out to be a tool call, the caller drops that slot
         (the text was narration, captured in the tool_calls message instead).
-        Voice-only; allow_retry is False under speech_path, so streamed speech
-        is final (no self-correction round)."""
+        Streamed output is final: it is already on screen or already spoken, so
+        there is no coherent way to run the self-correction retry over it."""
+        # Voice joins sentences with a space; text joins blocks with a blank
+        # line, so the recorded history round-trips as the markdown that was
+        # actually rendered.
+        split, joiner = (
+            (_pop_sentences, " ") if self.voice_active else (_pop_blocks, "\n\n")
+        )
         buffer = ""
         spoken: list[str] = []
         slot: dict | None = None
@@ -476,22 +552,22 @@ class Agent:
                     # move. Idempotent, so calling it per chunk is harmless.
                     round_trace.mark_ttft()
                 buffer += payload
-                sentences, buffer = _pop_sentences(buffer)
+                chunks, buffer = split(buffer)
             else:  # ("reply", LLMReply): flush the trailing fragment
-                sentences, buffer = ([buffer] if buffer.strip() else []), ""
-            for sentence in sentences:
-                speech, citations = await self._gate_sentence(sentence, round_trace)
+                chunks, buffer = ([buffer] if buffer.strip() else []), ""
+            for chunk in chunks:
+                speech, citations = await self._gate_sentence(chunk, round_trace)
                 if speech.strip():
                     spoken.append(speech)
                     if slot is None:
                         slot = {"role": "assistant", "content": ""}
                         history.append(slot)
-                    slot["content"] = " ".join(spoken)
+                    slot["content"] = joiner.join(spoken)
                     yield SpeechChunk(text=speech)
                 for citation in citations:
                     yield citation
             if kind == "reply":
-                sink.append((payload, " ".join(spoken).strip(), slot))
+                sink.append((payload, joiner.join(spoken).strip(), slot))
                 return
 
     async def _run_tool(self, name: str, args: dict) -> str:

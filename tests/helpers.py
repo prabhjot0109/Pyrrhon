@@ -22,7 +22,12 @@ def write_plugin(parent, name: str, manifest: str, files: dict[str, str] | None 
 
 
 class FakeLLM:
-    """Duck-typed stand-in for OpenAICompatLLM: returns scripted replies in order."""
+    """Duck-typed stand-in for OpenAICompatLLM: returns scripted replies in order.
+
+    Deliberately exposes chat() and NOT stream(). Agent.run_turn selects the
+    streaming path with `hasattr(self.llm, "stream")`, so every suite built on
+    this double keeps exercising the whole-reply path.
+    """
 
     def __init__(self, replies: list[LLMReply]):
         self._replies = list(replies)
@@ -33,3 +38,23 @@ class FakeLLM:
         if not self._replies:
             raise AssertionError("FakeLLM ran out of scripted replies")
         return self._replies.pop(0)
+
+
+class StreamingFakeLLM:
+    """Scripted streaming double: each round is (deltas, LLMReply).
+
+    Having stream() is what puts Agent.run_turn on the streaming path, so this
+    is the double to reach for when testing either voice sentences or text
+    markdown blocks.
+    """
+
+    def __init__(self, rounds):
+        self._rounds = list(rounds)
+        self.calls = 0
+
+    async def stream(self, messages, tools=None):
+        self.calls += 1
+        deltas, reply = self._rounds.pop(0)
+        for delta in deltas:
+            yield ("text", delta)
+        yield ("reply", reply)
