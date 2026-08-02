@@ -2,6 +2,14 @@
 # tests/fixtures/sample_repo. A case passes if any emitted Citation matches
 # the expected file exactly with the line within ±5. Run with a real LLM:
 #   uv run python -m pyrrhon.evals.grounding evals/grounding.yaml
+#
+# Add --repeat 5 --json baseline.json to also record a latency baseline, then
+# --compare baseline.json on a later run to fail on a regression. Point it at
+# a real repo (--repo .) for meaningful numbers; this fixture is two files.
+#
+# `must_not_cite` cases measure VISION.md's third success criterion — that
+# Pyrrhon admits ignorance instead of inventing. "*" means no citations at
+# all. These are the cases where a confident answer is the FAILURE.
 - question: "Where is the greet function defined?"
   expected:
     - {file: utils/helpers.py, line: 1}
@@ -11,3 +19,13 @@
 - question: "Where is the main entry function of the sample app defined?"
   expected:
     - {file: app.py, line: 4}
+
+# --- admits ignorance (VISION.md criterion 3) ------------------------------
+# Nothing in the sample repo retries, caches, or authenticates. A citation
+# here is a fabrication, however plausible it sounds.
+- question: "How does the retry backoff work in this codebase?"
+  must_not_cite: "*"
+- question: "Where is the authentication middleware defined?"
+  must_not_cite: "*"
+- question: "Which file configures the database connection pool?"
+  must_not_cite: "*"
