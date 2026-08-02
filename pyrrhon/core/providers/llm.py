@@ -89,16 +89,38 @@ class OpenAICompatLLM:
         api_key: str,
         base_url: str | None = None,
         max_retries: int = 2,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
     ):
         self.model = model
+        self.max_tokens = max_tokens
+        self.temperature = temperature
         self._client = AsyncOpenAI(
             api_key=api_key, base_url=base_url, max_retries=max_retries
         )
 
+    def _generation_kwargs(self) -> dict:
+        """Only send knobs that were actually configured.
+
+        Omitting them entirely (rather than sending None) keeps the request
+        payload byte-identical to the pre-[model] behaviour for anyone who
+        hasn't set them, and avoids providers that reject an explicit null.
+        """
+        kwargs: dict = {}
+        if self.max_tokens is not None:
+            kwargs["max_tokens"] = self.max_tokens
+        if self.temperature is not None:
+            kwargs["temperature"] = self.temperature
+        return kwargs
+
     async def chat(
         self, messages: list[dict], tools: list[dict] | None = None
     ) -> LLMReply:
-        kwargs: dict = {"model": self.model, "messages": messages}
+        kwargs: dict = {
+            "model": self.model,
+            "messages": messages,
+            **self._generation_kwargs(),
+        }
         if tools:
             kwargs["tools"] = tools
         try:
@@ -125,7 +147,12 @@ class OpenAICompatLLM:
         agent still gets the whole structured reply to drive the tool loop. Same
         typed errors as chat(). Tool-call fragments arrive spread across chunks
         (id/name/arguments in pieces), so they are reassembled by index."""
-        kwargs: dict = {"model": self.model, "messages": messages, "stream": True}
+        kwargs: dict = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True,
+            **self._generation_kwargs(),
+        }
         if tools:
             kwargs["tools"] = tools
         try:
@@ -188,6 +215,8 @@ def create_llm(
         api_key=api_key,
         base_url=provider.base_url,
         max_retries=max_retries,
+        max_tokens=settings.model.max_tokens,
+        temperature=settings.model.temperature,
     )
 
 

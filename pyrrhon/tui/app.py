@@ -139,11 +139,16 @@ class PyrrhonApp(App):
         transcript.write(
             f"Discussing {self.repo_root.name}. Type /help for commands."
         )
-        # Build the symbol index now so the first index-using turn doesn't wait
-        # on the cold walk; held on self so the task isn't GC'd mid-build.
-        from pyrrhon.repl import warm_index_in_background
+        # Build the symbol index and open the provider connection now, so the
+        # first turn pays neither the cold walk nor the TLS handshake. Held on
+        # self so the tasks aren't GC'd mid-flight.
+        from pyrrhon.repl import (
+            warm_index_in_background,
+            warm_llm_connection_in_background,
+        )
 
         self._warm_task = warm_index_in_background(self.agent)
+        self._warm_conn_task = warm_llm_connection_in_background(self.agent)
         if self._start_voice:
             self.notify(self.voice.start())
 

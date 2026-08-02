@@ -188,7 +188,7 @@ class Agent:
         deep_llm=None,
         deep_tools: list[Tool] | None = None,
         mode: str = "understand",
-        context_budget_tokens: int = 32000,
+        context_budget_tokens: int = 90000,
         context_keep_last: int = 8,
     ):
         self.llm = llm
@@ -249,15 +249,13 @@ class Agent:
             else:
                 history.insert(0, {"role": "system", "content": system_content})
             history.append({"role": "user", "content": user_text})
+            # Only the pure, local pass runs before round one. maybe_summarize
+            # is a full LLM round trip and used to sit right here, in front of
+            # the first token of every over-budget turn; Session now runs it
+            # AFTER the turn instead (see Session._schedule_compaction). The
+            # ContextLengthExceededError handler below is the safety net for
+            # the case where skipping it actually overflows the window.
             compact_tool_results(history)
-            if self.context_budget_tokens:
-                with trace.time_compaction():
-                    await maybe_summarize(
-                        history,
-                        self.llm,
-                        self.context_budget_tokens,
-                        keep_last=self.context_keep_last,
-                    )
             schemas = [tool.schema() for tool in self.tools.values()]
         trace.schema_chars = sum(len(str(schema)) for schema in schemas)
         trace.prompt_chars = sum(
@@ -545,6 +543,16 @@ class Agent:
         buffer = ""
         spoken: list[str] = []
         slot: dict | None = None
+        # Gating is awaited inline, deliberately. The M10 plan proposed running
+        # it as a task per chunk so the stream could keep draining during
+        # verification; that was measured and reverted. A gate check costs
+        # ~1ms against 50-500ms of token generation between chunks, so the
+        # overlap recovers well under 1% of the gap — and deferring emission
+        # until the next stream event breaks a real invariant: a model that
+        # streams a chunk and then stalls would leave that chunk unspoken and
+        # absent from history, so a barge-in would have nothing to truncate.
+        # Stage 2.4's line-count cache attacks the same 1ms far more
+        # effectively, and without touching this structure.
         async for kind, payload in self.llm.stream(history, tools=schemas):
             if kind == "text":
                 if round_trace is not None:
