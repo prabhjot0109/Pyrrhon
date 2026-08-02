@@ -6,6 +6,15 @@ Verification is file:line only: the file exists inside the repo and the line
 number is within its line count (spec "Grounding gate", amended 2026-07-03).
 Unverifiable references are stripped from the speakable text and replaced
 with a single honest hedge sentence.
+
+Amended 2026-08-02 (M10), with sign-off: a reference whose FILE verifies but
+whose LINE is out of range is now rewritten to the bare path rather than
+deleted outright, and the hedge narrows to "I couldn't confirm the exact
+line." Nothing unverified survives either way — the path itself passed the
+same existence and containment checks — but the answer keeps information the
+user can act on, and stops claiming doubt about a file we just confirmed
+exists. A reference to a file that does not exist, or that escapes the repo,
+is still removed whole and still gets the broader hedge.
 """
 
 from __future__ import annotations
@@ -19,6 +28,12 @@ from pyrrhon.core.events import Citation
 from pyrrhon.core.grounding.citations import extract_references
 
 HEDGE = "I couldn't verify that location."
+# Used when every failing reference named a REAL file and only its line number
+# was wrong. The path survives verification, so it survives into the answer;
+# only the number is dropped, and the hedge narrows to match. Saying "I
+# couldn't verify that location" of a file we just confirmed exists overstates
+# the doubt, and deleting the path throws away information the user can use.
+LINE_HEDGE = "I couldn't confirm the exact line."
 
 # Distinct cited paths cached before the caches are dropped and rebuilt.
 # Comfortably above any real repo's file count; it exists to bound a model
@@ -60,6 +75,11 @@ class GroundingGate:
         seen_ok: set[tuple[str, int]] = set()
         seen_bad: set[str] = set()
 
+        # ref -> what replaces it in the speakable text. A reference whose FILE
+        # is real keeps the path and loses only the line number; one whose file
+        # does not exist (or escapes the repo) is removed entirely, because
+        # nothing about it was verified.
+        replacement: dict[str, str] = {}
         for rel, line in extract_references(text):
             if rel not in line_counts:
                 line_counts[rel] = self._count_lines(rel)
@@ -73,6 +93,7 @@ class GroundingGate:
                 if ref not in seen_bad:
                     seen_bad.add(ref)
                     unverified.append(ref)
+                    replacement[ref] = rel if count is not None else ""
 
         speech = text
         if unverified:
@@ -83,9 +104,14 @@ class GroundingGate:
                 pattern = re.compile(
                     re.escape(rel).replace("/", r"[/\\]") + ":" + line_str + r"\b"
                 )
-                speech = pattern.sub("", speech)
+                # A function replacement, not a string: a Windows path in the
+                # replacement would otherwise be read as regex escapes.
+                speech = pattern.sub(lambda _m, r=replacement[ref]: r, speech)
             speech = re.sub(r"[ \t]{2,}", " ", speech).strip()
-            speech = f"{speech} {HEDGE}" if speech else HEDGE
+            # Narrow the hedge only when every failure was a real file with a
+            # bad line. One missing path anywhere means the broader hedge.
+            hedge = LINE_HEDGE if all(replacement.values()) else HEDGE
+            speech = f"{speech} {hedge}" if speech else hedge
 
         return GroundedText(
             speech_text=speech,

@@ -24,11 +24,27 @@ async def test_missing_file_is_stripped_and_hedged():
     assert out.unverified == ("made/up/file.py:12",)
 
 
-async def test_line_past_end_of_file_fails_verification():
+async def test_line_past_end_of_file_keeps_the_path_and_drops_the_line():
+    """M10 policy change, signed off: the file verified, only the line did not.
+    Deleting the path would throw away information the user can act on, and
+    the broad hedge would overstate doubt about a file we just confirmed
+    exists. Nothing unverified survives — the path passed the same existence
+    and containment checks as any citation."""
     # utils/helpers.py has only 2 lines — the file is real, the line is not.
     out = await GroundingGate(FIXTURE).check("see utils/helpers.py:999.")
-    assert out.citations == ()
-    assert out.unverified == ("utils/helpers.py:999",)
+    assert out.citations == ()                              # still not a citation
+    assert out.unverified == ("utils/helpers.py:999",)      # still reported as failed
+    assert out.speech_text == "see utils/helpers.py. I couldn't confirm the exact line."
+
+
+async def test_one_missing_file_forces_the_broader_hedge():
+    """Mixing a real-file/bad-line reference with a wholly invented one must
+    not let the narrower hedge understate the problem."""
+    out = await GroundingGate(FIXTURE).check(
+        "see utils/helpers.py:999 and made/up.py:1."
+    )
+    assert "made/up.py" not in out.speech_text
+    assert "utils/helpers.py" in out.speech_text
     assert out.speech_text.endswith("I couldn't verify that location.")
 
 

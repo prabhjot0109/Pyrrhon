@@ -52,6 +52,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pyrrhon.core.events import (
     Event,
     SpeechChunk,
+    ToolCallStarted,
     Transcription,
     TruncateSpeech,
     VoiceNotice,
@@ -64,12 +65,43 @@ from pyrrhon.voice.playback import PlaybackTracker
 # hears dead air — the Azure Voice Live / Amazon Lex "interim response" pattern.
 # Complements the speech-first prompt: that covers mid-turn tool narration; this
 # covers the initial gap nothing else fills.
-FILLER_DELAY_SEC = 1.6
+# 1.2s, down from 1.6s: with streaming on every channel the model's own
+# narration usually beats the watchdog now, so the filler only has to cover
+# the genuinely slow starts — and when it does fire, firing sooner is the
+# whole point.
+FILLER_DELAY_SEC = 1.2
 FILLERS = (
     "Let me take a look…",
     "One sec, digging into that…",
     "Looking through the code now…",
 )
+
+# Spoken instead of the generic line when a tool is already running, so the
+# filler describes what is actually happening rather than sounding canned.
+#
+# GROUNDING: the filler bypasses the gate entirely — it is pushed as a raw
+# SpeechChunk — so these must be citation-free BY CONSTRUCTION. They are fixed
+# strings keyed on the tool NAME and never interpolate the tool's arguments.
+# "Reading the file now" is safe; "reading loop.py line 193" would be an
+# ungated claim about the code. A test asserts none of them can carry a
+# path:line.
+TOOL_FILLERS = {
+    "read_file": "Reading that file now…",
+    "grep": "Searching the repo for that…",
+    "glob": "Looking for the right files…",
+    "find_symbol": "Finding where that's defined…",
+    "find_references": "Checking what calls it…",
+    "list_dependencies": "Tracing the imports…",
+    "repo_map": "Getting the lay of the land…",
+    "git_log": "Checking the history…",
+    "git_blame": "Seeing who last touched that…",
+    "git_show": "Pulling up that commit…",
+    "web_search": "Searching the web…",
+    "web_fetch": "Fetching that page…",
+    "remember": "Noting that down…",
+    "write_spec": "Writing that up…",
+    "think_deeper": "Thinking this one through properly…",
+}
 
 
 def humanize_voice_error(text: str) -> str:
@@ -105,6 +137,9 @@ class PyrrhonBridgeProcessor(FrameProcessor):
         self._bot_speaking = False
         self._spoke_this_turn = False
         self._filler_idx = 0
+        # Name of the most recent tool this turn, so the filler can describe
+        # what is actually happening. Reset per turn.
+        self._last_tool: str | None = None
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -168,10 +203,15 @@ class PyrrhonBridgeProcessor(FrameProcessor):
     async def _run_turn(self, text: str) -> None:
         await self.push_frame(LLMFullResponseStartFrame())
         self._spoke_this_turn = False
+        self._last_tool = None
         filler = asyncio.create_task(self._filler_watchdog())
         try:
             async for event in self._session.run_turn(text):
-                if isinstance(event, SpeechChunk):
+                if isinstance(event, ToolCallStarted):
+                    # Name only — never event.args. See TOOL_FILLERS.
+                    self._last_tool = event.name
+                    self._on_event(event)
+                elif isinstance(event, SpeechChunk):
                     # First real speech cancels the pending filler.
                     if not self._spoke_this_turn:
                         self._spoke_this_turn = True
@@ -202,8 +242,13 @@ class PyrrhonBridgeProcessor(FrameProcessor):
             return
         if self._spoke_this_turn:
             return
-        text = FILLERS[self._filler_idx % len(FILLERS)]
-        self._filler_idx += 1
+        # If a tool is already running, say what it is doing. Falls back to the
+        # rotating generic lines when the delay elapsed before any tool call —
+        # a slow first LLM reply, which is the other case this covers.
+        text = TOOL_FILLERS.get(self._last_tool or "")
+        if text is None:
+            text = FILLERS[self._filler_idx % len(FILLERS)]
+            self._filler_idx += 1
         self._on_event(SpeechChunk(text=text))
         await self.push_frame(TextFrame(text))
 

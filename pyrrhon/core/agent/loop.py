@@ -28,6 +28,7 @@ from pathlib import Path
 from pyrrhon.core.agent.escalate import ThinkDeeperTool
 from pyrrhon.core.agent.guards import ToolGuard, assistant_tool_message, run_tool_round
 from pyrrhon.core.agent.prompts import ESCALATION_NOTE, TEXT_STYLE, VOICE_STYLE
+from pyrrhon.core.agent.turn_type import classify, needs_tools
 from pyrrhon.core.context import (
     compact_tool_results,
     hard_compact_tool_results,
@@ -258,8 +259,16 @@ class Agent:
             # ContextLengthExceededError handler below is the safety net for
             # the case where skipping it actually overflows the window.
             compact_tool_results(history)
-            schemas = self._tool_schemas()
-        trace.schema_chars = sum(len(str(schema)) for schema in schemas)
+            # A greeting or a bare "yes" needs no tools. Withholding the belt
+            # saves ~1.5k tokens of schema on the 25-40% of voice turns that
+            # are acknowledgements, and removes any chance of a spurious tool
+            # round on a turn with nothing to look up.
+            turn_kind = classify(user_text, history)
+            trace.turn_type = turn_kind
+            schemas = self._tool_schemas() if needs_tools(turn_kind) else None
+        # Zero when the belt was withheld — that saving is the point of the
+        # turn-type check, so the trace should show it.
+        trace.schema_chars = sum(len(str(schema)) for schema in schemas or ())
         trace.prompt_chars = sum(
             len(m["content"]) for m in history if isinstance(m.get("content"), str)
         )
@@ -350,10 +359,9 @@ class Agent:
                     answer = spoken_text or reply.text or "(no answer)"
                     if stream_slot is None:
                         history.append({"role": "assistant", "content": answer})
-                    if self.mode == "design":
-                        question = extract_question(answer)
-                        if question is not None:
-                            yield AskUser(question=question)
+                    question = extract_question(answer)
+                    if question is not None:
+                        yield AskUser(question=question)
                     return
                 async for event in self._emit_final(
                     history, reply.text or "(no answer)", trace, streaming
@@ -472,10 +480,9 @@ class Agent:
                 extract_citations, text, self.repo_root
             ):
                 yield citation
-            if self.mode == "design":
-                question = extract_question(text)
-                if question is not None:
-                    yield AskUser(question=question)
+            question = extract_question(text)
+            if question is not None:
+                yield AskUser(question=question)
             return
 
         with time_gate():
@@ -510,10 +517,9 @@ class Agent:
         yield SpeechChunk(text=gated.speech_text)
         for citation in gated.citations:
             yield citation
-        if self.mode == "design":
-            question = extract_question(gated.speech_text)
-            if question is not None:
-                yield AskUser(question=question)
+        question = extract_question(gated.speech_text)
+        if question is not None:
+            yield AskUser(question=question)
 
     async def _gate_sentence(
         self, sentence: str, round_trace: RoundTrace | None = None
