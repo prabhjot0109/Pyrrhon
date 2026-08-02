@@ -128,7 +128,15 @@ def _resolve_relative(module: str, package: str) -> str:
 # whole tree stat'ing every .py file. Collapsing calls inside this window into
 # one walk is the biggest per-turn latency lever on large repos; a couple of
 # seconds of staleness is invisible in a voice conversation (turns are slower).
-INDEX_FRESH_TTL_SEC = 2.0
+# Raised from 2.0s in M10. A read-only agent rarely races its own repo, and
+# the mtime check makes the walk cheap only in the sense that it avoids
+# re-parsing — the tree walk itself still stats every source file, which is
+# the cost on a large repo. Capped at 10s rather than something larger on
+# purpose: the grounding gate verifies that a cited line is IN RANGE, not that
+# it is the RIGHT line, so a stale index can produce a right-file/stale-line
+# citation that the gate happily passes. Ten seconds bounds that window to
+# roughly one conversational turn.
+INDEX_FRESH_TTL_SEC = 10.0
 
 
 class SymbolIndex:
@@ -143,6 +151,11 @@ class SymbolIndex:
         # Every DB touch runs in a to_thread worker; serialize the one shared
         # connection across those threads with a plain Lock.
         self._db_lock = threading.Lock()
+        # Bumped whenever a file is reparsed or forgotten. Derived views keyed
+        # on it (currently the repo map) stay valid until the index actually
+        # changes, rather than being rebuilt on a timer.
+        self._generation = 0
+        self._repo_map_cache: tuple[int, int, str] | None = None
 
     async def ensure_fresh(self, force: bool = False) -> None:
         async with self._lock:
@@ -226,8 +239,10 @@ class SymbolIndex:
                 if known.get(rel) == mtime:
                     continue  # unchanged — the whole point of the mtime column
                 self._reparse(conn, parser, path, rel, mtime)
+                self._generation += 1
             for rel in set(known) - seen:  # files deleted since last index
                 self._forget(conn, rel)
+                self._generation += 1
             conn.commit()
 
     def _reparse(self, conn: sqlite3.Connection, parser, path: Path, rel: str, mtime: float) -> None:
@@ -308,7 +323,16 @@ class SymbolIndex:
         """Aider-style repo map: files ordered by how much the rest of the
         repo references their symbols; top symbols listed per file. Pure
         counting over the refs table — no graph traversal, so import cycles
-        cannot recurse."""
+        cannot recurse.
+
+        Memoised on the index generation. The query runs a correlated
+        subquery per symbol row and then rebuilds the whole string, and
+        nothing about the result can change while the index does not — so a
+        repeat call within a turn, or across turns with no edits, is free.
+        """
+        cached = self._repo_map_cache
+        if cached is not None and cached[0] == self._generation and cached[1] == max_chars:
+            return cached[2]
         with self._db_lock:
             rows = self._db_conn().execute(
                 """
@@ -340,7 +364,9 @@ class SymbolIndex:
                 break
             lines.append(chunk)
             used += len(chunk) + 1
-        return "\n".join(lines) or "No symbols indexed yet."
+        rendered = "\n".join(lines) or "No symbols indexed yet."
+        self._repo_map_cache = (self._generation, max_chars, rendered)
+        return rendered
 
 
 class FindSymbolTool(Tool):

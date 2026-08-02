@@ -35,3 +35,35 @@ async def test_repo_map_tool_runs_end_to_end(tmp_path):
     out = await RepoMapTool(index).run()
     assert "core.py" in out
     assert ":" in out  # symbols carry line numbers for citation
+
+
+# -- repo-map memoisation (M10 Stage 2.4) -----------------------------------
+
+
+async def test_repo_map_is_memoised_until_the_index_changes(tmp_path):
+    """The query runs a correlated subquery per symbol row and then rebuilds
+    the whole string; nothing about the result can change while the index
+    does not."""
+    index = SymbolIndex(_make_repo(tmp_path))
+    await index.ensure_fresh()
+
+    first = await index.build_repo_map()
+    generation = index._generation
+    assert await index.build_repo_map() == first
+    assert index._generation == generation  # no reindex, no rebuild
+
+    (tmp_path / "newcomer.py").write_text(
+        "from core import hot\n\ndef also():\n    return hot()\n", encoding="utf-8"
+    )
+    await index.ensure_fresh(force=True)
+    assert index._generation > generation
+    assert "newcomer.py" in await index.build_repo_map()
+
+
+async def test_repo_map_cache_is_keyed_on_the_budget(tmp_path):
+    index = SymbolIndex(_make_repo(tmp_path))
+    await index.ensure_fresh()
+    big = await index.build_repo_map(max_chars=6000)
+    small = await index.build_repo_map(max_chars=40)
+    assert small != big
+    assert "truncated" in small

@@ -20,6 +20,11 @@ from pyrrhon.core.grounding.citations import extract_references
 
 HEDGE = "I couldn't verify that location."
 
+# Distinct cited paths cached before the caches are dropped and rebuilt.
+# Comfortably above any real repo's file count; it exists to bound a model
+# that invents paths, not to bound normal use.
+_CACHE_CEILING = 4096
+
 
 @dataclass(frozen=True)
 class GroundedText:
@@ -31,6 +36,18 @@ class GroundedText:
 class GroundingGate:
     def __init__(self, root: Path):
         self.root = root
+        # Resolved once. Path.resolve() is a real filesystem operation, and
+        # this was being recomputed for every citation of every check.
+        self._root = root.resolve()
+        # rel -> resolved path inside the repo, or None if it escapes. For a
+        # fixed root this mapping is deterministic, so it never needs
+        # invalidating; it exists purely to avoid re-running resolve().
+        self._targets: dict[str, Path | None] = {}
+        # rel -> ((st_mtime_ns, st_size), line_count|None). The gate re-reads
+        # every cited file on every check, and on the voice path a check runs
+        # once per spoken sentence — the same two or three files, over and
+        # over, for the whole answer.
+        self._line_counts: dict[str, tuple[tuple[int, int], int | None]] = {}
 
     async def check(self, text: str) -> GroundedText:
         # Real-time discipline: every file read happens off the event loop.
@@ -76,17 +93,61 @@ class GroundingGate:
             unverified=tuple(unverified),
         )
 
-    def _count_lines(self, rel: str) -> int | None:
-        """Line count of a repo file, or None if missing/unreadable/escaping."""
-        target = (self.root / rel).resolve()
+    def _resolve_inside(self, rel: str) -> Path | None:
+        """Resolve a repo-relative citation, or None if it escapes the repo.
+
+        Memoised on `rel`: resolve() is a filesystem operation and a
+        hallucinated path is cited just as often as a real one, so both
+        outcomes are worth caching. The caches are cleared wholesale past a
+        generous ceiling — a model that invents thousands of distinct paths
+        must not grow this without bound.
+        """
+        if rel in self._targets:
+            return self._targets[rel]
+        if len(self._targets) > _CACHE_CEILING:
+            self._targets.clear()
+            self._line_counts.clear()
+        target = (self._root / rel).resolve()
         try:
-            target.relative_to(self.root.resolve())
+            target.relative_to(self._root)
         except ValueError:
+            target = None
+        self._targets[rel] = target
+        return target
+
+    def _count_lines(self, rel: str) -> int | None:
+        """Line count of a repo file, or None if missing/unreadable/escaping.
+
+        Cached on (st_mtime_ns, st_size). Both, not just mtime: filesystem
+        timestamp granularity is coarse enough that a file edited twice within
+        one tick would keep a stale count, and a same-tick truncation is
+        exactly the case that would let an out-of-range line verify. Size
+        closes that hole. A stat() is far cheaper than a full read, and it is
+        what makes the cache safe to hold across turns.
+        """
+        target = self._resolve_inside(rel)
+        if target is None:
             return None  # ../-style escape — never verify outside the repo
-        if not target.is_file():
-            return None
         try:
-            content = target.read_text(encoding="utf-8", errors="replace")
+            stat = target.stat()
         except OSError:
+            self._line_counts.pop(rel, None)
             return None
-        return len(content.splitlines())
+        stamp = (stat.st_mtime_ns, stat.st_size)
+        cached = self._line_counts.get(rel)
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
+
+        count: int | None = None
+        if target.is_file():
+            try:
+                content = target.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                count = None
+            else:
+                # splitlines(), deliberately not content.count("\n"): it also
+                # splits on \r, \v, \f, \x1c-\x1e, \x85 and  / , and
+                # changing that would change which line numbers verify.
+                count = len(content.splitlines())
+        self._line_counts[rel] = (stamp, count)
+        return count
