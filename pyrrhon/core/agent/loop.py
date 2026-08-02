@@ -210,6 +210,8 @@ class Agent:
         # doesn't violate "Agent owns no conversation state" above. Session
         # copies it out into `last_turn_trace` once the turn ends.
         self.last_trace: TurnTrace | None = None
+        self._schema_cache: list[dict] = []
+        self._schema_cache_key: tuple[str, ...] | None = None
         if deep_llm is not None:
             deep_tool = ThinkDeeperTool(deep_llm, tools=deep_tools)
             self.tools[deep_tool.name] = deep_tool
@@ -256,7 +258,7 @@ class Agent:
             # ContextLengthExceededError handler below is the safety net for
             # the case where skipping it actually overflows the window.
             compact_tool_results(history)
-            schemas = [tool.schema() for tool in self.tools.values()]
+            schemas = self._tool_schemas()
         trace.schema_chars = sum(len(str(schema)) for schema in schemas)
         trace.prompt_chars = sum(
             len(m["content"]) for m in history if isinstance(m.get("content"), str)
@@ -409,6 +411,22 @@ class Agent:
             text = await self._forced_answer(history)
         async for event in self._emit_final(history, text, trace, streaming):
             yield event
+
+    def _tool_schemas(self) -> list[dict]:
+        """The tool belt's JSON schemas, rebuilt only when the belt changes.
+
+        Purely a CPU tidy — it is NOT a prompt-cache fix. The rebuilt list
+        serialises byte-identically to the previous one, so providers were
+        already seeing a stable tools payload; this just stops reconstructing
+        ~15 nested dicts on every turn. `self.tools` is mutable (plugins and
+        MCP servers contribute at build time, and design mode will swap
+        write_spec in and out), so the belt's identity is the cache key.
+        """
+        key = tuple(self.tools)
+        if self._schema_cache_key != key:
+            self._schema_cache_key = key
+            self._schema_cache = [tool.schema() for tool in self.tools.values()]
+        return self._schema_cache
 
     async def _forced_answer(self, history: list[dict]) -> str:
         nudge = {

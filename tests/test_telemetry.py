@@ -242,3 +242,20 @@ async def test_session_publishes_a_partial_trace_after_barge_in():
 
     assert session.last_turn_trace is not None
     assert session.last_turn_trace.preamble_ms >= 0.0
+
+
+# -- schema memoisation (M10 Stage 2.2) --------------------------------------
+
+
+async def test_tool_schemas_are_rebuilt_only_when_the_belt_changes():
+    """A CPU tidy, not a prompt-cache fix: the rebuilt list already serialised
+    byte-identically. The belt is mutable (plugins, MCP, design mode), so its
+    identity is the cache key."""
+    agent = make_agent([LLMReply(text="a."), LLMReply(text="b.")])
+    first = agent._tool_schemas()
+    assert agent._tool_schemas() is first  # same object, not rebuilt
+
+    agent.tools["extra"] = SlowTool("extra", 0.0)
+    rebuilt = agent._tool_schemas()
+    assert rebuilt is not first
+    assert {s["function"]["name"] for s in rebuilt} == set(agent.tools)
