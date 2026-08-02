@@ -19,6 +19,7 @@ from collections.abc import AsyncIterator
 from pyrrhon.core.agent.design_prompts import DESIGN_PROMPT
 from pyrrhon.core.agent.loop import Agent
 from pyrrhon.core.events import Event, SpeechChunk
+from pyrrhon.core.telemetry import TurnTrace
 
 INTERRUPTED_MARKER = " …[interrupted]"
 
@@ -39,7 +40,14 @@ class Session:
         # Latency of the last turn: user_text -> first SpeechChunk, in ms.
         # Channels read this for the status bar; M3's voice budget is judged
         # against it. None until the first turn produces speech.
+        #
+        # Stays a plain attribute, never a property derived from last_turn_trace:
+        # tests/test_latency.py assigns it directly as a sentinel to prove the
+        # next turn re-measures.
         self.last_turn_latency_ms: float | None = None
+        # The same turn broken down into its parts (preamble / per-round LLM /
+        # tools / gate / retry). None until the first turn completes.
+        self.last_turn_trace: TurnTrace | None = None
 
     def set_mode(self, mode: str) -> None:
         """Switch understand <-> design by layering a system message.
@@ -70,13 +78,25 @@ class Session:
 
     async def run_turn(self, user_text: str) -> AsyncIterator[Event]:
         """Drive one turn, timing user_text -> first SpeechChunk."""
-        started = time.monotonic()
+        # perf_counter, not monotonic: both are monotonic, but on Windows
+        # monotonic is a ~15.6ms-granular tick counter — too coarse for a
+        # sub-second voice budget. perf_counter resolves to ~100ns.
+        started = time.perf_counter()
         first_speech_seen = False
-        async for event in self._run_turn_events(user_text):
-            if not first_speech_seen and isinstance(event, SpeechChunk):
-                self.last_turn_latency_ms = (time.monotonic() - started) * 1000.0
-                first_speech_seen = True
-            yield event
+        try:
+            async for event in self._run_turn_events(user_text):
+                if not first_speech_seen and isinstance(event, SpeechChunk):
+                    self.last_turn_latency_ms = (
+                        time.perf_counter() - started
+                    ) * 1000.0
+                    first_speech_seen = True
+                    if self.agent.last_trace is not None:
+                        self.agent.last_trace.mark_first_speech()
+                yield event
+        finally:
+            # Publish in a finally: a turn cut short by barge-in is exactly the
+            # turn whose breakdown you want to look at.
+            self.last_turn_trace = self.agent.last_trace
 
     async def _run_turn_events(self, user_text: str) -> AsyncIterator[Event]:
         """Run one turn, streaming events. The agent runs in its own task so
