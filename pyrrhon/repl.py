@@ -70,6 +70,49 @@ def warm_index_in_background(agent: Agent) -> asyncio.Task | None:
     return asyncio.create_task(_warm())
 
 
+def _active_openai_client(llm):
+    """The AsyncOpenAI instance behind the agent's LLM, or None.
+
+    Returns None for test doubles and for anything that isn't an
+    OpenAICompatLLM, which is what makes the warm-up a no-op under test.
+    """
+    chain = getattr(llm, "chain", None)  # FallbackLLM wraps a list
+    if chain:
+        llm = chain[0]
+    return getattr(llm, "_client", None)
+
+
+def warm_llm_connection_in_background(agent: Agent) -> asyncio.Task | None:
+    """Open the provider's HTTP connection before the first turn needs it.
+
+    The index warm-up above removes the cold-index cost from turn one; this
+    removes the other one. The first llm.chat() of a session pays DNS + TCP +
+    TLS handshake on top of model latency — easily a few hundred milliseconds,
+    and it lands on the turn that forms the user's first impression.
+    AsyncOpenAI holds an httpx connection pool, so any completed round trip
+    amortizes the handshake to zero for every turn after it.
+
+    models.list() is the probe because it is cheap, public, and supported by
+    essentially every OpenAI-compatible endpoint including local ones. Even a
+    401 warms the pool — the handshake happens before the status code — which
+    is why every failure is swallowed rather than surfaced.
+    """
+    client = _active_openai_client(agent.llm)
+    if client is None:
+        return None
+
+    async def _warm() -> None:
+        try:
+            await client.models.list()
+        except Exception:
+            log.debug(
+                "llm connection warm-up failed; turn one pays the handshake",
+                exc_info=True,
+            )
+
+    return asyncio.create_task(_warm())
+
+
 def build_agent(
     repo_root: Path,
     llm=None,
@@ -259,7 +302,10 @@ async def _repl_main(
         agent = build_agent(
             repo_root, extra_tools=mcp_tools, settings=settings, plugins=plugins
         )
-        warm = warm_index_in_background(agent)  # noqa: F841 — hold ref; builds during startup
+        # Both warm-ups overlap startup and the user's first utterance. Refs
+        # held so neither task is garbage-collected mid-flight.
+        warm = warm_index_in_background(agent)  # noqa: F841
+        warm_conn = warm_llm_connection_in_background(agent)  # noqa: F841
         from pyrrhon.branding import banner
 
         console.print(banner())  # pre-styled Text; an outer style would flatten it

@@ -13,12 +13,17 @@ Real-time discipline (spec hard rules):
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import AsyncIterator
 
 from pyrrhon.core.agent.design_prompts import DESIGN_PROMPT
 from pyrrhon.core.agent.loop import Agent
+from pyrrhon.core.context import history_tokens, maybe_summarize
 from pyrrhon.core.events import Event, SpeechChunk
+from pyrrhon.core.telemetry import TurnTrace
+
+logger = logging.getLogger("pyrrhon.session")
 
 INTERRUPTED_MARKER = " …[interrupted]"
 
@@ -36,10 +41,22 @@ class Session:
         self.history: list[dict] = []
         self.mode: str = "understand"
         self._current: asyncio.Task | None = None
+        # History summarization, moved off the critical path. It used to run
+        # inside Agent.run_turn in front of the first token of every
+        # over-budget turn; it now runs here, after the turn, during the time
+        # the user spends reading or talking.
+        self._compaction: asyncio.Task | None = None
         # Latency of the last turn: user_text -> first SpeechChunk, in ms.
         # Channels read this for the status bar; M3's voice budget is judged
         # against it. None until the first turn produces speech.
+        #
+        # Stays a plain attribute, never a property derived from last_turn_trace:
+        # tests/test_latency.py assigns it directly as a sentinel to prove the
+        # next turn re-measures.
         self.last_turn_latency_ms: float | None = None
+        # The same turn broken down into its parts (preamble / per-round LLM /
+        # tools / gate / retry). None until the first turn completes.
+        self.last_turn_trace: TurnTrace | None = None
 
     def set_mode(self, mode: str) -> None:
         """Switch understand <-> design by layering a system message.
@@ -70,13 +87,25 @@ class Session:
 
     async def run_turn(self, user_text: str) -> AsyncIterator[Event]:
         """Drive one turn, timing user_text -> first SpeechChunk."""
-        started = time.monotonic()
+        # perf_counter, not monotonic: both are monotonic, but on Windows
+        # monotonic is a ~15.6ms-granular tick counter — too coarse for a
+        # sub-second voice budget. perf_counter resolves to ~100ns.
+        started = time.perf_counter()
         first_speech_seen = False
-        async for event in self._run_turn_events(user_text):
-            if not first_speech_seen and isinstance(event, SpeechChunk):
-                self.last_turn_latency_ms = (time.monotonic() - started) * 1000.0
-                first_speech_seen = True
-            yield event
+        try:
+            async for event in self._run_turn_events(user_text):
+                if not first_speech_seen and isinstance(event, SpeechChunk):
+                    self.last_turn_latency_ms = (
+                        time.perf_counter() - started
+                    ) * 1000.0
+                    first_speech_seen = True
+                    if self.agent.last_trace is not None:
+                        self.agent.last_trace.mark_first_speech()
+                yield event
+        finally:
+            # Publish in a finally: a turn cut short by barge-in is exactly the
+            # turn whose breakdown you want to look at.
+            self.last_turn_trace = self.agent.last_trace
 
     async def _run_turn_events(self, user_text: str) -> AsyncIterator[Event]:
         """Run one turn, streaming events. The agent runs in its own task so
@@ -85,6 +114,9 @@ class Session:
             raise RuntimeError(
                 "A turn is already running; call abort_current_turn() first."
             )
+        # A background compaction must never overlap a turn: maybe_summarize
+        # splices history[1:split] on the same list the agent loop iterates.
+        self._cancel_compaction()
 
         queue: asyncio.Queue = asyncio.Queue()
 
@@ -98,10 +130,12 @@ class Session:
                 queue.put_nowait(_TURN_DONE)
 
         self._current = asyncio.create_task(_produce())
+        completed_normally = False
         try:
             while True:
                 item = await queue.get()
                 if item is _TURN_DONE:
+                    completed_normally = True
                     return
                 yield item
         finally:
@@ -110,6 +144,59 @@ class Session:
             if not self._current.done():
                 self._current.cancel()
                 self._repair_history()
+            # Only on the normal path. A cancelled turn has just had its tail
+            # rolled back by _repair_history, and the user is already talking
+            # again — the last thing that moment needs is a background LLM call.
+            if completed_normally:
+                self._schedule_compaction()
+
+    def _schedule_compaction(self) -> None:
+        """Kick off history summarization in the background, at most one.
+
+        Runs during the user's think/read/speak time, which is dead time for
+        us and typically far longer than the call takes.
+        """
+        budget = self.agent.context_budget_tokens
+        # Cheap pure scan: don't spawn a task just to have maybe_summarize
+        # decide there is nothing to do.
+        if not budget or history_tokens(self.history) <= budget:
+            return
+        try:
+            self._compaction = asyncio.create_task(self._compact(budget))
+        except RuntimeError:  # no running loop (generator finalized late)
+            self._compaction = None
+
+    async def _compact(self, budget: int) -> None:
+        try:
+            await maybe_summarize(
+                self.history,
+                self.agent.llm,
+                budget,
+                keep_last=self.agent.context_keep_last,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # never let an optimization kill the session
+            logger.debug("background compaction failed", exc_info=True)
+
+    def _cancel_compaction(self) -> None:
+        """Cancel an in-flight background compaction.
+
+        Cancelling is safe, and is deliberately preferred over awaiting:
+        awaiting would hand the next turn exactly the round trip this change
+        removed. maybe_summarize has a single await — the llm.chat call — and
+        it happens BEFORE any mutation of history; the splice that follows is
+        synchronous. So a cancellation lands with history byte-identical,
+        which is the contract context.py already documents ("Any LLM failure
+        leaves history untouched — compaction is an optimization, never a
+        correctness requirement"). If history really does outgrow the window,
+        Agent.run_turn's ContextLengthExceededError handler compacts
+        synchronously, which is where that cost belongs.
+        """
+        task = self._compaction
+        self._compaction = None
+        if task is not None and not task.done():
+            task.cancel()
 
     def abort_current_turn(self) -> None:
         """Cancel the in-flight turn. Safe to call when idle.
@@ -119,6 +206,7 @@ class Session:
         statement of the agent loop — so nothing further is appended to
         history and late tool results are discarded, per spec.
         """
+        self._cancel_compaction()
         task = self._current
         if task is None or task.done():
             return

@@ -82,10 +82,33 @@ class VoiceSettings(BaseModel):
     chars_per_sec: float = 15.0                # played-text estimator rate
 
 
+class ModelSettings(BaseModel):
+    """Generation knobs sent with every completion (TOML section [model]).
+
+    Both default to None, meaning "send nothing and take the provider's
+    default" — so configuring neither leaves request payloads byte-identical
+    to before this section existed.
+
+    max_tokens is a runaway guard, not the way to keep voice turns short: a
+    hard cap truncates mid-sentence, which sounds worse than a slightly long
+    answer. VOICE_STYLE is what actually keeps spoken turns to a few
+    sentences. Set this if you want a hard ceiling on cost or on a model that
+    ignores the prompt and monologues.
+    """
+
+    max_tokens: int | None = None
+    temperature: float | None = None
+
+
 class ContextSettings(BaseModel):
     """Context-window budgeting (TOML section [context])."""
 
-    budget_tokens: int = 32000       # estimated-token ceiling before compaction
+    # 90k, not the old 32k: most current fast models carry a 128k window, and
+    # at 32k compaction fired constantly — each firing costs a full LLM round
+    # trip to summarize. Raising the ceiling is the cheapest latency win
+    # available, and the ContextLengthExceededError path in Agent.run_turn is
+    # the real safety net for models with a smaller window.
+    budget_tokens: int = 90000       # estimated-token ceiling before compaction
     keep_last_messages: int = 8      # recent messages kept verbatim
 
 
@@ -94,6 +117,7 @@ class Settings(BaseModel):
     deep: ModelSlot | None = None
     providers: dict[str, ProviderConfig] = {}
     voice: VoiceSettings = VoiceSettings()
+    model: ModelSettings = ModelSettings()
     context: ContextSettings = ContextSettings()
     mcp_servers: dict[str, MCPServerConfig] = {}
     # Slot name ("fast"/"deep") -> providers tried IN ORDER after the slot's

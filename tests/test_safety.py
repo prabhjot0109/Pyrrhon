@@ -1,10 +1,11 @@
 """Safety invariants: the agent cannot execute dangerous commands, by construction.
 
 These tests are a fence, not a feature: they pin the properties that make it
-safe to let a voice agent loose on a repo — a frozen tool belt, read-only git
-subcommands behind argv-list subprocess calls, one write tool confined to six
-filenames under docs/design/, and a read-only deep-subagent belt. If a change
-breaks one of these, that change needs a design discussion, not a test edit.
+safe to let a voice agent loose on a repo — a frozen tool belt, an allowlist
+of modules that may spawn a subprocess (argv-list only, never a shell), one
+write tool confined to six filenames under docs/design/, and a read-only
+deep-subagent belt. If a change breaks one of these, that change needs a
+design discussion, not a test edit.
 """
 
 from pathlib import Path
@@ -67,16 +68,64 @@ async def test_write_spec_only_writes_the_six_artifacts(tmp_path):
     assert set(SPEC_FILENAMES) == {"PRD.md", "HLD.md", "LLD.md", "api.md", "database.md", "risks.md"}
 
 
-def test_no_tool_shells_out_except_the_git_allowlist():
-    """Grep-level fence: the only subprocess users in core tools are git.py
-    (argv-list, allowlisted subcommands) and nothing else."""
+# Modules in pyrrhon/core/tools/ permitted to spawn a subprocess. Both use
+# argv-list create_subprocess_exec with cwd pinned to the repo root; neither
+# ever builds a command string. Widened from {git.py} to include repo.py in
+# M10, when grep moved onto ripgrep — the design discussion the docstring
+# above asks for, not a test edit of convenience. Adding to this set requires
+# the same discussion.
+SUBPROCESS_ALLOWLIST = {"git.py", "repo.py"}
+
+
+def test_no_tool_shells_out_except_the_allowlist():
+    """Grep-level fence: only allowlisted modules may touch subprocess, and
+    nothing anywhere may reach a shell."""
     import pyrrhon.core.tools as tools_pkg
 
     offenders = []
     for path in Path(tools_pkg.__path__[0]).glob("*.py"):
         text = path.read_text(encoding="utf-8")
-        if "subprocess" in text and path.name != "git.py":
+        if "subprocess" in text and path.name not in SUBPROCESS_ALLOWLIST:
             offenders.append(path.name)
-        if "shell=True" in text:
-            offenders.append(f"{path.name} (shell=True)")
+        for forbidden in ("shell=True", "create_subprocess_shell", "os.system", "os.popen"):
+            if forbidden in text:
+                offenders.append(f"{path.name} ({forbidden})")
     assert offenders == []
+
+
+def test_grep_argv_is_flag_safe():
+    """The user-supplied pattern must only ever appear after a literal `--`,
+    so a pattern beginning with '-' is data and never an option."""
+    from pyrrhon.core.tools.repo import GrepTool
+
+    tool = GrepTool(Path("."))
+    argv = tool._rg_argv(
+        "/usr/bin/rg",
+        "--color=always",       # a pattern that is also a real rg flag
+        tool._root,
+        glob="*.py",
+        ignore_case=True,
+        context_lines=2,
+    )
+    assert isinstance(argv, list)
+    assert all(isinstance(a, str) for a in argv)
+    assert argv[0] == "/usr/bin/rg"                 # resolved binary, never "rg ..."
+    separator = argv.index("--")
+    assert argv[separator + 1] == "--color=always"  # pattern sits after `--`
+    assert "--color=always" not in argv[:separator]  # and nowhere before it
+
+
+async def test_grep_rejects_paths_outside_the_repo(tmp_path):
+    from pyrrhon.core.tools.repo import GrepTool
+
+    tool = GrepTool(tmp_path)
+    assert "outside the repo" in await tool.run(pattern="x", path="../../etc")
+
+
+async def test_grep_pattern_starting_with_a_dash_is_searched_not_parsed(tmp_path):
+    """End-to-end proof of the argv fence, through whichever backend is live."""
+    from pyrrhon.core.tools.repo import GrepTool
+
+    (tmp_path / "flags.txt").write_text("run with --color=never here\n", encoding="utf-8")
+    result = await GrepTool(tmp_path).run(pattern="--color=never")
+    assert "flags.txt:1:" in result

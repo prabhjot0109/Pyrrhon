@@ -6,6 +6,14 @@ channels construct the Agent with allow_retry=True and get one
 self-correction LLM round-trip; the M3 speech channel constructs it with
 allow_retry=False and unverifiable references are stripped immediately —
 a retry costs a full LLM turnaround and breaks the voice latency budget.
+
+Amended 2026-08-02 (M10): the retry is additionally conditional on the turn
+NOT having streamed. Streaming is now on for every channel, not just voice,
+and once a chunk has been printed or spoken there is no coherent way to
+un-say it — rewriting it would violate "history records what was heard".
+So a streamed turn strips and hedges rather than re-asking the model.
+allow_retry still governs the non-streaming path, which is what test doubles
+and providers without stream() take.
 """
 
 from __future__ import annotations
@@ -14,11 +22,13 @@ import asyncio
 import logging
 import re
 from collections.abc import AsyncIterator
+from contextlib import nullcontext
 from pathlib import Path
 
 from pyrrhon.core.agent.escalate import ThinkDeeperTool
-from pyrrhon.core.agent.guards import DUPLICATE_NOTE, ToolGuard, assistant_tool_message
+from pyrrhon.core.agent.guards import ToolGuard, assistant_tool_message, run_tool_round
 from pyrrhon.core.agent.prompts import ESCALATION_NOTE, TEXT_STYLE, VOICE_STYLE
+from pyrrhon.core.agent.turn_type import classify, needs_tools
 from pyrrhon.core.context import (
     compact_tool_results,
     hard_compact_tool_results,
@@ -37,6 +47,7 @@ from pyrrhon.core.events import (
 )
 from pyrrhon.core.grounding.citations import extract_citations
 from pyrrhon.core.grounding.gate import GroundingGate
+from pyrrhon.core.telemetry import RoundTrace, TurnTrace
 from pyrrhon.core.tools.base import Tool
 
 logger = logging.getLogger("pyrrhon.agent")
@@ -85,11 +96,55 @@ def _pop_sentences(buffer: str) -> tuple[list[str], str]:
     Returns (complete_sentences, remainder). A sentence is "complete" once a
     .!? is followed by whitespace, so the trailing fragment (still being
     generated) stays in the buffer until its terminator streams in.
+
+    This is the VOICE splitter: a sentence is the natural unit to hand TTS.
+    Text channels use _pop_blocks instead — see why there.
     """
     parts = _SENTENCE_BOUNDARY.split(buffer)
     if len(parts) == 1:
         return [], buffer
     return parts[:-1], parts[-1]
+
+
+_FENCE = "```"
+
+
+def _pop_blocks(buffer: str) -> tuple[list[str], str]:
+    """Split completed markdown blocks off the front of a streaming buffer.
+
+    The TEXT splitter. Sentence-splitting is wrong on screen: TEXT_STYLE
+    explicitly invites tables and fenced code blocks, and half a table or half
+    a code fence renders as garbage — the REPL calls Markdown() once per
+    SpeechChunk, so a chunk boundary is a rendering boundary.
+
+    A block ends at a *blank* line (i.e. "\\n\\n", not a single line break)
+    that is not inside a ``` fence. Because that is the only place we ever
+    cut, the buffer always begins outside a fence — which is what makes fence
+    state recomputable from the buffer alone, with no state threaded between
+    calls.
+
+    A blank line also terminates a markdown table and a list, so "blank line
+    outside a fence" is sufficient on its own to avoid splitting either.
+    """
+    lines = buffer.split("\n")
+    blocks: list[str] = []
+    in_fence = False
+    cut = 0  # index just past the last line we flushed
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith(_FENCE):
+            in_fence = not in_fence
+            continue
+        # `i < len(lines) - 1` is load-bearing: the final element is the text
+        # after the last newline and is still being generated, so an empty one
+        # is a trailing "\n", not a paragraph break. Flushing on it would split
+        # a paragraph mid-way on every line ending.
+        if not in_fence and not stripped and i < len(lines) - 1:
+            block = "\n".join(lines[cut:i]).strip()
+            if block:
+                blocks.append(block)
+            cut = i + 1
+    return blocks, "\n".join(lines[cut:])
 
 
 def extract_question(text: str) -> str | None:
@@ -134,7 +189,7 @@ class Agent:
         deep_llm=None,
         deep_tools: list[Tool] | None = None,
         mode: str = "understand",
-        context_budget_tokens: int = 32000,
+        context_budget_tokens: int = 90000,
         context_keep_last: int = 8,
     ):
         self.llm = llm
@@ -152,6 +207,12 @@ class Agent:
         self.mode = mode
         self.context_budget_tokens = context_budget_tokens
         self.context_keep_last = context_keep_last
+        # Diagnostics for the LAST turn only — not conversation state, so this
+        # doesn't violate "Agent owns no conversation state" above. Session
+        # copies it out into `last_turn_trace` once the turn ends.
+        self.last_trace: TurnTrace | None = None
+        self._schema_cache: list[dict] = []
+        self._schema_cache_key: tuple[str, ...] | None = None
         if deep_llm is not None:
             deep_tool = ThinkDeeperTool(deep_llm, tools=deep_tools)
             self.tools[deep_tool.name] = deep_tool
@@ -160,49 +221,87 @@ class Agent:
     async def run_turn(
         self, history: list[dict], user_text: str
     ) -> AsyncIterator[Event]:
+        """Drive one turn. Thin wrapper: the body has many early returns, and
+        the trace has to be closed out on every one of them — including the
+        CancelledError path, since a barge-in mid-turn is still a turn worth
+        measuring."""
+        trace = TurnTrace()
+        self.last_trace = trace
+        try:
+            async for event in self._run_turn(history, user_text, trace):
+                yield event
+        finally:
+            trace.finish()
+
+    async def _run_turn(
+        self, history: list[dict], user_text: str, trace: TurnTrace
+    ) -> AsyncIterator[Event]:
         # The base prompt is channel-agnostic; the delivery style (spoken vs.
         # written) is chosen per turn from the current voice_active flag and
         # refreshed on the leading system message. Refreshing (not just
         # injecting on empty history) lets a live /voice on|off toggle change
         # the style mid-session. maybe_summarize always keeps history[0], so it
         # stays the base system message we can safely rewrite here.
-        style = VOICE_STYLE if self.voice_active else TEXT_STYLE
-        system_content = f"{self.system_prompt}\n{style}"
-        if not history:
-            history.append({"role": "system", "content": system_content})
-        elif history[0].get("role") == "system":
-            history[0]["content"] = system_content
-        else:
-            history.insert(0, {"role": "system", "content": system_content})
-        history.append({"role": "user", "content": user_text})
-        compact_tool_results(history)
-        if self.context_budget_tokens:
-            await maybe_summarize(
-                history,
-                self.llm,
-                self.context_budget_tokens,
-                keep_last=self.context_keep_last,
-            )
-        schemas = [tool.schema() for tool in self.tools.values()]
+        with trace.time_preamble():
+            style = VOICE_STYLE if self.voice_active else TEXT_STYLE
+            system_content = f"{self.system_prompt}\n{style}"
+            if not history:
+                history.append({"role": "system", "content": system_content})
+            elif history[0].get("role") == "system":
+                history[0]["content"] = system_content
+            else:
+                history.insert(0, {"role": "system", "content": system_content})
+            history.append({"role": "user", "content": user_text})
+            # Only the pure, local pass runs before round one. maybe_summarize
+            # is a full LLM round trip and used to sit right here, in front of
+            # the first token of every over-budget turn; Session now runs it
+            # AFTER the turn instead (see Session._schedule_compaction). The
+            # ContextLengthExceededError handler below is the safety net for
+            # the case where skipping it actually overflows the window.
+            compact_tool_results(history)
+            # A greeting or a bare "yes" needs no tools. Withholding the belt
+            # saves ~1.5k tokens of schema on the 25-40% of voice turns that
+            # are acknowledgements, and removes any chance of a spurious tool
+            # round on a turn with nothing to look up.
+            turn_kind = classify(user_text, history)
+            trace.turn_type = turn_kind
+            schemas = self._tool_schemas() if needs_tools(turn_kind) else None
+        # Zero when the belt was withheld — that saving is the point of the
+        # turn-type check, so the trace should show it.
+        trace.schema_chars = sum(len(str(schema)) for schema in schemas or ())
+        trace.prompt_chars = sum(
+            len(m["content"]) for m in history if isinstance(m.get("content"), str)
+        )
         guard = ToolGuard()
         nudged_invalid_tool = False
         context_recoveries = 0
-        # Stream gated sentences to speech (low time-to-first-token) only when
-        # voice drives the turn and the provider supports streaming; text
-        # channels and test doubles keep the whole-reply path unchanged.
-        streaming = self.voice_active and hasattr(self.llm, "stream")
+        # Stream on EVERY channel, not just voice: buffering a whole reply
+        # makes time-to-first-output equal to time-to-last-token, which is the
+        # single biggest source of "it feels slow" on the screen paths too.
+        # The hasattr guard is what keeps this safe — tests/helpers.py:FakeLLM
+        # exposes only chat(), so every test double keeps the whole-reply path.
+        streaming = hasattr(self.llm, "stream")
+        trace.streamed = streaming
 
         for _ in range(self.max_tool_rounds):
             spoken_text: str | None = None
             stream_slot: dict | None = None
+            round_trace = trace.begin_round()
             try:
-                if streaming:
-                    sink: list = []
-                    async for event in self._stream_round(history, schemas, sink):
-                        yield event
-                    reply, spoken_text, stream_slot = sink[0]
-                else:
-                    reply = await self.llm.chat(history, tools=schemas)
+                with round_trace.time_llm():
+                    if streaming:
+                        sink: list = []
+                        async for event in self._stream_round(
+                            history, schemas, sink, round_trace
+                        ):
+                            yield event
+                        reply, spoken_text, stream_slot = sink[0]
+                    else:
+                        reply = await self.llm.chat(history, tools=schemas)
+                        # Non-streaming: the whole reply lands at once, so
+                        # time-to-first-token IS the full round. Recording it
+                        # keeps the metric comparable across both paths.
+                        round_trace.mark_ttft()
             except InvalidToolCallError:
                 # The model called a tool that isn't in our list (a gpt-oss
                 # built-in, typically). Nudge once with the real names and let
@@ -213,7 +312,9 @@ class Agent:
                         {"role": "user", "content": _invalid_tool_nudge(list(self.tools))}
                     )
                     continue
-                async for event in self._emit_final(history, TOOL_RETRY_EXHAUSTED_MESSAGE):
+                async for event in self._emit_final(
+                    history, TOOL_RETRY_EXHAUSTED_MESSAGE, trace, streaming
+                ):
                     yield event
                 return
             except ContextLengthExceededError:
@@ -237,12 +338,16 @@ class Agent:
                     )
                     if elided or summarized:
                         continue
-                async for event in self._emit_final(history, CONTEXT_FULL_MESSAGE):
+                async for event in self._emit_final(
+                    history, CONTEXT_FULL_MESSAGE, trace, streaming
+                ):
                     yield event
                 return
             except Exception as exc:  # provider/network error — never die silently
                 logger.warning("llm.chat failed mid-turn: %s: %s", type(exc).__name__, exc)
-                async for event in self._emit_final(history, PROVIDER_ERROR_MESSAGE):
+                async for event in self._emit_final(
+                    history, PROVIDER_ERROR_MESSAGE, trace, streaming
+                ):
                     yield event
                 return
             if not reply.tool_calls:
@@ -254,12 +359,13 @@ class Agent:
                     answer = spoken_text or reply.text or "(no answer)"
                     if stream_slot is None:
                         history.append({"role": "assistant", "content": answer})
-                    if self.mode == "design":
-                        question = extract_question(answer)
-                        if question is not None:
-                            yield AskUser(question=question)
+                    question = extract_question(answer)
+                    if question is not None:
+                        yield AskUser(question=question)
                     return
-                async for event in self._emit_final(history, reply.text or "(no answer)"):
+                async for event in self._emit_final(
+                    history, reply.text or "(no answer)", trace, streaming
+                ):
                     yield event
                 return
 
@@ -274,29 +380,61 @@ class Agent:
                 # a fabricated citation must never be spoken, even mid-turn.
                 narration = reply.text
                 if self.grounding_gate is not None:
-                    narration = (await self.grounding_gate.check(narration)).speech_text
+                    with round_trace.time_gate():
+                        narration = (
+                            await self.grounding_gate.check(narration)
+                        ).speech_text
                 if narration.strip():
                     yield SpeechChunk(text=narration)
 
             history.append(assistant_tool_message(reply))
+            # Every start before dispatch, every finish after it, both in call
+            # order. Forced anyway — an async generator cannot yield from
+            # inside a task — and free: ToolCallFinished has no render branch
+            # in either channel, so only tests observe the ordering.
             for call in reply.tool_calls:
                 yield ToolCallStarted(name=call.name, args=call.arguments)
-                if guard.is_duplicate(call.name, call.arguments):
-                    result = DUPLICATE_NOTE.format(name=call.name)
-                else:
-                    result = guard.clip(await self._run_tool(call.name, call.arguments))
-                history.append(
-                    {"role": "tool", "tool_call_id": call.id, "content": result}
+            # tool_wall_ms brackets the whole phase while time_tool() records
+            # each call. Now that dispatch is concurrent, wall approaches
+            # max() while total stays sum() — the gap between the two is the
+            # measured win.
+            with round_trace.time_tool_round():
+                results = await run_tool_round(
+                    reply.tool_calls, self._run_tool, guard, round_trace
                 )
-                yield ToolCallFinished(name=call.name, result_preview=result[:PREVIEW_LEN])
+            history.extend(
+                {"role": "tool", "tool_call_id": call.id, "content": result}
+                for call, result in zip(reply.tool_calls, results)
+            )
+            for call, result in zip(reply.tool_calls, results):
+                yield ToolCallFinished(
+                    name=call.name, result_preview=result[:PREVIEW_LEN]
+                )
             if guard.exhausted:
                 break
 
         # Budget exhausted (rounds or output volume): ONE answer-only call so
         # the evidence gathered so far isn't wasted on a canned apology.
-        text = await self._forced_answer(history)
-        async for event in self._emit_final(history, text):
+        with trace.time_forced_answer():
+            text = await self._forced_answer(history)
+        async for event in self._emit_final(history, text, trace, streaming):
             yield event
+
+    def _tool_schemas(self) -> list[dict]:
+        """The tool belt's JSON schemas, rebuilt only when the belt changes.
+
+        Purely a CPU tidy — it is NOT a prompt-cache fix. The rebuilt list
+        serialises byte-identically to the previous one, so providers were
+        already seeing a stable tools payload; this just stops reconstructing
+        ~15 nested dicts on every turn. `self.tools` is mutable (plugins and
+        MCP servers contribute at build time, and design mode will swap
+        write_spec in and out), so the belt's identity is the cache key.
+        """
+        key = tuple(self.tools)
+        if self._schema_cache_key != key:
+            self._schema_cache_key = key
+            self._schema_cache = [tool.schema() for tool in self.tools.values()]
+        return self._schema_cache
 
     async def _forced_answer(self, history: list[dict]) -> str:
         nudge = {
@@ -316,9 +454,24 @@ class Agent:
         return reply.text or BUDGET_MESSAGE
 
     async def _emit_final(
-        self, history: list[dict], text: str
+        self,
+        history: list[dict],
+        text: str,
+        trace: TurnTrace | None = None,
+        streaming: bool = False,
     ) -> AsyncIterator[Event]:
-        """Gate, record, and emit the turn's final text (was inline in run_turn)."""
+        """Gate, record, and emit the turn's final text (was inline in run_turn).
+
+        `trace` is optional so tests and callers that don't care about timing
+        can invoke this directly; timing is then simply not recorded.
+        """
+        gate_round = trace.rounds[-1] if trace and trace.rounds else None
+
+        def time_gate():
+            # A context manager is single-use, so hand out a fresh one per
+            # call; nullcontext keeps the untraced path free of branching.
+            return gate_round.time_gate() if gate_round else nullcontext()
+
         if self.grounding_gate is None:
             # Backward-compatible M0 path: no verification.
             history.append({"role": "assistant", "content": text})
@@ -327,15 +480,22 @@ class Agent:
                 extract_citations, text, self.repo_root
             ):
                 yield citation
-            if self.mode == "design":
-                question = extract_question(text)
-                if question is not None:
-                    yield AskUser(question=question)
+            question = extract_question(text)
+            if question is not None:
+                yield AskUser(question=question)
             return
 
-        gated = await self.grounding_gate.check(text)
-        if gated.unverified and self.allow_retry:
+        with time_gate():
+            gated = await self.grounding_gate.check(text)
+        if gated.unverified and self.allow_retry and not streaming:
             # Exactly ONE self-correction round-trip (screen path).
+            #
+            # `not streaming`: on a streaming turn the model's narration is
+            # already on screen or already spoken, so a turn that reaches here
+            # (forced answer after budget exhaustion, or a provider error) has
+            # made the user wait once already. Spending another full round trip
+            # to polish citations the gate is about to strip anyway is the
+            # wrong trade — strip, hedge, and get out.
             # The draft and the correction never enter `history` —
             # history records what the user was shown, not drafts.
             retry_messages = [
@@ -345,21 +505,25 @@ class Agent:
             ]
             # tools=None: the retry is a single LLM call, never a new
             # tool loop — the model fixes from context or hedges.
-            retry_reply = await self.llm.chat(retry_messages, tools=None)
+            retry_timer = trace.time_retry() if trace else nullcontext()
+            with retry_timer:
+                retry_reply = await self.llm.chat(retry_messages, tools=None)
             text = retry_reply.text or text
             # Gate the retry result WITHOUT further retry.
-            gated = await self.grounding_gate.check(text)
+            with time_gate():
+                gated = await self.grounding_gate.check(text)
 
         history.append({"role": "assistant", "content": gated.speech_text})
         yield SpeechChunk(text=gated.speech_text)
         for citation in gated.citations:
             yield citation
-        if self.mode == "design":
-            question = extract_question(gated.speech_text)
-            if question is not None:
-                yield AskUser(question=question)
+        question = extract_question(gated.speech_text)
+        if question is not None:
+            yield AskUser(question=question)
 
-    async def _gate_sentence(self, sentence: str) -> tuple[str, list]:
+    async def _gate_sentence(
+        self, sentence: str, round_trace: RoundTrace | None = None
+    ) -> tuple[str, list]:
         """Gate one streamed sentence before it is spoken. Returns its
         speakable text (unverifiable citations stripped) and its verified
         citations. Grounding is preserved token-stream or not: nothing reaches
@@ -369,45 +533,76 @@ class Agent:
             return "", []
         if self.grounding_gate is None:
             return stripped, []
-        gated = await self.grounding_gate.check(stripped)
+        timer = round_trace.time_gate() if round_trace else nullcontext()
+        with timer:
+            gated = await self.grounding_gate.check(stripped)
         return gated.speech_text, list(gated.citations)
 
     async def _stream_round(
-        self, history: list[dict], schemas: list, sink: list
+        self,
+        history: list[dict],
+        schemas: list,
+        sink: list,
+        round_trace: RoundTrace | None = None,
     ) -> AsyncIterator[Event]:
         """Stream one LLM round, emitting gated SpeechChunk/Citation events as
-        each sentence completes (low time-to-first-token). Appends
+        each chunk completes (low time-to-first-token). Appends
         (reply, spoken_text, slot) to `sink` so the caller drives the tool loop.
 
-        As sentences are spoken they are also written into a live assistant
+        The chunk unit is channel-dependent: a sentence for voice (the natural
+        unit for TTS), a markdown block for text (the natural unit for
+        Markdown() rendering). Both feed the same _gate_sentence, so grounding
+        is identical either way.
+
+        As chunks are emitted they are also written into a live assistant
         message in `history` (`slot`), so a mid-answer barge-in can truncate
         history to exactly what was heard — parity with the non-streaming path.
         If the round turns out to be a tool call, the caller drops that slot
         (the text was narration, captured in the tool_calls message instead).
-        Voice-only; allow_retry is False under speech_path, so streamed speech
-        is final (no self-correction round)."""
+        Streamed output is final: it is already on screen or already spoken, so
+        there is no coherent way to run the self-correction retry over it."""
+        # Voice joins sentences with a space; text joins blocks with a blank
+        # line, so the recorded history round-trips as the markdown that was
+        # actually rendered.
+        split, joiner = (
+            (_pop_sentences, " ") if self.voice_active else (_pop_blocks, "\n\n")
+        )
         buffer = ""
         spoken: list[str] = []
         slot: dict | None = None
+        # Gating is awaited inline, deliberately. The M10 plan proposed running
+        # it as a task per chunk so the stream could keep draining during
+        # verification; that was measured and reverted. A gate check costs
+        # ~1ms against 50-500ms of token generation between chunks, so the
+        # overlap recovers well under 1% of the gap — and deferring emission
+        # until the next stream event breaks a real invariant: a model that
+        # streams a chunk and then stalls would leave that chunk unspoken and
+        # absent from history, so a barge-in would have nothing to truncate.
+        # Stage 2.4's line-count cache attacks the same 1ms far more
+        # effectively, and without touching this structure.
         async for kind, payload in self.llm.stream(history, tools=schemas):
             if kind == "text":
+                if round_trace is not None:
+                    # First token off the wire — the metric streaming exists to
+                    # move. Idempotent, so calling it per chunk is harmless.
+                    round_trace.mark_ttft()
                 buffer += payload
-                sentences, buffer = _pop_sentences(buffer)
+                chunks, buffer = split(buffer)
             else:  # ("reply", LLMReply): flush the trailing fragment
-                sentences, buffer = ([buffer] if buffer.strip() else []), ""
-            for sentence in sentences:
-                speech, citations = await self._gate_sentence(sentence)
+                chunks, buffer = ([buffer] if buffer.strip() else []), ""
+            for chunk in chunks:
+                speech, citations = await self._gate_sentence(chunk, round_trace)
                 if speech.strip():
                     spoken.append(speech)
                     if slot is None:
                         slot = {"role": "assistant", "content": ""}
                         history.append(slot)
-                    slot["content"] = " ".join(spoken)
+                    slot["content"] = joiner.join(spoken)
                     yield SpeechChunk(text=speech)
                 for citation in citations:
                     yield citation
             if kind == "reply":
-                sink.append((payload, " ".join(spoken).strip(), slot))
+                sink.append((payload, joiner.join(spoken).strip(), slot))
                 return
 
     async def _run_tool(self, name: str, args: dict) -> str:

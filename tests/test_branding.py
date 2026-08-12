@@ -1,7 +1,7 @@
 from rich.text import Text
 
 from pyrrhon import __version__
-from pyrrhon.branding import banner, banner_plain
+from pyrrhon.branding import _FACE, banner, banner_plain
 
 
 def test_banner_names_the_product_and_version():
@@ -31,5 +31,10 @@ def test_wordmark_is_two_toned():
     """The bevel gives lit top surfaces one colour and the body fill another.
     Both must survive to the caller; a caller's own style would flatten them."""
     styles = {str(span.style) for span in banner().spans}
-    assert "#2950da" in styles
+    # Assert the constant, not a literal hex: the face colour is a design knob
+    # (branding.py says "can be changed to any valid Rich colour"), so pinning
+    # the hex here only means the test goes red every time someone tunes it.
+    # What must hold is that BOTH tones survive to the caller.
+    assert _FACE in styles
     assert "bold white" in styles
+    assert _FACE != "bold white"

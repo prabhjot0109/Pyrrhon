@@ -10,7 +10,7 @@ from pyrrhon.core.agent.loop import Agent, _pop_sentences
 from pyrrhon.core.events import SpeechChunk, ToolCallFinished
 from pyrrhon.core.providers.llm import LLMReply, ToolCall
 from pyrrhon.core.tools.base import Tool
-from tests.helpers import FakeLLM
+from tests.helpers import FakeLLM, StreamingFakeLLM
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_repo"
 
@@ -23,21 +23,6 @@ class EchoTool(Tool):
 
     async def run(self, text: str) -> str:
         return f"echo: {text}"
-
-
-class StreamingFakeLLM:
-    """Scripted streaming double: each round is (deltas, LLMReply)."""
-
-    def __init__(self, rounds):
-        self._rounds = list(rounds)
-        self.calls = 0
-
-    async def stream(self, messages, tools=None):
-        self.calls += 1
-        deltas, reply = self._rounds.pop(0)
-        for delta in deltas:
-            yield ("text", delta)
-        yield ("reply", reply)
 
 
 class TagGate:
