@@ -270,7 +270,7 @@ it worse by running `check()` per block on the text path too. Cache keyed on
 `(st_mtime_ns, st_size)` — **both**, since size closes the truncation hole that
 coarse mtime granularity leaves open. Keep `splitlines()` for the count; do not
 switch to `count(b"\n")`, because `splitlines()` also splits on `\r`, `\x0b`,
-`\x0c` and `\x1c-\x1e` and `\x85`/` `/` `, and changing that changes
+`\x0c` and `\x1c-\x1e` and `\x85`/``/``, and changing that changes
 verification semantics. Same for `_sync_build_repo_map` (`ast_index.py:307-343`),
 which re-runs a correlated-subquery-per-symbol-row query and rebuilds the string
 on every call: memoize on the index generation. And replace `ensure_fresh`'s full

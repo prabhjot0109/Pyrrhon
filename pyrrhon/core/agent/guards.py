@@ -106,7 +106,7 @@ async def run_tool_round(calls, runner, guard: ToolGuard, round_trace=None) -> l
     # A duplicate is answered from bookkeeping alone, and deliberately does not
     # pass through clip() — it costs no tool budget, exactly as before.
     results = [DUPLICATE_NOTE.format(name=call.name) for call in calls]
-    for index, raw in zip(live, finished):  # ascending, so clip() stays in call order
+    for index, raw in zip(live, finished, strict=True):  # ascending, so clip() stays in call order
         results[index] = guard.clip(raw)
     return results
 

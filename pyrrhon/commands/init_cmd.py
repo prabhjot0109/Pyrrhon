@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pyrrhon.config.trust import record_grants
+from pyrrhon.core.agent.soul import soul_grant_for
+
 SOUL_TEMPLATE = """\
 # Soul
 
@@ -32,4 +35,10 @@ def init_pyrrhon_dir(repo_root: Path) -> tuple[Path, bool]:
     if soul.exists():
         return soul, False
     soul.write_text(SOUL_TEMPLATE, encoding="utf-8")
+    # Self-grant, for the same reason as the remember tool: /init is the user
+    # asking Pyrrhon to write this file, so prompting them to approve Pyrrhon's
+    # own template would be consent theatre. Bound to the template's contents,
+    # so their first real edit re-prompts — which is correct, since by then the
+    # file says something Pyrrhon did not author.
+    record_grants(repo_root, [soul_grant_for(repo_root, soul, SOUL_TEMPLATE.strip())])
     return soul, True

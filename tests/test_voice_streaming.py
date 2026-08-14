@@ -101,7 +101,8 @@ async def test_streaming_tool_narration_leaves_clean_history():
     ])
     agent = make_agent(llm, tools=[EchoTool()])
     history: list[dict] = []
-    events = [e async for e in agent.run_turn(history, "q")]
+    # Drained for its side effect on `history`, which is what is asserted.
+    [e async for e in agent.run_turn(history, "q")]
     roles = [(m["role"], "tool_calls" in m) for m in history]
     assert roles == [
         ("system", False),

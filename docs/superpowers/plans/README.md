@@ -13,6 +13,37 @@ milestone's interfaces:
 | M5 | `2026-07-03-pyrrhon-m5-mcp-extensibility.md` | MCP client, provider fallbacks, latency |
 | M6 | `2026-07-03-pyrrhon-m6-design-mode.md` | Act 2: design mode, spec writing |
 | M7 | `2026-07-03-pyrrhon-m7-plugin-loader.md` | Plugin loader, example plugin |
+| M8 | `2026-07-06-pyrrhon-m8-context-engineering-subagent-harness.md` | Compaction, tool budgets, import graph, `think_deeper` subagent |
+| M9 | `2026-07-06-pyrrhon-m9-providers-onboarding-polish.md` | DeepSeek/HF/Gemini providers, setup wizard, `/settings`, safety tests |
+| M10 | `2026-08-02-pyrrhon-m10-latency-code-intelligence.md` | Telemetry, streaming everywhere, parallel tools, ripgrep (Stage 3 deferred) |
+| M11 | `2026-08-13-pyrrhon-m11-trust-boundary.md` | Repo-config consent gate, deep settings merge, ruff/mypy/CI |
+| M12 | `2026-08-13-pyrrhon-m12-correctness-sweep.md` | The nine defects from the 2026-08-13 review |
+| M13 | `2026-08-13-pyrrhon-m13-truthful-grounding.md` | Citation provenance, real evals for both acts |
+| M14 | `2026-08-13-pyrrhon-m14-code-intelligence.md` | M10 Stage 3: multi-language index, `symbol_context`, orientation brief |
+
+## M11–M14 execution order (added 2026-08-13)
+
+Design spec: `docs/superpowers/specs/2026-08-13-pyrrhon-m11-m14-hardening-design.md`.
+
+```
+M11 Trust Boundary  ──►  M12 Correctness  ──►  M13 Truthful Grounding  ──►  M14 Code Intelligence
+   (+ ops/CI)
+```
+
+Sequential, and every edge is a real dependency rather than a preference:
+
+- **M11 first** because it is the only live risk — a cloned repo can currently
+  spawn a process and redirect an API key with no consent — and because it
+  changes the shape of `load_settings`, which the other three read. It also
+  brings CI, which should guard the later sweeps rather than follow them.
+- **M12 before M13** because M13 threads an evidence ledger through
+  `Agent.run_turn`, and M12 repairs the streaming and error paths in that same
+  function. Threading new state through a loop with a known history-corruption
+  bug means debugging both at once.
+- **M13 before M14** because M14's new tools must emit ledger evidence in M13's
+  format. Building `symbol_context` first means building it twice.
+
+Rough sizing: M11 1–2 days, M12 1–2 days, M13 2–3 days, M14 3–5 days.
 
 ## How to execute (multi-agent)
 

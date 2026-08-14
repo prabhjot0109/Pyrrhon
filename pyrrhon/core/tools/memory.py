@@ -22,6 +22,8 @@ import datetime
 import re
 from pathlib import Path
 
+from pyrrhon.config.trust import record_grants
+from pyrrhon.core.agent.soul import soul_grant_for
 from pyrrhon.core.tools.base import Tool
 
 MEMORY_HEADER = "# Memory\n"
@@ -76,7 +78,14 @@ class RememberTool(Tool):
             stamp = datetime.date.today().isoformat()
             lines.append(f"- [{stamp}] {fact}")
             lines = _cap_bullets(lines, MAX_MEMORY_BULLETS)
-            memory.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            body = "\n".join(lines) + "\n"
+            memory.write_text(body, encoding="utf-8")
+            # Self-grant: the user just dictated this, so consent is implicit.
+            # Without it the M11 soul gate would hide the user's own memory and
+            # prompt them to approve words they wrote a second ago. The grant is
+            # bound to this file's new contents only — it is not a blanket pass
+            # for the .pyrrhon directory, which a clone also controls.
+            record_grants(self.root, [soul_grant_for(self.root, memory, body.strip())])
         except OSError as exc:
             return f"ERROR: could not write memory.md: {exc}"
         return f"Remembered: {fact}"

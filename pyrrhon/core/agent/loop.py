@@ -34,10 +34,6 @@ from pyrrhon.core.context import (
     hard_compact_tool_results,
     maybe_summarize,
 )
-from pyrrhon.core.providers.llm import (
-    ContextLengthExceededError,
-    InvalidToolCallError,
-)
 from pyrrhon.core.events import (
     AskUser,
     Event,
@@ -47,6 +43,10 @@ from pyrrhon.core.events import (
 )
 from pyrrhon.core.grounding.citations import extract_citations
 from pyrrhon.core.grounding.gate import GroundingGate
+from pyrrhon.core.providers.llm import (
+    ContextLengthExceededError,
+    InvalidToolCallError,
+)
 from pyrrhon.core.telemetry import RoundTrace, TurnTrace
 from pyrrhon.core.tools.base import Tool
 
@@ -404,9 +404,9 @@ class Agent:
                 )
             history.extend(
                 {"role": "tool", "tool_call_id": call.id, "content": result}
-                for call, result in zip(reply.tool_calls, results)
+                for call, result in zip(reply.tool_calls, results, strict=True)
             )
-            for call, result in zip(reply.tool_calls, results):
+            for call, result in zip(reply.tool_calls, results, strict=True):
                 yield ToolCallFinished(
                     name=call.name, result_preview=result[:PREVIEW_LEN]
                 )
@@ -541,7 +541,8 @@ class Agent:
     async def _stream_round(
         self,
         history: list[dict],
-        schemas: list,
+        # None when the belt was withheld for an acknowledgement turn.
+        schemas: list | None,
         sink: list,
         round_trace: RoundTrace | None = None,
     ) -> AsyncIterator[Event]:

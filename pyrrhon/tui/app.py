@@ -8,6 +8,7 @@ from M3 the same loop carries audio (spec: real-time discipline).
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 
 from rich.markdown import Markdown
@@ -17,7 +18,15 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal
 from textual.widgets import Input, RichLog
 
-from pyrrhon.commands import builtin, debug_cmd, mcp_cmd, mode_cmd, plugins_cmd, settings_cmd, voice_cmd  # noqa: F401 — registers commands
+from pyrrhon.commands import (  # noqa: F401 — registers commands
+    builtin,
+    debug_cmd,
+    mcp_cmd,
+    mode_cmd,
+    plugins_cmd,
+    settings_cmd,
+    voice_cmd,
+)
 from pyrrhon.commands.registry import CommandContext, dispatch
 from pyrrhon.config.settings import load_settings
 from pyrrhon.core.agent.loop import Agent
@@ -240,7 +249,7 @@ class PyrrhonApp(App):
             prompt.focus()
 
 
-def run_tui(repo: str, voice: bool = False) -> None:
+def run_tui(repo: str, voice: bool = False, trust_repo: bool = False) -> None:
     """Entry point for the default (TUI) channel."""
     repo_root = Path(repo).resolve()
     if not repo_root.is_dir():
@@ -258,7 +267,9 @@ def run_tui(repo: str, voice: bool = False) -> None:
         # Textual has not taken over the terminal yet — plain input works.
         return input(f"{question} ").strip().lower() in {"y", "yes"}
 
-    plugins, settings = load_channel_plugins(repo_root, _ask)
+    plugins, settings = load_channel_plugins(
+        repo_root, _ask, trust_repo=trust_repo, interactive=sys.stdin.isatty()
+    )
     try:
         # One asyncio.run for MCP lifecycle + Textual: the manager's start()
         # and stop() must be awaited from the same task (anyio rule), so the
@@ -266,7 +277,7 @@ def run_tui(repo: str, voice: bool = False) -> None:
         asyncio.run(_tui_main(repo_root, voice, plugins, settings))
     except MissingAPIKeyError as exc:
         print(exc)
-        raise SystemExit(1)
+        raise SystemExit(1) from exc
 
 
 async def _tui_main(repo_root: Path, voice: bool, plugins, settings) -> None:

@@ -24,7 +24,7 @@ TUI (`pyrrhon/tui/`), and the Pipecat voice channel (`pyrrhon/voice/`:
 mic → Silero VAD → Groq Whisper STT → bridge → OpenAI TTS, with barge-in and
 `TruncateSpeech` history rewriting). The previous entry points (`jarvis.py`,
 `main.py`) have been removed from the working tree — do not treat their git
-history as the intended design. There is no lint config yet.
+history as the intended design.
 
 ## Toolchain and commands
 
@@ -40,6 +40,8 @@ Python >= 3.12 (`.python-version`, `pyproject.toml`).
   `local` extra). `/voice on|off` toggles voice inside the TUI;
   `/debug-history` dumps the session history.
 - Run tests: `uv run pytest` (single test: `uv run pytest path::test_name`)
+- Lint and types (both gated in CI, keep them clean):
+  `uv run ruff check .` and `uv run mypy pyrrhon/core`
 
 - Run the grounding eval (real LLM, needs an API key):
   `uv run python -m pyrrhon.evals.grounding evals/grounding.yaml`
@@ -55,7 +57,7 @@ plugin *code* runs only after one consent prompt per repo, recorded in
 `tests/fixtures/plugins/hello-reviewer/`; plan:
 `docs/superpowers/plans/2026-07-03-pyrrhon-m7-plugin-loader.md`.
 
-There is no lint config yet. Current state: M8 (context engineering + deep
+Current state: M8 (context engineering + deep
 subagent harness) — history compaction and tool-result eviction live inside
 `Agent.run_turn` (`pyrrhon/core/context.py`), per-turn `ToolGuard` budgets
 with a forced final answer (`pyrrhon/core/agent/guards.py`), an import graph
@@ -74,6 +76,18 @@ Piper, per-provider voice defaults, a first-run setup wizard
 Gemini Live speech-to-speech is parked: it would bypass the grounding gate.
 See `docs/superpowers/plans/2026-07-06-pyrrhon-m9-providers-onboarding-polish.md`.
 
+M11 (trust boundary + ops guard rails) — repo-supplied config is partitioned by
+privilege (`pyrrhon/config/settings.py:partition_repo_config`), gated behind
+content-bound grants (`pyrrhon/config/trust.py`) recorded in
+`<repo>/.pyrrhon/trusted`, and surfaced as one startup consent prompt
+(`load_channel_plugins` in `pyrrhon/repl.py`). Repo soul markdown goes through
+the same gate; `/init` and `remember` self-grant what they write. `--trust-repo`
+is the automation escape hatch; no TTY means refuse. Global config tables now
+deep-merge with repo ones instead of being replaced wholesale. Lint and types
+are enforced: `uv run ruff check .` and `uv run mypy pyrrhon/core` are clean and
+gated in CI (`.github/workflows/ci.yml`). See
+`docs/superpowers/plans/2026-08-13-pyrrhon-m11-trust-boundary.md`.
+
 
 ## Design constraints (do not violate without discussion)
 
@@ -83,6 +97,11 @@ See `docs/superpowers/plans/2026-07-06-pyrrhon-m9-providers-onboarding-polish.md
   `file:line` or commit, or the agent must say it doesn't know. Confident
   hallucination spoken aloud is the worst failure mode here; never fabricate a
   path to sound complete.
+- **A cloned repo is untrusted input.** Anything the repo supplies that runs a
+  program, redirects where prompts or keys are sent, or writes into the system
+  prompt requires a content-bound grant in `<repo>/.pyrrhon/trusted`. Adding a
+  new repo-readable config key means deciding which side of that line it sits
+  on — see `pyrrhon/config/settings.py:PRIVILEGED_PATHS`.
 - **Scope discipline.** Only the two acts are in scope. Enterprise onboarding,
   student/interview positioning, a plugin marketplace, and company-standards
   enforcement are explicitly parked in `VISION.md` — do not build them until the

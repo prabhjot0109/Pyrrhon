@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -46,6 +47,15 @@ class GroundedText:
     speech_text: str
     citations: tuple[Citation, ...]
     unverified: tuple[str, ...]
+
+
+def _literal(value: str) -> Callable[[re.Match[str]], str]:
+    """A re.sub replacement that inserts `value` verbatim.
+
+    A function, not a string: a Windows path in a string replacement would be
+    read as regex escapes (\g, \1) and mangle the citation it is repairing.
+    """
+    return lambda _match: value
 
 
 class GroundingGate:
@@ -106,7 +116,7 @@ class GroundingGate:
                 )
                 # A function replacement, not a string: a Windows path in the
                 # replacement would otherwise be read as regex escapes.
-                speech = pattern.sub(lambda _m, r=replacement[ref]: r, speech)
+                speech = pattern.sub(_literal(replacement[ref]), speech)
             speech = re.sub(r"[ \t]{2,}", " ", speech).strip()
             # Narrow the hedge only when every failure was a real file with a
             # bad line. One missing path anywhere means the broader hedge.
@@ -133,9 +143,10 @@ class GroundingGate:
         if len(self._targets) > _CACHE_CEILING:
             self._targets.clear()
             self._line_counts.clear()
-        target = (self._root / rel).resolve()
+        resolved = (self._root / rel).resolve()
+        target: Path | None = resolved
         try:
-            target.relative_to(self._root)
+            resolved.relative_to(self._root)
         except ValueError:
             target = None
         self._targets[rel] = target

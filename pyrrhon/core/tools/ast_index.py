@@ -73,6 +73,14 @@ def _module_name(rel: str) -> str:
     return ".".join(parts)
 
 
+def _node_text(node) -> str:
+    """A capture's source text. tree-sitter types `.text` as bytes | None —
+    None only for a node built without its source buffer, which cannot happen
+    for captures off a freshly parsed tree, so an empty string is the safe
+    degradation rather than an AttributeError mid-index."""
+    return (node.text or b"").decode("utf-8")
+
+
 def _package_of(rel: str) -> str:
     parts = list(Path(rel).with_suffix("").parts)
     if parts:
@@ -251,7 +259,7 @@ class SymbolIndex:
         conn.execute("DELETE FROM refs WHERE file = ?", (rel,))
         conn.execute("DELETE FROM imports WHERE file = ?", (rel,))
         symbols = [
-            (node.text.decode("utf-8"), capture_name.removeprefix("def."), rel,
+            (_node_text(node), capture_name.removeprefix("def."), rel,
              node.start_point.row + 1)
             for capture_name, nodes in QueryCursor(_DEF_QUERY).captures(tree.root_node).items()
             for node in nodes
@@ -262,7 +270,7 @@ class SymbolIndex:
                 symbols,
             )
         refs = [
-            (node.text.decode("utf-8"), rel, node.start_point.row + 1)
+            (_node_text(node), rel, node.start_point.row + 1)
             for nodes in QueryCursor(_REF_QUERY).captures(tree.root_node).values()
             for node in nodes
         ]
@@ -273,7 +281,7 @@ class SymbolIndex:
             (rel, module)
             for nodes in QueryCursor(_IMPORT_QUERY).captures(tree.root_node).values()
             for node in nodes
-            for module in _modules_from_import(node.text.decode("utf-8"), package)
+            for module in _modules_from_import(_node_text(node), package)
         ]
         if imports:
             conn.executemany("INSERT INTO imports (file, module) VALUES (?, ?)", imports)
