@@ -4,7 +4,6 @@ from pathlib import Path
 
 from pyrrhon.core.agent.guards import (
     DUPLICATE_NOTE,
-    MAX_TOOL_RESULT_CHARS,
     ToolGuard,
 )
 from pyrrhon.core.agent.loop import Agent

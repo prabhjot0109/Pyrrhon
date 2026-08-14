@@ -24,8 +24,8 @@ MAX_READ_LINES = 400
 
 # Sentinel distinct from None, which is the legitimate "rg is not installed"
 # answer and must be cached rather than re-probed on every grep.
-_UNRESOLVED = object()
-_RG_PATH: object | str | None = _UNRESOLVED
+_RG_PATH: str | None = None
+_RG_RESOLVED = False
 
 
 def _resolve_inside(root: Path, rel: str) -> Path | None:
@@ -105,9 +105,10 @@ class ReadFileTool(Tool):
 
 def _ripgrep() -> str | None:
     """Absolute path to rg, or None. Resolved once — shutil.which walks PATH."""
-    global _RG_PATH
-    if _RG_PATH is _UNRESOLVED:
+    global _RG_PATH, _RG_RESOLVED
+    if not _RG_RESOLVED:
         _RG_PATH = shutil.which("rg")
+        _RG_RESOLVED = True
     return _RG_PATH
 
 
@@ -192,9 +193,10 @@ class GrepTool(Tool):
             if not resolved.exists():
                 return f"ERROR: '{path}' does not exist."
             target = resolved
-        if _ripgrep():
+        rg = _ripgrep()
+        if rg:
             return await self._search_rg(
-                pattern, target, glob, ignore_case, context_lines
+                rg, pattern, target, glob, ignore_case, context_lines
             )
         return await asyncio.to_thread(
             self._search, pattern, target, glob, ignore_case, context_lines
@@ -247,13 +249,13 @@ class GrepTool(Tool):
 
     async def _search_rg(
         self,
+        rg: str,
         pattern: str,
         target: Path,
         glob: str | None,
         ignore_case: bool,
         context_lines: int,
     ) -> str:
-        rg = _ripgrep()
         argv = self._rg_argv(rg, pattern, target, glob, ignore_case, context_lines)
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -270,6 +272,10 @@ class GrepTool(Tool):
             return await asyncio.to_thread(
                 self._search, pattern, target, glob, ignore_case, context_lines
             )
+
+        # Both pipes were requested above, so neither is None. asyncio types
+        # them Optional because the same call also serves DEVNULL/inherit.
+        assert proc.stdout is not None and proc.stderr is not None
 
         hits: list[str] = []
         matches = 0

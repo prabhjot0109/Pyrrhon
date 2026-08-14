@@ -18,7 +18,15 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal
 from textual.widgets import Input, RichLog
 
-from pyrrhon.commands import builtin, debug_cmd, mcp_cmd, mode_cmd, plugins_cmd, settings_cmd, voice_cmd  # noqa: F401 — registers commands
+from pyrrhon.commands import (  # noqa: F401 — registers commands
+    builtin,
+    debug_cmd,
+    mcp_cmd,
+    mode_cmd,
+    plugins_cmd,
+    settings_cmd,
+    voice_cmd,
+)
 from pyrrhon.commands.registry import CommandContext, dispatch
 from pyrrhon.config.settings import load_settings
 from pyrrhon.core.agent.loop import Agent
@@ -269,7 +277,7 @@ def run_tui(repo: str, voice: bool = False, trust_repo: bool = False) -> None:
         asyncio.run(_tui_main(repo_root, voice, plugins, settings))
     except MissingAPIKeyError as exc:
         print(exc)
-        raise SystemExit(1)
+        raise SystemExit(1) from exc
 
 
 async def _tui_main(repo_root: Path, voice: bool, plugins, settings) -> None:

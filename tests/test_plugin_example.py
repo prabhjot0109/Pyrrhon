@@ -3,7 +3,6 @@ from pathlib import Path
 
 from pyrrhon.core.events import SpeechChunk, ToolCallFinished
 from pyrrhon.core.providers.llm import LLMReply, ToolCall
-from pyrrhon.plugins import PluginManager
 from pyrrhon.repl import build_agent, load_channel_plugins
 from tests.helpers import FakeLLM
 

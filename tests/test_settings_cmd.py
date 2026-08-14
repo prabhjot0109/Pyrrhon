@@ -1,7 +1,6 @@
 """/settings shows what's configured and where keys come from — never key values."""
 
 import os
-from pathlib import Path
 
 import pytest
 

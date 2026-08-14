@@ -27,13 +27,13 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError
 
-from pyrrhon.config.trust import read_trust_file
 from pyrrhon.config.settings import (
     BUILTIN_PROVIDERS,
     MCPServerConfig,
     ProviderConfig,
     Settings,
 )
+from pyrrhon.config.trust import read_trust_file
 from pyrrhon.core.tools.base import Tool
 
 log = logging.getLogger("pyrrhon.plugins")

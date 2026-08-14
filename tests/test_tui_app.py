@@ -8,6 +8,7 @@ from pyrrhon.tui.app import PyrrhonApp
 from pyrrhon.tui.widgets import CodeViewer, StatusBar
 from tests.helpers import FakeLLM
 
+
 def make_app(repo: Path) -> PyrrhonApp:
     # A disposable copy, never tests/fixtures/sample_repo itself: mounting the
     # TUI warms the symbol index, which writes <repo>/.pyrrhon/cache.db.
@@ -17,7 +18,7 @@ def make_app(repo: Path) -> PyrrhonApp:
 
 async def test_layout_panes_status_and_focused_input(sample_repo: Path):
     app = make_app(sample_repo)
-    async with app.run_test(size=(120, 40)) as pilot:
+    async with app.run_test(size=(120, 40)):
         assert app.query_one("#transcript", RichLog) is not None
         assert app.query_one(CodeViewer) is not None
         assert app.query_one("#prompt", Input).has_focus

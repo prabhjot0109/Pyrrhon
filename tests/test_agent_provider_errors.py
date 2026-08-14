@@ -11,7 +11,7 @@ from pyrrhon.core.agent.loop import (
     Agent,
 )
 from pyrrhon.core.events import SpeechChunk
-from pyrrhon.core.providers.llm import InvalidToolCallError, LLMReply, ToolCall
+from pyrrhon.core.providers.llm import InvalidToolCallError, LLMReply
 from pyrrhon.core.tools.repo import ReadFileTool
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_repo"

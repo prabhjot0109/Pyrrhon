@@ -123,6 +123,10 @@ class MCPManager:
                         stdio_client(params)
                     )
                 else:
+                    # MCPServerConfig._exactly_one_transport guarantees a url
+                    # here; command was None, so this branch cannot be reached
+                    # with both unset.
+                    assert cfg.url is not None
                     read, write, _get_session_id = await stack.enter_async_context(
                         streamablehttp_client(cfg.url)
                     )

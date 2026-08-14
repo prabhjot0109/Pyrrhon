@@ -11,7 +11,15 @@ from pathlib import Path
 from rich.console import Console
 from rich.markdown import Markdown
 
-from pyrrhon.commands import builtin, debug_cmd, mcp_cmd, mode_cmd, plugins_cmd, settings_cmd, voice_cmd  # noqa: F401 — registers commands
+from pyrrhon.commands import (  # noqa: F401 — registers commands
+    builtin,
+    debug_cmd,
+    mcp_cmd,
+    mode_cmd,
+    plugins_cmd,
+    settings_cmd,
+    voice_cmd,
+)
 from pyrrhon.commands.registry import CommandContext, dispatch
 from pyrrhon.config.settings import Settings, load_settings
 from pyrrhon.config.trust import Grant, read_trust_file, record_grants
@@ -26,7 +34,6 @@ from pyrrhon.core.providers.llm import (
     create_llm_with_fallbacks,
 )
 from pyrrhon.core.session import Session
-from pyrrhon.core.tools.base import Tool
 from pyrrhon.core.tools.ast_index import (
     DependenciesTool,
     FindReferencesTool,
@@ -34,6 +41,7 @@ from pyrrhon.core.tools.ast_index import (
     RepoMapTool,
     SymbolIndex,
 )
+from pyrrhon.core.tools.base import Tool
 from pyrrhon.core.tools.git import GitBlameTool, GitLogTool, GitShowTool
 from pyrrhon.core.tools.memory import RememberTool
 from pyrrhon.core.tools.repo import GlobTool, GrepTool, ReadFileTool
@@ -330,7 +338,9 @@ def run_repl(repo: str, voice: bool = False, trust_repo: bool = False) -> None:
         asyncio.run(_repl_main(console, repo_root, plugins, settings))
     except MissingAPIKeyError as exc:
         console.print(f"[red]{exc}[/red]")
-        raise SystemExit(1)
+        # `from exc`: the message is already printed, but chaining keeps the
+        # cause honest for anyone who runs this under a debugger.
+        raise SystemExit(1) from exc
     except KeyboardInterrupt:
         pass
 

@@ -82,7 +82,7 @@ class ThinkDeeperTool(Tool):
                 results = await run_tool_round(reply.tool_calls, self._run_tool, guard)
                 messages.extend(
                     {"role": "tool", "tool_call_id": call.id, "content": result}
-                    for call, result in zip(reply.tool_calls, results)
+                    for call, result in zip(reply.tool_calls, results, strict=True)
                 )
                 if guard.exhausted:
                     break

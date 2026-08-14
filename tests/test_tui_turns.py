@@ -9,6 +9,7 @@ from pyrrhon.tui.app import PyrrhonApp
 from pyrrhon.tui.widgets import CodeViewer
 from tests.helpers import FakeLLM
 
+
 def make_app(replies, repo_root: Path) -> tuple[PyrrhonApp, FakeLLM]:
     # repo_root must be disposable (the `sample_repo` fixture or tmp_path):
     # mounting the TUI warms the symbol index, which writes .pyrrhon/cache.db.
