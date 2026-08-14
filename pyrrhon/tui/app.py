@@ -8,6 +8,7 @@ from M3 the same loop carries audio (spec: real-time discipline).
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 
 from rich.markdown import Markdown
@@ -240,7 +241,7 @@ class PyrrhonApp(App):
             prompt.focus()
 
 
-def run_tui(repo: str, voice: bool = False) -> None:
+def run_tui(repo: str, voice: bool = False, trust_repo: bool = False) -> None:
     """Entry point for the default (TUI) channel."""
     repo_root = Path(repo).resolve()
     if not repo_root.is_dir():
@@ -258,7 +259,9 @@ def run_tui(repo: str, voice: bool = False) -> None:
         # Textual has not taken over the terminal yet — plain input works.
         return input(f"{question} ").strip().lower() in {"y", "yes"}
 
-    plugins, settings = load_channel_plugins(repo_root, _ask)
+    plugins, settings = load_channel_plugins(
+        repo_root, _ask, trust_repo=trust_repo, interactive=sys.stdin.isatty()
+    )
     try:
         # One asyncio.run for MCP lifecycle + Textual: the manager's start()
         # and stop() must be awaited from the same task (anyio rule), so the

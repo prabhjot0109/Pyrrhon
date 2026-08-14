@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -13,8 +14,9 @@ from rich.markdown import Markdown
 from pyrrhon.commands import builtin, debug_cmd, mcp_cmd, mode_cmd, plugins_cmd, settings_cmd, voice_cmd  # noqa: F401 — registers commands
 from pyrrhon.commands.registry import CommandContext, dispatch
 from pyrrhon.config.settings import Settings, load_settings
+from pyrrhon.config.trust import Grant, read_trust_file, record_grants
 from pyrrhon.core.agent.loop import Agent
-from pyrrhon.core.agent.soul import build_system_prompt
+from pyrrhon.core.agent.soul import build_system_prompt, pending_soul_grants
 from pyrrhon.core.events import AskUser, Citation, SpeechChunk, ToolCallStarted
 from pyrrhon.core.grounding.gate import GroundingGate
 from pyrrhon.core.mcp import MCPManager
@@ -41,7 +43,6 @@ from pyrrhon.plugins import (
     LoadedPlugin,
     PluginManager,
     merge_plugin_settings,
-    read_trusted,
     record_trusted,
 )
 from pyrrhon.plugins.loader import log as plugin_log
@@ -205,45 +206,86 @@ def build_agent(
     )
 
 
-def resolve_repo_code_consent(
-    repo_root: Path, manager: PluginManager, ask: Callable[[str], bool]
-) -> bool:
-    """Once-per-repo consent gate for executing repo-level plugin code.
+def collect_pending_grants(repo_root: Path) -> list[Grant]:
+    """Everything this repo supplies that is not yet approved at its current
+    contents: privileged config keys plus repo soul markdown."""
+    return [*load_settings(repo_root).pending_grants, *pending_soul_grants(repo_root)]
 
-    Global plugins never pass through here — their code is trusted by
-    installation. Returns the allow_repo_code value to hand to load_all().
+
+def render_consent_prompt(grants: list[Grant], plugin_names: list[str]) -> str:
+    lines = ["This repo wants permissions Pyrrhon does not grant by default:"]
+    lines += [f"  {grant.effect}" for grant in grants]
+    if plugin_names:
+        lines.append(f"  run plugin code: {', '.join(plugin_names)}")
+    lines.append("Allow for this repo? [y/N]")
+    return "\n".join(lines)
+
+
+def _repo_code_allowed(repo_root: Path, manager: PluginManager) -> bool:
+    """Whether load_all() may execute repo-level plugin code.
+
+    All-or-nothing, matching the gate this replaces: load_all takes a single
+    flag for every repo plugin, so "any one is trusted" would run the code of
+    plugins the user never saw. A repo that adds a second plugin after the
+    first was approved must be asked again.
     """
-    pending = manager.repo_code_plugins()
-    if not pending:
+    names = manager.repo_code_plugins()
+    if not names:
         return False  # nothing executable at repo level; the flag is irrelevant
-    trusted = read_trusted(repo_root)
-    untrusted = [name for name in pending if name not in trusted]
-    if not untrusted:
-        return True  # consent already on record in .pyrrhon/trusted
-    names = ", ".join(untrusted)
-    question = (
-        f"This repo ships plugins with executable code ({names}). "
-        "Run their code? [y/N]"
-    )
-    if ask(question):
-        record_trusted(repo_root, untrusted)
-        return True
-    return False
+    trusted = read_trust_file(repo_root).plugins
+    return all(name in trusted for name in names)
 
 
 def load_channel_plugins(
-    repo_root: Path, ask: Callable[[str], bool]
+    repo_root: Path,
+    ask: Callable[[str], bool],
+    trust_repo: bool = False,
+    interactive: bool = True,
+    home: Path | None = None,
 ) -> tuple[list[LoadedPlugin], Settings]:
-    """Channel startup: consent gate → plugins → merged settings.
+    """Channel startup: one consent gate -> plugins -> granted settings.
+
+    Everything a cloned repo can hand us that runs code, redirects egress, or
+    writes the system prompt goes through this single prompt. Refusal is never
+    fatal: Pyrrhon opens with the grants it has. A non-interactive run refuses
+    without prompting, because a blocked stdin would otherwise hang CI and an
+    auto-yes would defeat the gate entirely.
 
     Runs synchronously before the event loop serves turns; both channels
     (REPL and TUI) call this so the trust flow and merge order stay identical.
     """
-    manager = PluginManager(repo_root)
-    allow_repo_code = resolve_repo_code_consent(repo_root, manager, ask)
-    plugins = manager.load_all(allow_repo_code=allow_repo_code)
-    settings = merge_plugin_settings(load_settings(repo_root), plugins)
-    return plugins, settings
+    manager = PluginManager(repo_root, home=home) if home else PluginManager(repo_root)
+    settings = load_settings(repo_root, home)
+    pending = [*settings.pending_grants, *pending_soul_grants(repo_root)]
+    trusted_plugins = read_trust_file(repo_root).plugins
+    plugin_names = [n for n in manager.repo_code_plugins() if n not in trusted_plugins]
+
+    approved = False
+    if pending or plugin_names:
+        total = len(pending) + len(plugin_names)
+        if trust_repo:
+            log.warning(
+                "--trust-repo: granting %d repo permission(s) without prompting", total
+            )
+            approved = True
+        elif not interactive:
+            log.warning(
+                "no interactive terminal: refusing %d repo permission(s); "
+                "pass --trust-repo to grant them",
+                total,
+            )
+        else:
+            approved = ask(render_consent_prompt(pending, plugin_names))
+    if approved:
+        record_grants(repo_root, pending)
+        if plugin_names:
+            record_trusted(repo_root, plugin_names)
+        # Re-read: the grants just recorded are what make the quarantined
+        # values loadable, and settings above was built before they existed.
+        settings = load_settings(repo_root, home)
+
+    plugins = manager.load_all(allow_repo_code=_repo_code_allowed(repo_root, manager))
+    return plugins, merge_plugin_settings(settings, plugins)
 
 
 class ConsoleUI:
@@ -257,7 +299,7 @@ class ConsoleUI:
         self._console.print(text)
 
 
-def run_repl(repo: str, voice: bool = False) -> None:
+def run_repl(repo: str, voice: bool = False, trust_repo: bool = False) -> None:
     console = Console()
     repo_root = Path(repo).resolve()
     if not repo_root.is_dir():
@@ -277,8 +319,11 @@ def run_repl(repo: str, voice: bool = False) -> None:
         return console.input(f"[yellow]{question}[/yellow] ").strip().lower() in {"y", "yes"}
 
     # Consent + plugin loading run before the event loop exists: the merged
-    # settings decide which MCP servers _repl_main starts.
-    plugins, settings = load_channel_plugins(repo_root, _ask)
+    # settings decide which MCP servers _repl_main starts. isatty() decides
+    # whether prompting is even possible — piped stdin must refuse, not hang.
+    plugins, settings = load_channel_plugins(
+        repo_root, _ask, trust_repo=trust_repo, interactive=sys.stdin.isatty()
+    )
     try:
         # Agent construction happens inside the loop: the MCP manager's
         # start()/stop() must run in the same asyncio task (anyio rule).
