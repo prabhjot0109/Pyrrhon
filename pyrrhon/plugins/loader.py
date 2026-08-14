@@ -27,6 +27,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError
 
+from pyrrhon.config.trust import read_trust_file
 from pyrrhon.config.settings import (
     BUILTIN_PROVIDERS,
     MCPServerConfig,
@@ -63,15 +64,14 @@ def parse_manifest(path: Path) -> PluginManifest:
 
 
 def read_trusted(repo_root: Path) -> set[str]:
-    """Plugin names the user has trusted for this repo (<repo>/.pyrrhon/trusted)."""
-    path = repo_root / ".pyrrhon" / "trusted"
-    if not path.is_file():
-        return set()
-    return {
-        line.strip()
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    }
+    """Plugin names the user has trusted for this repo (<repo>/.pyrrhon/trusted).
+
+    Delegates to the M11 parser rather than reading every non-empty line: the
+    same file now also holds `kind:key=digest` grant lines for repo config and
+    soul markdown, and treating one of those as a plugin name would be a quiet
+    lie in whichever direction the caller happens to compare.
+    """
+    return set(read_trust_file(repo_root).plugins)
 
 
 def record_trusted(repo_root: Path, names: Iterable[str]) -> None:
