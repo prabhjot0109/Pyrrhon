@@ -6,9 +6,9 @@ import tomllib
 from pathlib import Path
 
 import tomli_w
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from pyrrhon.config.trust import Grant, TrustFile, digest_value
+from pyrrhon.config.trust import Grant, TrustFile, digest_value, read_trust_file
 
 
 class ModelSlot(BaseModel):
@@ -125,6 +125,13 @@ class Settings(BaseModel):
     # Slot name ("fast"/"deep") -> providers tried IN ORDER after the slot's
     # primary. Entry format: "provider" or "provider/model" (first '/' splits).
     fallbacks: dict[str, list[str]] = {}
+    # Repo-supplied config that has NOT been granted. Never applied; carried
+    # here so the channel can prompt for it exactly once. exclude=True keeps
+    # consent decisions out of model_dump(), which is what /settings and the
+    # wizard write back into config.toml.
+    pending_grants: list[Grant] = Field(default_factory=list, exclude=True)
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     @property
     def deep_slot(self) -> ModelSlot:
@@ -275,13 +282,24 @@ def partition_repo_config(
     return allowed, pending
 
 
-def load_settings(repo_root: Path, home: Path | None = None) -> Settings:
+def load_settings(
+    repo_root: Path, home: Path | None = None, granted: TrustFile | None = None
+) -> Settings:
+    """Global config, deep-merged with the repo's *granted* config.
+
+    `granted` defaults to the repo's own .pyrrhon/trusted file, so every
+    existing call site gets the safe behaviour without changing. Ungranted
+    privileged keys land in `settings.pending_grants` and are never applied —
+    consumers like MCPManager therefore need no knowledge of trust at all.
+    """
     home = home or Path.home()
-    merged = {
-        **_read_toml(home / ".pyrrhon" / "config.toml"),
-        **_read_toml(repo_root / ".pyrrhon.toml"),
-    }
-    return Settings.model_validate(merged)
+    global_data = _read_toml(home / ".pyrrhon" / "config.toml")
+    repo_data = _read_toml(repo_root / ".pyrrhon.toml")
+    trust = granted if granted is not None else read_trust_file(repo_root)
+    allowed, pending = partition_repo_config(repo_data, global_data, trust)
+    settings = Settings.model_validate(deep_merge(global_data, allowed))
+    settings.pending_grants = pending
+    return settings
 
 
 def config_path(home: Path | None = None) -> Path:
