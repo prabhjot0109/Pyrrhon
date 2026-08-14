@@ -4,7 +4,7 @@
 
 **Goal:** Deliver what M10 Stage 3 deferred — a table-driven multi-language symbol index (TypeScript/JavaScript + Go alongside Python), a `symbol_context` tool that answers "how does X work" in one tool round instead of three, a repo map that knows what the conversation is about, an orientation brief for an unfamiliar repo, and the eval that proves the quality claim.
 
-**Architecture:** The blocking item goes first: `ast_index.py` hardcodes `.py` in its file walk and holds one module-level grammar plus three module-level queries, so adding a grammar today means a new grammar that never sees a file. A `LanguageSpec` table (extension → grammar → def/ref/import queries → an import-text parser) replaces all of it, with grammars compiled lazily on first use so a Python-only repo never pays for the Go grammar. On top of that table, `symbol_context` folds `find_symbol` + `find_references` + `list_dependencies` into one call that also returns the source window — which both removes two round trips and shrinks the tool belt by two schemas on every round. The repo map gains a conversation-mention boost, and the orientation brief becomes the first real emitter of `ScreenArtifact`, an event type that has existed unused since M0.
+**Architecture:** The blocking item goes first: `ast_index.py` hardcodes `.py` in its file walk and holds one module-level grammar plus three module-level queries, so adding a grammar today means a new grammar that never sees a file. A `LanguageSpec` table (extension → grammar → def/ref/import queries → an import-text parser) replaces all of it, with grammars compiled lazily on first use so a Python-only repo never pays for the Go grammar. On top of that table, `symbol_context` folds `find_symbol` + `find_references` + `list_dependencies` into one call that also returns the source window, removing two round trips from the commonest Understand-act question. It retires `find_references` from the belt (same `name` argument, superset output) but *not* `list_dependencies`, which is path-addressed and answers questions no symbol name reaches — see Task 4's amendment and Appendix A. The repo map gains a conversation-mention boost, and the orientation brief becomes the first real emitter of `ScreenArtifact`, an event type that has existed unused since M0.
 
 **Tech Stack:** Python ≥3.12, uv, tree-sitter (<0.26, ABI-pinned), tree-sitter-language-pack, SQLite, pytest (asyncio_mode=auto).
 
@@ -779,23 +779,60 @@ git commit -m "feat(tools): symbol_context answers definition, references, and s
 
 ### Task 4: Slim the belt — a reviewed change to the safety fence
 
+> **Amended 2026-08-15, before execution.** The original Task 4 rested on a
+> superset claim that does not hold, and justified itself with a schema saving
+> that measurement shows to be noise. Both are corrected below; the amendment
+> record and its evidence are in **Appendix A**. Execute the steps as written
+> here — the pre-amendment text is superseded, not optional.
+
 **Files:**
-- Modify: `pyrrhon/repl.py:142-192`
+- Modify: `pyrrhon/repl.py:143-192` (the `tools` list at 143, `deep_tools` at 181)
+- Modify: `pyrrhon/core/tools/symbol_context.py` (from Task 3 — truncation rollup)
 - Modify: `tests/test_safety.py:20-27`
-- Test: `tests/test_safety.py`
+- Test: `tests/test_safety.py`, `tests/test_symbol_context.py`
 
 **Interfaces:**
 - Consumes: `SymbolContextTool` from Task 3.
-- Produces: the belt loses `find_references` and `list_dependencies`, gains `symbol_context`. `find_symbol` **stays** — it is the cheapest possible lookup and the model reaches for it on questions that need nothing else.
+- Produces: the belt loses `find_references`, gains `symbol_context`. Belt size
+  is unchanged at 15. `find_symbol` **and** `list_dependencies` both stay.
 
 **This is the design discussion `tests/test_safety.py:1-9` demands, not a test
-edit of convenience.** Recording it here so the reviewer can judge it:
-`symbol_context` returns a strict superset of what `find_references` and
-`list_dependencies` return, from the same read-only index, so removing them
-narrows no capability and widens no permission. The belt drops from 15 tools to
-14 and two schemas leave every tool round. `find_symbol` is kept deliberately:
-folding it in too would force a source-window read on questions that only
-wanted a location, which is a latency regression disguised as simplification.
+edit of convenience.** Recording the reasoning so the reviewer can judge it:
+
+- **`find_references` goes.** It is name-addressed (`{"name": str}`) and
+  `symbol_context` is name-addressed with the identical argument, returning the
+  same `path:line` rows from the same read-only index plus more. Same address
+  space, superset output — removing it narrows no capability and widens no
+  permission. One caveat, fixed in Step 3: `symbol_context` truncates its
+  reference list at `MAX_REFERENCES = 20`, so on a hot symbol it would answer
+  *less* than `find_references` did. A truncation that keeps the full count and
+  a per-file rollup closes that gap in one line of output.
+- **`list_dependencies` stays.** It is *path*-addressed
+  (`{"path": "pyrrhon/core/agent/loop.py"}`); `symbol_context` is
+  *name*-addressed and returns import edges only for the file that happens to
+  define the symbol you named. "What imports `loop.py`?" and "what does
+  `settings.py` rely on?" carry no symbol to hang the query on, and both are
+  first-class Understand-act questions. Different address spaces mean this was
+  never a superset, and dropping it would have deleted a capability while the
+  plan asserted it had not — exactly the kind of unreviewed narrowing the
+  safety-fence docstring exists to catch.
+- **`find_symbol` stays**, as originally reasoned: folding it in would force a
+  source-window read on questions that only wanted a location, a latency
+  regression disguised as simplification.
+
+**What this task is actually worth.** The win is *round trips* — three model
+turnarounds collapse to one on "how does X work", which at voice latency is the
+largest remaining structural cost (Task 3). It is **not** a schema-size win.
+Measured against the installed belt:
+
+| Belt | schema_chars delta/turn |
+|---|---|
+| Task 4 as originally written (drop both, add `symbol_context`) | −188 |
+| Task 4 as amended (drop `find_references` only) | **+219** |
+
+188 chars is ~47 tokens against a ~1.5k-token belt: noise either way. The
+amended belt costs ~55 tokens more per tool-bearing turn and buys back a
+capability. Claim the round trips; do not claim the schema.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -803,7 +840,7 @@ wanted a location, which is a latency regression disguised as simplification.
 # tests/test_safety.py — replace the EXPECTED_BELT constant
 EXPECTED_BELT = {
     "read_file", "grep", "glob", "remember",
-    "find_symbol", "symbol_context", "repo_map",
+    "find_symbol", "symbol_context", "list_dependencies", "repo_map",
     "git_log", "git_blame", "git_show",
     "web_search", "web_fetch", "write_spec", "think_deeper",
 }
@@ -813,13 +850,20 @@ READ_ONLY = EXPECTED_BELT - {"write_spec", "remember", "think_deeper"}
 
 ```python
 # tests/test_safety.py (append)
-def test_symbol_context_replaced_two_tools_and_added_no_capability(agent):
-    """The M14 belt change: symbol_context returns a superset of what
-    find_references and list_dependencies returned, from the same read-only
-    index. Nothing new became reachable."""
+def test_symbol_context_replaced_find_references_and_added_no_capability(agent):
+    """The M14 belt change. symbol_context takes the same `name` argument as
+    find_references and returns its rows plus more, from the same read-only
+    index, so nothing new became reachable and nothing became unanswerable."""
     assert "symbol_context" in agent.tools
     assert "find_references" not in agent.tools
-    assert "list_dependencies" not in agent.tools
+
+
+def test_path_addressed_dependency_questions_survived_the_belt_change(agent):
+    """list_dependencies is path-addressed; symbol_context is name-addressed.
+    'What imports loop.py?' has no symbol to hang on, so this tool is not
+    redundant and must not be dropped as if it were."""
+    assert "list_dependencies" in agent.tools
+    assert "path" in agent.tools["list_dependencies"].parameters["properties"]
 
 
 def test_the_deep_subagent_belt_gained_symbol_context_and_stayed_read_only(agent):
@@ -828,35 +872,103 @@ def test_the_deep_subagent_belt_gained_symbol_context_and_stayed_read_only(agent
     assert set(deep.tools) <= READ_ONLY
 ```
 
+```python
+# tests/test_symbol_context.py (append)
+async def test_truncated_references_still_report_the_full_blast_radius(tmp_path):
+    """Dropping find_references is only safe if truncation stays lossless in
+    aggregate: the full count and the per-file spread must survive the cap."""
+    (tmp_path / "mod.py").write_text("def hot():\n    return 1\n", encoding="utf-8")
+    for i in range(3):
+        (tmp_path / f"c{i}.py").write_text(
+            "from mod import hot\n" + "hot()\n" * 10, encoding="utf-8"
+        )
+    tool = SymbolContextTool(SymbolIndex(tmp_path), tmp_path)
+
+    result = await tool.run(name="hot")
+
+    assert "30 site(s)" in result           # full count, not the shown count
+    assert "…and 10 more" in result         # the cap is declared, not silent
+    assert result.count("c0.py") >= 1       # every calling file still named
+    assert "c1.py" in result and "c2.py" in result
+```
+
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_safety.py -v`
-Expected: FAIL — `symbol_context` is not in the belt.
+Run: `uv run pytest tests/test_safety.py tests/test_symbol_context.py -v`
+Expected: FAIL — `symbol_context` is not in the belt; the rollup assertion fails
+because Task 3's truncation drops the tail silently.
 
-- [ ] **Step 3: Write minimal implementation**
+- [ ] **Step 3: Write the implementation**
 
-In `pyrrhon/repl.py`'s `build_agent`, replace `FindReferencesTool(index)` and
-`DependenciesTool(index)` with `SymbolContextTool(index, repo_root)` in **both**
-the main belt and `deep_tools`. Leave the tool classes in place — they are still
-useful for direct programmatic use and their tests still pass.
+First, make the truncation lossless in aggregate. In
+`pyrrhon/core/tools/symbol_context.py`, replace the reference block from Task 3:
+
+```python
+        references = await self.index.find_references(name)
+        sections += ["", f"called from ({len(references)} site(s)):"]
+        sections += [f"  {f}:{n}" for f, n in references[:MAX_REFERENCES]] or ["  (none)"]
+        if len(references) > MAX_REFERENCES:
+            # Blast radius has to survive the cap. Listing 200 call sites would
+            # blow the context budget, but "…and 180 more in a.py (140), b.py
+            # (40)" is the part "what breaks if I change this?" actually needs,
+            # and it costs one line. Without it, dropping find_references from
+            # the belt would silently cap that answer at 20 — which is what
+            # made the original superset claim false in output as well as in
+            # addressing.
+            spread = Counter(f for f, _ in references[MAX_REFERENCES:])
+            listed = ", ".join(f"{f} ({n})" for f, n in spread.most_common())
+            sections.append(f"  …and {len(references) - MAX_REFERENCES} more in {listed}")
+```
+
+(add `from collections import Counter` to the module imports)
+
+Then, in `pyrrhon/repl.py`'s `build_agent`, replace `FindReferencesTool(index)`
+with `SymbolContextTool(index, repo_root)` in **both** the main belt (line 143)
+and `deep_tools` (line 181). **Leave `DependenciesTool(index)` in both** — see
+the reasoning above. Leave the `FindReferencesTool` class in place; it is still
+useful programmatically and its own tests still pass.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_safety.py tests/test_build_agent_m4.py -v`
+Run: `uv run pytest tests/test_safety.py tests/test_symbol_context.py tests/test_build_agent_m4.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Confirm the schema saving is real**
+- [ ] **Step 5: Pin the belt's schema budget deterministically**
 
-Run a single turn and read `trace.schema_chars` via `/debug-history` or the
-latency harness `--json`; it must be measurably smaller than the M13 baseline.
-Record the number in the commit body — "slimmer belt" is a claim, and this
-codebase measures its claims.
+The original step said to read `trace.schema_chars` "via `/debug-history` or the
+latency harness `--json`" and compare against "the M13 baseline". Neither exists:
+`/debug-history` dumps history messages and never touches the trace
+(`pyrrhon/commands/debug_cmd.py:1-35`), and no milestone ever recorded a
+`schema_chars` baseline. `schema_chars` is also a *static* property of the belt
+(`pyrrhon/core/agent/loop.py:271`) — it needs no live turn at all, so pin it in a
+test where a regression is caught by CI rather than by a developer remembering
+to look:
+
+```python
+# tests/test_safety.py (append)
+# The belt's schema rides on every tool-bearing turn, so its size is a latency
+# property, not a style one. Pinned as a ceiling rather than an equality: a
+# tool description may be reworded, but the belt may not quietly double.
+MAX_BELT_SCHEMA_CHARS = 7000
+
+
+def test_the_belt_schema_stays_within_its_latency_budget(agent):
+    total = sum(len(str(s)) for s in agent._tool_schemas())
+    assert total <= MAX_BELT_SCHEMA_CHARS, (
+        f"belt schema grew to {total} chars; every tool-bearing turn pays this"
+    )
+```
+
+Run it, then set `MAX_BELT_SCHEMA_CHARS` to the measured value rounded up to the
+next 500, and record the exact measured number in the commit body. Claim the
+round trips in the message, not a schema saving — the amended belt is ~219 chars
+*larger* per turn and that is the right trade.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add pyrrhon/repl.py tests/test_safety.py
-git commit -m "refactor(belt): symbol_context replaces find_references and list_dependencies"
+git add pyrrhon/repl.py pyrrhon/core/tools/symbol_context.py tests/test_safety.py tests/test_symbol_context.py
+git commit -m "refactor(belt): symbol_context replaces find_references, one round instead of three"
 ```
 
 ---
@@ -1277,6 +1389,65 @@ Before opening the PR:
       "where is X defined and what calls it" for a symbol you have verified by hand
 - [ ] `uv run python -m pyrrhon.evals.grounding evals/understanding.yaml --repo .` — recorded
 - [ ] `uv run python -m pyrrhon.evals.grounding evals/grounding.yaml --repo .` — no regression from M13
-- [ ] Latency `--compare` against the M13 baseline: the belt is smaller and
-      round counts should be lower, so `first_speech_ms` should IMPROVE. If it
-      did not, say so in the record rather than quietly shipping.
+- [ ] Latency `--compare` against the M13 baseline: round counts should be
+      lower on "how does X work" questions, so `first_speech_ms` should IMPROVE
+      — from the round trips, not from belt size, which grows slightly (see
+      Appendix A). If it did not improve, say so in the record rather than
+      quietly shipping.
+
+---
+
+## Appendix A — Task 4 amendment record (2026-08-15)
+
+Written before execution, after checking Task 4's claims against the code it
+proposes to change. Three findings, all in Task 4; Tasks 1–3 and 5–7 stand.
+
+**A1. The superset claim was false for `list_dependencies`.** Task 4 justified
+removing two tools by asserting `symbol_context` "returns a strict superset" of
+both. It does for `find_references` — same `{"name": str}` argument, same rows,
+plus more. It does not for `list_dependencies`, whose parameter is
+`{"path": str}` (`pyrrhon/core/tools/ast_index.py:429-435`) while
+`symbol_context` accepts only a symbol name and reports import edges solely for
+that symbol's defining file (Task 3, `symbol_context.py` `run()`). "What imports
+`pyrrhon/core/agent/loop.py`?" has no symbol to pass. Removing it would have
+deleted a capability under a written claim that nothing was narrowed — landing a
+`tests/test_safety.py` fence edit on a false premise, which is precisely what
+that file's docstring forbids. **Resolution:** `list_dependencies` stays; the
+belt goes 15 → 15, not 15 → 14.
+
+**A2. The truncation made even the `find_references` superset false in output.**
+Task 3 caps the reference list at `MAX_REFERENCES = 20`. On a hot symbol,
+`find_references` returned all 200 call sites and `symbol_context` would return
+20 — so retiring it would silently cap "what breaks if I change this?", the
+question the tool exists for. **Resolution:** Task 4 Step 3 now amends Task 3's
+truncation to keep the full count and add a per-file rollup of the tail. The cap
+stays (the context budget is real); the blast radius survives it at file
+granularity for one line of output.
+
+**A3. The performance justification was unmeasured, and backwards.** Step 5 told
+the executor to read `trace.schema_chars` "via `/debug-history` or the latency
+harness `--json`" and compare with "the M13 baseline". `/debug-history` dumps
+history rows and never touches the trace (`pyrrhon/commands/debug_cmd.py:1-35`);
+no milestone ever recorded a `schema_chars` baseline. Measured directly against
+the installed belt, using the schema shape from `loop.py:271`:
+
+```
+    symbol_context:   595 chars      (as specified in Task 3)
+ list_dependencies:   407 chars
+   find_references:   376 chars
+       find_symbol:   343 chars
+          repo_map:   313 chars
+
+Task 4 as written  (drop both, add symbol_context):  -188 chars/turn
+Task 4 as amended  (drop find_references only):      +219 chars/turn
+```
+
+188 chars is ~47 tokens against a belt of ~1.5k — noise, not a result, and not
+worth a manual measurement ritual. `schema_chars` is a static property of the
+belt anyway, so it belongs in a CI-checked ceiling rather than a one-off reading.
+**Resolution:** Step 5 became a deterministic budget test; the milestone claims
+the round-trip collapse (3 → 1) and explicitly does not claim a schema saving.
+
+**Not changed:** `find_symbol` stays, for Task 4's original and correct reason —
+folding it in forces a source-window read on questions that only wanted a
+location.
