@@ -213,10 +213,27 @@ class Agent:
         self.last_trace: TurnTrace | None = None
         self._schema_cache: list[dict] = []
         self._schema_cache_key: tuple[str, ...] | None = None
+        # Owned, not just consumed. Channels swap the deep slot at runtime
+        # (/model deep, /settings llm deep), and the tool captured the model at
+        # construction — so before this the swap silently did nothing while the
+        # command replied "active". Keep the attribute and the live tool in
+        # lockstep through one seam.
+        self.deep_llm = deep_llm
         if deep_llm is not None:
             deep_tool = ThinkDeeperTool(deep_llm, tools=deep_tools)
             self.tools[deep_tool.name] = deep_tool
             self.system_prompt = system_prompt + "\n" + ESCALATION_NOTE
+
+    def set_deep_llm(self, llm) -> None:
+        """Point escalation at a different model for the rest of the session.
+
+        No-op on the tool when think_deeper was never registered (no deep key
+        at build time) — the attribute still updates so the status bar is honest.
+        """
+        self.deep_llm = llm
+        tool = self.tools.get("think_deeper")
+        if tool is not None:
+            tool.deep_llm = llm
 
     async def run_turn(
         self, history: list[dict], user_text: str

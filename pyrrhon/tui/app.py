@@ -168,7 +168,7 @@ class PyrrhonApp(App):
 
     def refresh_status(self) -> None:
         fast = getattr(self.agent.llm, "model", "unknown")
-        deep = getattr(getattr(self.agent, "deep_llm", None), "model", "= fast")
+        deep = getattr(self.agent.deep_llm, "model", "= fast")
         self.query_one(StatusBar).show_status(
             self.session.mode, fast, deep, latency_ms=self.session.last_turn_latency_ms
         )

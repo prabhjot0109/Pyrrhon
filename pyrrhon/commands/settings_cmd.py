@@ -86,7 +86,7 @@ def _set_llm(ctx: CommandContext, rest: list[str]) -> str:
         if slot_name == "fast":
             agent.llm = llm
         else:
-            agent.deep_llm = llm
+            agent.set_deep_llm(llm)
     return f"{slot_name} slot is now {provider}/{model} — saved and active."
 
 
