@@ -75,6 +75,11 @@ CONTEXT_FULL_MESSAGE = (
     "Start a fresh question, or switch to a larger-context model in /settings."
 )
 
+# A streamed answer the round failed part-way through. Distinct from
+# session.INTERRUPTED_MARKER, which means the USER cut in: this one means the
+# model stopped, and the difference matters when reading a transcript back.
+CUT_OFF_MARKER = " …[cut off by a provider error]"
+
 # How many times one turn may recover from a context-window overflow by
 # compacting and retrying before it gives up honestly.
 MAX_CONTEXT_RECOVERIES = 2
@@ -224,6 +229,31 @@ class Agent:
             self.tools[deep_tool.name] = deep_tool
             self.system_prompt = system_prompt + "\n" + ESCALATION_NOTE
 
+    def _seal_partial(self, history: list[dict], live: list[dict]) -> bool:
+        """Close out a streamed answer whose round then failed.
+
+        The text is already on screen or already spoken, so it stays in
+        history — that is the "history records what was heard" rule, and it is
+        what a barge-in would truncate against. What must NOT happen is
+        appending a second assistant message beside it: two adjacent assistant
+        turns are rejected by strict chat endpoints, and an error line recorded
+        as an answer is a lie about what was said.
+
+        Returns True when a partial was sealed, telling the caller to emit its
+        message WITHOUT recording it.
+        """
+        if not live:
+            return False
+        slot = live[0]
+        if not history or history[-1] is not slot:
+            return False
+        content = slot.get("content")
+        if isinstance(content, str) and content.strip():
+            slot["content"] = content + CUT_OFF_MARKER
+            return True
+        history.pop()  # nothing was ever spoken — drop the empty slot
+        return False
+
     def set_deep_llm(self, llm) -> None:
         """Point escalation at a different model for the rest of the session.
 
@@ -303,13 +333,18 @@ class Agent:
         for _ in range(self.max_tool_rounds):
             spoken_text: str | None = None
             stream_slot: dict | None = None
+            # Holds the live assistant slot the moment _stream_round creates it,
+            # so a round that dies mid-stream can still find what was spoken.
+            # The sink only reports it on a *successful* round, which is exactly
+            # the case that never needed sealing.
+            live: list[dict] = []
             round_trace = trace.begin_round()
             try:
                 with round_trace.time_llm():
                     if streaming:
                         sink: list = []
                         async for event in self._stream_round(
-                            history, schemas, sink, round_trace
+                            history, schemas, sink, round_trace, live
                         ):
                             yield event
                         reply, spoken_text, stream_slot = sink[0]
@@ -325,12 +360,15 @@ class Agent:
                 # it retry; if it happens again, degrade honestly.
                 if not nudged_invalid_tool:
                     nudged_invalid_tool = True
+                    self._seal_partial(history, live)
                     history.append(
                         {"role": "user", "content": _invalid_tool_nudge(list(self.tools))}
                     )
                     continue
+                sealed = self._seal_partial(history, live)
                 async for event in self._emit_final(
-                    history, TOOL_RETRY_EXHAUSTED_MESSAGE, trace, streaming
+                    history, TOOL_RETRY_EXHAUSTED_MESSAGE, trace, streaming,
+                    record=not sealed,
                 ):
                     yield event
                 return
@@ -338,6 +376,12 @@ class Agent:
                 # The prompt outgrew the model's window mid-turn. Reclaim room
                 # (elide bulky tool results + summarize old turns) and retry the
                 # same round instead of stranding the turn. Codex's pattern.
+                #
+                # Sealing BEFORE the retry is deliberate: the retry re-runs the
+                # round with a fresh slot, so the previous partial must already
+                # be a closed message or the next stream appends into a history
+                # that ends with a live, still-growing one.
+                sealed = self._seal_partial(history, live)
                 if context_recoveries < MAX_CONTEXT_RECOVERIES:
                     context_recoveries += 1
                     elided = hard_compact_tool_results(history)
@@ -356,14 +400,15 @@ class Agent:
                     if elided or summarized:
                         continue
                 async for event in self._emit_final(
-                    history, CONTEXT_FULL_MESSAGE, trace, streaming
+                    history, CONTEXT_FULL_MESSAGE, trace, streaming, record=not sealed
                 ):
                     yield event
                 return
             except Exception as exc:  # provider/network error — never die silently
                 logger.warning("llm.chat failed mid-turn: %s: %s", type(exc).__name__, exc)
+                sealed = self._seal_partial(history, live)
                 async for event in self._emit_final(
-                    history, PROVIDER_ERROR_MESSAGE, trace, streaming
+                    history, PROVIDER_ERROR_MESSAGE, trace, streaming, record=not sealed
                 ):
                     yield event
                 return
@@ -476,11 +521,16 @@ class Agent:
         text: str,
         trace: TurnTrace | None = None,
         streaming: bool = False,
+        record: bool = True,
     ) -> AsyncIterator[Event]:
         """Gate, record, and emit the turn's final text (was inline in run_turn).
 
         `trace` is optional so tests and callers that don't care about timing
         can invoke this directly; timing is then simply not recorded.
+
+        `record=False` is used when a streamed partial answer has already been
+        sealed into history: the message still reaches the user, but it is not
+        recorded as a separate assistant turn.
         """
         gate_round = trace.rounds[-1] if trace and trace.rounds else None
 
@@ -491,7 +541,8 @@ class Agent:
 
         if self.grounding_gate is None:
             # Backward-compatible M0 path: no verification.
-            history.append({"role": "assistant", "content": text})
+            if record:
+                history.append({"role": "assistant", "content": text})
             yield SpeechChunk(text=text)
             for citation in await asyncio.to_thread(
                 extract_citations, text, self.repo_root
@@ -530,7 +581,8 @@ class Agent:
             with time_gate():
                 gated = await self.grounding_gate.check(text)
 
-        history.append({"role": "assistant", "content": gated.speech_text})
+        if record:
+            history.append({"role": "assistant", "content": gated.speech_text})
         yield SpeechChunk(text=gated.speech_text)
         for citation in gated.citations:
             yield citation
@@ -562,6 +614,10 @@ class Agent:
         schemas: list | None,
         sink: list,
         round_trace: RoundTrace | None = None,
+        # Receives the live assistant slot as soon as it exists. `sink` only
+        # reports it once the round completes, so a round that raises mid-stream
+        # would otherwise leave the caller unable to find what was already said.
+        live: list[dict] | None = None,
     ) -> AsyncIterator[Event]:
         """Stream one LLM round, emitting gated SpeechChunk/Citation events as
         each chunk completes (low time-to-first-token). Appends
@@ -615,6 +671,8 @@ class Agent:
                     if slot is None:
                         slot = {"role": "assistant", "content": ""}
                         history.append(slot)
+                        if live is not None:
+                            live.append(slot)
                     slot["content"] = joiner.join(spoken)
                     yield SpeechChunk(text=speech)
                 for citation in citations:
