@@ -299,7 +299,15 @@ class GrepTool(Tool):
         except (ValueError, asyncio.LimitOverrunError):
             capped = True  # pathological line length: keep what we have
         finally:
-            if proc.returncode is None:
+            # Kill ONLY when we walked away early; then reap unconditionally.
+            # returncode stays None until the child is waited on, so the old
+            # `if returncode is None: kill()` fired on a clean EOF too and the
+            # branch below read a kill signal as a failed search.
+            if capped and proc.returncode is None:
+                proc.kill()
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=5.0)
+            except TimeoutError:
                 proc.kill()
                 await proc.wait()
 
