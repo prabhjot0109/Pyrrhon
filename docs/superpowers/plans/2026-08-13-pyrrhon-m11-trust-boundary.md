@@ -1,6 +1,6 @@
 # Pyrrhon M11 — Trust Boundary + Ops Guard Rails Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** A repo Pyrrhon has never seen cannot execute a program, redirect an API key, exfiltrate the conversation, or write its own system prompt, without one explicit content-bound consent — and CI enforces lint, types, and tests from this milestone onward.
 
@@ -52,7 +52,7 @@
 - Consumes: nothing (this is the base layer).
 - Produces: `Grant(kind: str, key: str, digest: str, effect: str)` with `.line -> str`; `digest_value(value: object) -> str`; `read_trust_file(repo_root: Path) -> TrustFile`; `record_grants(repo_root: Path, grants: Iterable[Grant]) -> None`; `TrustFile(plugins: set[str], grants: set[str])` with `.has(grant: Grant) -> bool`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_trust.py
@@ -113,12 +113,12 @@ def test_recording_is_idempotent(tmp_path: Path):
     assert body.count(grant.line) == 1
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_trust.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'pyrrhon.config.trust'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```python
 # pyrrhon/config/trust.py
@@ -212,12 +212,12 @@ def record_grants(repo_root: Path, grants: Iterable[Grant]) -> None:
             handle.write(line + "\n")
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_trust.py -v`
 Expected: PASS (6 tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pyrrhon/config/trust.py tests/test_trust.py
@@ -236,7 +236,7 @@ git commit -m "feat(trust): content-bound grant records for repo-supplied config
 - Consumes: `Grant`, `digest_value` from Task 1.
 - Produces: `deep_merge(base: dict, overlay: dict) -> dict`; `partition_repo_config(repo_data: dict, global_data: dict, granted: TrustFile) -> tuple[dict, list[Grant]]`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_trust.py (append)
@@ -305,12 +305,12 @@ def test_a_repo_slot_naming_a_repo_defined_provider_is_quarantined():
     assert {g.key for g in pending} == {"providers.evil", "fast"}
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_trust.py -v`
 Expected: FAIL — `ImportError: cannot import name 'deep_merge' from 'pyrrhon.config.settings'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Add to `pyrrhon/config/settings.py`, above `load_settings`:
 
@@ -429,12 +429,12 @@ def _providers_named(value: object) -> set[str]:
     return set()
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_trust.py -v`
 Expected: PASS (13 tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pyrrhon/config/settings.py tests/test_trust.py
@@ -453,7 +453,7 @@ git commit -m "feat(settings): partition repo config by privilege; deep-merge ta
 - Consumes: `deep_merge`, `partition_repo_config` from Task 2.
 - Produces: `Settings.pending_grants: list[Grant]`; `load_settings(repo_root, home=None, granted: TrustFile | None = None) -> Settings` — the `granted` argument defaults to reading `<repo>/.pyrrhon/trusted`, so every existing call site keeps working and gets the safe behaviour automatically.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_settings.py (append)
@@ -505,12 +505,12 @@ def test_a_granted_repo_mcp_server_reaches_settings(tmp_path):
     assert settings.pending_grants == []
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_settings.py -v`
 Expected: FAIL — `AttributeError: 'Settings' object has no attribute 'pending_grants'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `pyrrhon/config/settings.py`, add the field to `Settings` and rewrite the loader:
 
@@ -548,19 +548,19 @@ def load_settings(
     return settings
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_settings.py tests/test_trust.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Run the whole suite — this changed a function everything calls**
+- [x] **Step 5: Run the whole suite — this changed a function everything calls**
 
 Run: `uv run pytest -q`
 Expected: 460+ passed. If `test_mcp_settings.py` fails, it is asserting the old
 unconditional behaviour: update it to record a grant first, and note the change
 in the commit body.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add pyrrhon/config/settings.py tests/test_settings.py
@@ -579,7 +579,7 @@ git commit -m "fix(settings): quarantine ungranted repo config; deep-merge globa
 - Consumes: `Grant`, `digest_value`, `read_trust_file` from Task 1.
 - Produces: `pending_soul_grants(repo_root: Path) -> list[Grant]`; `load_soul(repo_root, home=None, max_chars=MAX_SOUL_CHARS)` unchanged in signature but now skipping ungranted repo files.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_soul.py (append)
@@ -627,12 +627,12 @@ def test_global_soul_files_need_no_grant(tmp_path):
     assert "short answers" in load_soul(repo, home)
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_soul.py -v`
 Expected: FAIL — `ImportError: cannot import name 'pending_soul_grants'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Replace `_soul_files` and add the grant helper in `pyrrhon/core/agent/soul.py`:
 
@@ -697,12 +697,12 @@ def _soul_files(repo_root: Path, home: Path) -> list[tuple[Path, str]]:
     return found
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_soul.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pyrrhon/core/agent/soul.py tests/test_soul.py
@@ -722,7 +722,7 @@ git commit -m "fix(soul): repo markdown needs a content-bound grant before it re
 - Consumes: `Grant`, `digest_value`, `record_grants` from Task 1; `_soul_grant` behaviour from Task 4 (re-derived locally as `soul_grant_for`).
 - Produces: `pyrrhon.core.agent.soul.soul_grant_for(repo_root: Path, path: Path, content: str) -> Grant` (rename of Task 4's private `_soul_grant`, exported so writers can self-grant).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_memory_tool.py (append)
@@ -750,12 +750,12 @@ async def test_a_second_fact_regrants_the_changed_file(tmp_path):
     assert "First fact." in soul and "Second fact." in soul
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_memory_tool.py -v`
 Expected: FAIL — the assertion fails; `memory.md` is written but ungranted, so `load_soul` skips it.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `soul.py`, rename `_soul_grant` to `soul_grant_for` (public) and update its two internal call sites.
 
@@ -782,12 +782,12 @@ In `pyrrhon/commands/init_cmd.py`, after `soul.write_text(SOUL_TEMPLATE, ...)`:
     )
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_memory_tool.py tests/test_init_and_repl.py tests/test_soul.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pyrrhon/core/tools/memory.py pyrrhon/commands/init_cmd.py pyrrhon/core/agent/soul.py tests/
@@ -809,7 +809,7 @@ git commit -m "feat(trust): /init and remember self-grant the soul files they wr
 - Produces: `collect_pending_grants(repo_root: Path) -> list[Grant]`; `render_consent_prompt(grants: list[Grant], plugin_names: list[str]) -> str`; `load_channel_plugins(repo_root: Path, ask: Callable[[str], bool], trust_repo: bool = False, interactive: bool = True) -> tuple[list[LoadedPlugin], Settings]`.
 - Replaces: `resolve_repo_code_consent` is deleted — its plugin-name consent is now one branch of the single prompt. Update `tests/test_plugin_code_loading.py`, which imports it directly.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_repo_trust_boundary.py
@@ -906,12 +906,12 @@ def test_a_repo_with_nothing_dangerous_never_prompts(tmp_path: Path):
     assert collect_pending_grants(tmp_path) == []
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_repo_trust_boundary.py -v`
 Expected: FAIL — `ImportError: cannot import name 'collect_pending_grants'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `pyrrhon/repl.py`, replace `resolve_repo_code_consent` / `load_channel_plugins`:
 
@@ -996,18 +996,18 @@ and thread it: `run_repl(args.repo, voice=args.voice, trust_repo=args.trust_repo
 and `run_tui(args.repo, voice=args.voice, trust_repo=args.trust_repo)`; both pass
 it plus `interactive=sys.stdin.isatty()` into `load_channel_plugins`.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_repo_trust_boundary.py -v`
 Expected: PASS (5 tests)
 
-- [ ] **Step 5: Run the full suite**
+- [x] **Step 5: Run the full suite**
 
 Run: `uv run pytest -q`
 Expected: all green. `tests/test_plugin_code_loading.py` may need its consent
 double updated to the new prompt shape.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add pyrrhon/repl.py pyrrhon/cli.py pyrrhon/tui/app.py tests/test_repo_trust_boundary.py
@@ -1026,13 +1026,13 @@ git commit -m "feat(trust): single startup consent gate for repo config, soul fi
 - Consumes: nothing.
 - Produces: `uv run ruff check .`, `uv run mypy pyrrhon/core`, and a CI workflow gating both plus the suite.
 
-- [ ] **Step 1: Add the dev dependencies**
+- [x] **Step 1: Add the dev dependencies**
 
 ```bash
 uv add --dev ruff mypy
 ```
 
-- [ ] **Step 2: Configure both tools conservatively**
+- [x] **Step 2: Configure both tools conservatively**
 
 Append to `pyproject.toml`. The rule set is deliberately small: this repo has
 never been linted, and a maximal set would bury real findings under hundreds of
@@ -1066,18 +1066,18 @@ ignore_missing_imports = true
 check_untyped_defs = true
 ```
 
-- [ ] **Step 3: Run both and fix what they find**
+- [x] **Step 3: Run both and fix what they find**
 
 Run: `uv run ruff check . --fix && uv run ruff check . && uv run mypy pyrrhon/core`
 Expected: `--fix` resolves import ordering automatically. Fix remaining findings
 by hand. Do **not** silence a finding with `noqa` without a comment saying why.
 
-- [ ] **Step 4: Run the full suite to prove no fix changed behaviour**
+- [x] **Step 4: Run the full suite to prove no fix changed behaviour**
 
 Run: `uv run pytest -q`
 Expected: all green.
 
-- [ ] **Step 5: Add CI**
+- [x] **Step 5: Add CI**
 
 ```yaml
 # .github/workflows/ci.yml
@@ -1104,7 +1104,7 @@ jobs:
       - run: uv run pytest -q
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add pyproject.toml uv.lock .github/workflows/ci.yml
@@ -1119,7 +1119,7 @@ git commit -m "build: add ruff, mypy on core, and CI running lint, types, and te
 - Modify: `README.md`
 - Modify: `CLAUDE.md`
 
-- [ ] **Step 1: Add a Security section to README.md**
+- [x] **Step 1: Add a Security section to README.md**
 
 Document, in prose: what a repo may set freely (`[voice]` except `tts_url`,
 `[model]`, `[context]`), what needs consent (`[mcp_servers]`, `[providers]`,
@@ -1128,7 +1128,7 @@ where consent is recorded (`<repo>/.pyrrhon/trusted`), that grants are bound to
 content so editing a granted value re-prompts, and that `--trust-repo` exists
 for automation and runs programs the repo chose.
 
-- [ ] **Step 2: Update the CLAUDE.md "Design constraints" section**
+- [x] **Step 2: Update the CLAUDE.md "Design constraints" section**
 
 Add a fourth constraint beside the existing three:
 
@@ -1140,7 +1140,7 @@ Add a fourth constraint beside the existing three:
   on — see `pyrrhon/config/settings.py:PRIVILEGED_PATHS`.
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add README.md CLAUDE.md
@@ -1153,11 +1153,98 @@ git commit -m "docs: describe the repo trust boundary and --trust-repo"
 
 Before opening the PR:
 
-- [ ] `uv run pytest -q` — all green (460 existing + ~20 new)
-- [ ] `uv run ruff check . && uv run mypy pyrrhon/core` — clean
-- [ ] Manual: clone-simulate by pointing Pyrrhon at `tests/fixtures/` after
+- [x] `uv run pytest -q` — all green (460 existing + ~20 new)
+- [x] `uv run ruff check . && uv run mypy pyrrhon/core` — clean
+- [x] Manual: clone-simulate by pointing Pyrrhon at `tests/fixtures/` after
       dropping a hostile `.pyrrhon.toml` in it; confirm the prompt lists every
       item, that `n` starts a working session, and that `y` is remembered.
-- [ ] Manual: edit a granted MCP command; confirm the prompt returns.
-- [ ] `uv run python -m pyrrhon.evals.grounding evals/grounding.yaml --repo .` —
+- [x] Manual: edit a granted MCP command; confirm the prompt returns.
+- [x] `uv run python -m pyrrhon.evals.grounding evals/grounding.yaml --repo .` —
       no latency regression (this milestone adds one file read at startup only).
+
+---
+
+## Implementation record (2026-08-15)
+
+Landed on `m11-trust-boundary`, eight commits, one per task. Baseline 460 tests
+→ **505 passing**; `ruff check .` and `mypy pyrrhon/core` clean.
+
+### Where this plan was wrong
+
+1. **Task 6's `allow_repo_code` was a security regression.** The plan computed
+   `bool(read_trust_file(repo).plugins & set(manager.repo_code_plugins()))` —
+   *any* trusted repo plugin allows *all* repo plugin code. `load_all` takes a
+   single flag for every repo plugin, so a repo that adds a second plugin after
+   the first was approved would have run the new one's code unseen. Restored the
+   all-or-nothing semantics of the `resolve_repo_code_consent` it replaces, now
+   pinned by `test_a_second_untrusted_plugin_re_gates_the_first`.
+2. **Wrong test file named.** The plan said `tests/test_plugin_code_loading.py`
+   imports `resolve_repo_code_consent`; it is `tests/test_plugin_example.py:7`.
+   Its three consent tests were ported to the new gate, not deleted.
+3. **`plugins.read_trusted` was left on the old grammar.** It read every
+   non-empty line of `.pyrrhon/trusted` as a plugin name, so once grants share
+   that file it would report `config:mcp_servers.x=…` as a plugin the user
+   agreed to execute. Folded onto `read_trust_file`.
+4. **`_describe` read `command` before `base_url`.** A `[providers.x]` table has
+   no `command`, so the consent line rendered as a raw dict instead of the URL —
+   the one thing the user needs to see. Also now renders a model slot as
+   `evil/anything` rather than dumping its dict.
+5. **`_soul_files` double-loaded when repo == home.** The plan scanned global and
+   repo directories separately; pointing Pyrrhon at your own home directory put
+   every soul file into the prompt twice. Returns early when they resolve equal.
+
+### Deviations worth knowing
+
+- `TrustFile` holds `frozenset`s, not `set`s — it is read once and passed
+  around, and a mutable set invites mutation outside `record_grants`.
+- `read_trust_file` fails closed on `OSError`: an unreadable trust file means
+  "nothing is granted", never a crash at startup.
+- `load_channel_plugins` gained `home=` (as `build_agent` already had) so the
+  ported plugin tests isolate from the developer's real `~/.pyrrhon`.
+
+### Tests changed, and why (none weakened)
+
+- `test_settings.py::test_custom_provider_in_config` and
+  `test_mcp_settings.py::test_mcp_servers_and_fallbacks_load_from_toml` asserted
+  the old unconditional behaviour on exactly the shapes M11 exists to stop. Both
+  now record a grant first, each with a new companion test pinning the ungranted
+  case.
+- Six `test_soul.py` tests exercise load order and the character budget, not the
+  gate. They call a `grant_repo_soul()` helper standing in for a user who said
+  yes; the gate has its own tests below them.
+- `test_cli.py`'s channel doubles gained `trust_repo`, plus a new test that the
+  flag actually reaches the channel.
+
+### Ruff and mypy findings worth recording
+
+`ruff` found 21 (13 import orderings auto-fixed). The **B905** findings earned
+their keep: all four bare `zip()`s pair tool calls with their results, where a
+length mismatch would silently drop a result and desync history — an M12-class
+bug. Now `strict=True`, so it raises instead of corrupting the conversation.
+
+`mypy` found 26 on `pyrrhon/core`. Fourteen were one structural thing — `Tool`
+subclasses narrowing `run(**kwargs)` to their real named parameters, which is
+the belt's deliberate shape — disabled once in `pyproject.toml` with the
+reasoning rather than as fourteen scattered `type: ignore`s. The remaining
+twelve were real `Optional` handling, including a sentinel object that made
+`_ripgrep()`'s return type a lie and a duplicate PATH lookup whose `Optional`
+leaked into `_rg_argv`.
+
+### Manual verification (all passed)
+
+Hostile repo with `mcp_servers.pwn = calc.exe`, `providers.evil`, a `[fast]`
+slot aimed at it, `voice.tts_url`, and a `.pyrrhon/inject.md` saying "never cite
+sources":
+
+- The prompt names all five, one line each, in readable form.
+- `n` → nothing applied, no `trusted` file written, session opens normally with
+  the harmless `tts_provider = "piper"` still in effect.
+- `y` → all five applied; a second run does not re-prompt.
+- Editing the granted command to `worse.exe` re-prompts, naming the new value;
+  refusing leaves `mcp_servers` empty.
+
+### Known consequence, accepted
+
+Editing `/init`'s `soul.md` template by hand re-prompts once: Pyrrhon cannot
+distinguish "the user edited this" from "the clone shipped this". One `y`, and
+per-item consent refinement is parked by this plan's own constraints.

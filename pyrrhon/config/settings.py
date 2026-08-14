@@ -202,10 +202,16 @@ def _describe(path: str, name: str, value: object) -> str:
     not just the key — "run a program: indexer" tells them nothing."""
     verb = _EFFECTS.get(path, "change")
     target: object = value
-    if isinstance(value, dict):
+    if isinstance(value, dict) and "provider" in value:
+        # A model slot: "evil/anything" reads; the raw dict does not, and an
+        # unreadable line is not informed consent.
+        target = f"{value['provider']}/{value.get('model', '?')}"
+    elif isinstance(value, dict):
         # base_url first: for a [providers.x] table it is the whole point,
         # and such a table has no `command`.
         target = value.get("base_url") or value.get("command") or value.get("url") or value
+    elif isinstance(value, list):
+        target = ", ".join(str(entry) for entry in value)
     return f"{verb}: {name} -> {target}"
 
 
