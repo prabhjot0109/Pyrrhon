@@ -16,9 +16,12 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from pyrrhon.config.trust import Grant, digest_value, read_trust_file
 from pyrrhon.core.agent.prompts import SYSTEM_PROMPT
 
 log = logging.getLogger("pyrrhon.soul")
+
+SOUL_EFFECT = "write into Pyrrhon's own instructions"
 
 # ~1.5k tokens. Enough for real standing context, small enough that it is not
 # the dominant line item in a per-round prompt.
@@ -46,19 +49,65 @@ def _keep_newest(content: str, budget: int) -> str:
     return "\n".join([_TRIM_NOTE, *kept])
 
 
-def _soul_files(repo_root: Path, home: Path) -> list[tuple[Path, str]]:
-    """Every readable soul file, in load order (global first, repo last)."""
+def _readable_markdown(directory: Path) -> list[tuple[Path, str]]:
+    """Non-empty .md files in one directory, sorted, skipping unreadable ones
+    (an unreadable file must never break startup)."""
+    if not directory.is_dir():
+        return []
     found: list[tuple[Path, str]] = []
-    for directory in (home / ".pyrrhon", repo_root / ".pyrrhon"):
-        if not directory.is_dir():
+    for md in sorted(directory.glob("*.md")):
+        try:
+            content = md.read_text(encoding="utf-8").strip()
+        except OSError:
             continue
-        for md in sorted(directory.glob("*.md")):
-            try:
-                content = md.read_text(encoding="utf-8").strip()
-            except OSError:  # unreadable file must not break startup
-                continue
-            if content:
-                found.append((md, content))
+        if content:
+            found.append((md, content))
+    return found
+
+
+def soul_grant_for(repo_root: Path, path: Path, content: str) -> Grant:
+    """The grant that would authorise this repo file at these exact contents.
+
+    Public because the two places Pyrrhon *writes* a soul file — /init and the
+    remember tool — self-grant what they just wrote. Without that, the gate
+    below would hide the user's own memory and prompt them to approve words
+    they dictated a second ago.
+    """
+    rel = path.relative_to(repo_root).as_posix()
+    return Grant("soul", rel, digest_value(content), f"{SOUL_EFFECT}: {rel}")
+
+
+def pending_soul_grants(repo_root: Path) -> list[Grant]:
+    """Repo soul files the user has not approved at their current contents."""
+    trust = read_trust_file(repo_root)
+    return [
+        grant
+        for md, content in _readable_markdown(repo_root / ".pyrrhon")
+        if not trust.has(grant := soul_grant_for(repo_root, md, content))
+    ]
+
+
+def _soul_files(repo_root: Path, home: Path) -> list[tuple[Path, str]]:
+    """Every soul file we are allowed to load, in order (global first).
+
+    Global files are the user's own and load unconditionally. Repo files
+    arrived with the clone, so each needs a grant bound to its current
+    contents — editing a granted file revokes the grant, which is the point.
+    A repo .md is not passive data: it is appended to the system prompt, so an
+    ungated one can instruct Pyrrhon to stop citing sources, defeating the
+    grounding gate from inside the prompt rather than around it.
+    """
+    found = _readable_markdown(home / ".pyrrhon")
+    repo_dir = repo_root / ".pyrrhon"
+    if repo_dir.resolve() == (home / ".pyrrhon").resolve():
+        # Pyrrhon pointed at the user's own home: the "repo" files ARE the
+        # global ones, already loaded above. Scanning again would duplicate
+        # every file into the prompt.
+        return found
+    trust = read_trust_file(repo_root)
+    for md, content in _readable_markdown(repo_dir):
+        if trust.has(soul_grant_for(repo_root, md, content)):
+            found.append((md, content))
     return found
 
 
