@@ -259,10 +259,15 @@ class Agent:
 
         No-op on the tool when think_deeper was never registered (no deep key
         at build time) — the attribute still updates so the status bar is honest.
+
+        The isinstance check is not just for the type checker: a plugin may
+        contribute a tool under this name, and rewriting an attribute on
+        something that is not the escalation tool would be a silent no-op at
+        best.
         """
         self.deep_llm = llm
         tool = self.tools.get("think_deeper")
-        if tool is not None:
+        if isinstance(tool, ThinkDeeperTool):
             tool.deep_llm = llm
 
     async def run_turn(

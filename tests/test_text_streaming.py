@@ -227,7 +227,8 @@ async def test_no_two_assistant_messages_are_ever_adjacent(tmp_path):
     async for _event in agent.run_turn(history, "explain the loop"):
         pass
     roles = [m["role"] for m in history]
-    assert not any(a == b == "assistant" for a, b in zip(roles, roles[1:]))
+    # Pairwise, so the tail is deliberately ragged: strict= would be wrong here.
+    assert not any(a == b == "assistant" for a, b in zip(roles, roles[1:], strict=False))
 
 
 async def test_the_user_still_hears_the_error(tmp_path):
