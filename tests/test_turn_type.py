@@ -20,6 +20,7 @@ from pyrrhon.core.agent.loop import Agent
 from pyrrhon.core.agent.turn_type import (
     AMBIGUOUS_FOLLOWUP,
     REPO_QUESTION,
+    RESUME,
     SOCIAL,
     classify,
     needs_tools,
@@ -115,3 +116,30 @@ async def test_a_repo_question_sends_the_full_belt():
     assert llm.calls[0]["tools"]  # non-empty
     assert agent.last_trace.turn_type == "repo_question"
     assert agent.last_trace.schema_chars > 0
+
+
+ASKED = [{"role": "assistant", "content": "Want me to trace what calls the tool loop?"}]
+
+
+@pytest.mark.parametrize(
+    "reply",
+    ["yes", "yes please", "yeah do that", "sure, walk me through it", "do it",
+     "go ahead", "yep", "okay do that"],
+)
+def test_accepting_our_own_offer_gets_the_tool_belt(reply):
+    assert classify(reply, ASKED) == RESUME
+    assert needs_tools(RESUME) is True
+
+
+@pytest.mark.parametrize("reply", ["no", "no thanks", "not now", "thanks", "nah"])
+def test_declining_our_own_offer_stays_social(reply):
+    assert classify(reply, ASKED) == SOCIAL
+    assert needs_tools(SOCIAL) is False
+
+
+def test_a_bare_yes_with_no_question_behind_it_is_still_social():
+    assert classify("yes", [{"role": "assistant", "content": "That is the loop."}]) == SOCIAL
+
+
+def test_a_greeting_is_social_even_after_a_question():
+    assert classify("hi", ASKED) == SOCIAL
