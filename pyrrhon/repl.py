@@ -36,7 +36,6 @@ from pyrrhon.core.providers.llm import (
 from pyrrhon.core.session import Session
 from pyrrhon.core.tools.ast_index import (
     DependenciesTool,
-    FindReferencesTool,
     FindSymbolTool,
     RepoMapTool,
     SymbolIndex,
@@ -46,6 +45,7 @@ from pyrrhon.core.tools.git import GitBlameTool, GitLogTool, GitShowTool
 from pyrrhon.core.tools.memory import RememberTool
 from pyrrhon.core.tools.repo import GlobTool, GrepTool, ReadFileTool
 from pyrrhon.core.tools.spec_writer import WriteSpecTool
+from pyrrhon.core.tools.symbol_context import SymbolContextTool
 from pyrrhon.core.tools.web import WebFetchTool, WebSearchTool
 from pyrrhon.plugins import (
     LoadedPlugin,
@@ -155,7 +155,12 @@ def build_agent(
         GlobTool(repo_root),
         RememberTool(repo_root),
         FindSymbolTool(index),
-        FindReferencesTool(index),
+        # symbol_context replaces find_references (M14): same `name` argument,
+        # same rows from the same read-only index, plus the source window and
+        # import edges — one round trip where "how does X work" took three.
+        # list_dependencies STAYS: it is path-addressed, and "what imports
+        # loop.py?" carries no symbol to hang a name-addressed query on.
+        SymbolContextTool(index, repo_root),
         DependenciesTool(index),
         RepoMapTool(index),
         GitLogTool(repo_root),
@@ -192,7 +197,7 @@ def build_agent(
         GrepTool(repo_root),
         GlobTool(repo_root),
         FindSymbolTool(index),
-        FindReferencesTool(index),
+        SymbolContextTool(index, repo_root),
         DependenciesTool(index),
         RepoMapTool(index),
         GitLogTool(repo_root),

@@ -13,6 +13,7 @@ harvests it. Changing the shape here would silently break all three.
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 from pathlib import Path
 
 from pyrrhon.core.tools.ast_index import SymbolIndex
@@ -69,7 +70,16 @@ class SymbolContextTool(Tool):
         sections += ["", f"called from ({len(references)} site(s)):"]
         sections += [f"  {f}:{n}" for f, n in references[:MAX_REFERENCES]] or ["  (none)"]
         if len(references) > MAX_REFERENCES:
-            sections.append(f"  …and {len(references) - MAX_REFERENCES} more")
+            # Blast radius has to survive the cap. Listing 200 call sites would
+            # blow the context budget, but "…and 180 more in a.py (140), b.py
+            # (40)" is the part "what breaks if I change this?" actually needs,
+            # and it costs one line. Without it, dropping find_references from
+            # the belt would silently cap that answer at 20 — which is what
+            # made the original superset claim false in output as well as in
+            # addressing.
+            spread = Counter(f for f, _ in references[MAX_REFERENCES:])
+            listed = ", ".join(f"{f} ({n})" for f, n in spread.most_common())
+            sections.append(f"  …and {len(references) - MAX_REFERENCES} more in {listed}")
 
         imports = await self.index.list_imports(file)
         importers = await self.index.find_importers(file)

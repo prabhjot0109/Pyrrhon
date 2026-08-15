@@ -69,6 +69,26 @@ async def test_the_window_does_not_license_lines_it_never_showed(tmp_path):
     assert not ledger.observed("big.py", 150)
 
 
+async def test_truncated_references_still_report_the_full_blast_radius(tmp_path):
+    """Dropping find_references is only safe if truncation stays lossless in
+    aggregate: the full count and the per-file spread must survive the cap."""
+    (tmp_path / "mod.py").write_text("def hot():\n    return 1\n", encoding="utf-8")
+    for i in range(3):
+        (tmp_path / f"c{i}.py").write_text(
+            "from mod import hot\n" + "hot()\n" * 10, encoding="utf-8"
+        )
+    tool = SymbolContextTool(SymbolIndex(tmp_path), tmp_path)
+
+    result = await tool.run(name="hot")
+
+    assert "30 site(s)" in result           # full count, not the shown count
+    assert result.count("c0.py") >= 1       # the listed sites are still listed
+    # The cap is declared AND localised. Asserting merely that "c2.py" appears
+    # somewhere would pass on the `imported by:` line below, which says nothing
+    # about call sites — the rollup has to name where the hidden ones are.
+    assert "…and 10 more in c2.py (10)" in result
+
+
 async def test_it_works_on_a_non_python_language(tmp_path, polyglot_repo):
     """The whole point of Tasks 1-2: this tool is language-agnostic because the
     index is."""

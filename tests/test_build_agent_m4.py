@@ -7,7 +7,9 @@ FIXTURE = Path(__file__).parent / "fixtures" / "sample_repo"
 
 M4_TOOLS = {
     "find_symbol",
-    "find_references",
+    # M14: symbol_context took find_references' place on the belt — same
+    # `name` argument, its rows plus the source window. See tests/test_safety.py.
+    "symbol_context",
     "git_log",
     "git_blame",
     "git_show",
@@ -53,7 +55,7 @@ def test_build_agent_gives_the_subagent_a_read_only_belt(tmp_path, monkeypatch):
     )
     deep_tool = agent.tools["think_deeper"]
     belt = set(deep_tool.tools)
-    assert {"read_file", "grep", "glob", "find_symbol", "find_references",
+    assert {"read_file", "grep", "glob", "find_symbol", "symbol_context",
             "list_dependencies", "repo_map", "git_log", "git_blame",
             "git_show"} <= belt
     assert "think_deeper" not in belt
