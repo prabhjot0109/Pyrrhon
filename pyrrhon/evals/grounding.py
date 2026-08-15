@@ -6,7 +6,12 @@ both:
 
     - question: "Where is greet defined?"
       expected:
-        - {file: utils/helpers.py, line: 1}      # must cite this (line +/-5)
+        - {file: utils/helpers.py, line: 1}      # must cite EVERY one (+/-5)
+
+    - question: "Where are tool calls dispatched?"
+      expected_any:
+        - {file: guards.py, line: 62}            # at least one of these
+        - {file: guards.py, line: 104}
 
     - question: "How does the retry backoff work?"
       must_not_cite: "*"                          # must admit ignorance
@@ -14,6 +19,11 @@ both:
 `must_not_cite` closes a real gap: VISION.md's third success criterion is
 that Pyrrhon admits ignorance rather than inventing, and nothing measured it.
 `"*"` means "no citations at all"; a list of paths means "not these".
+
+`expected` requires every entry (amended 2026-08-15, M13 — it used to pass on
+the first match, so a case demanding three citations passed on one).
+`expected_any` is the deliberate version of that looser rule, for questions
+where several locations are equally correct answers.
 
 The runner also collects a TurnTrace per case, so the same command doubles as
 the latency harness — the numbers behind M10's stage-by-stage claims:
@@ -143,22 +153,26 @@ def _check(citations: list[Citation], case: dict) -> str | None:
 
     expected = case.get("expected")
     if expected:
-        if not _matches(citations, expected):
-            want = ", ".join(f"{e['file']}:{e['line']}" for e in expected)
-            return f"expected {want}, got {got}"
+        missing = [e for e in expected if not _one_matches(citations, e)]
+        if missing:
+            want = ", ".join(f"{e['file']}:{e['line']}" for e in missing)
+            return f"missing expected citation(s) {want}, got {got}"
+
+    any_of = case.get("expected_any")
+    if any_of and not any(_one_matches(citations, e) for e in any_of):
+        want = " | ".join(f"{e['file']}:{e['line']}" for e in any_of)
+        return f"expected one of {want}, got {got}"
     return None
 
 
-def _matches(citations: list[Citation], expected: list[dict]) -> bool:
-    for exp in expected:
-        for citation in citations:
-            if (
-                citation.file == exp["file"]
-                and citation.line is not None
-                and abs(citation.line - exp["line"]) <= LINE_TOLERANCE
-            ):
-                return True
-    return False
+def _one_matches(citations: list[Citation], exp: dict) -> bool:
+    """Did any citation land on `exp`'s file within LINE_TOLERANCE lines?"""
+    return any(
+        citation.file == exp["file"]
+        and citation.line is not None
+        and abs(citation.line - exp["line"]) <= LINE_TOLERANCE
+        for citation in citations
+    )
 
 
 def compare_latency(

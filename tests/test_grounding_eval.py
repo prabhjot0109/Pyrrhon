@@ -1,9 +1,10 @@
 from pathlib import Path
 
 from pyrrhon.core.agent.loop import Agent
+from pyrrhon.core.events import Citation
 from pyrrhon.core.grounding.gate import GroundingGate
 from pyrrhon.core.providers.llm import LLMReply
-from pyrrhon.evals.grounding import EvalReport, run_eval
+from pyrrhon.evals.grounding import EvalReport, _check, run_eval
 from tests.helpers import FakeLLM
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_repo"
@@ -134,6 +135,81 @@ def test_must_not_cite_can_name_specific_files(tmp_path: Path):
     report = run_eval(yaml_path, factory)
     assert report.passed == 0
     assert "must not cite" in report.failures[0]
+
+
+# -- `expected` means EVERY citation, not "at least one" (M13) --------------
+#
+# _matches returned True on the first expected entry that matched, so a case
+# listing three required citations passed when the model produced one. Every
+# case in evals/grounding.yaml lists exactly one, which is why nobody noticed —
+# and which is why fixing it now costs nothing.
+
+
+def test_expected_requires_every_listed_citation():
+    case = {
+        "question": "q",
+        "expected": [
+            {"file": "app.py", "line": 5},
+            {"file": "utils/helpers.py", "line": 1},
+        ],
+    }
+    partial = [Citation(file="app.py", line=5)]
+    assert _check(partial, case) is not None  # one of two is a FAIL
+
+    complete = [Citation(file="app.py", line=5), Citation(file="utils/helpers.py", line=1)]
+    assert _check(complete, case) is None
+
+
+def test_a_partial_failure_names_only_what_was_missing():
+    case = {
+        "question": "q",
+        "expected": [
+            {"file": "app.py", "line": 5},
+            {"file": "utils/helpers.py", "line": 1},
+        ],
+    }
+    problem = _check([Citation(file="app.py", line=5)], case)
+    assert problem is not None
+    assert "utils/helpers.py:1" in problem
+    assert "app.py:5" in problem  # only as part of "got", not as missing
+    assert problem.index("utils/helpers.py:1") < problem.index("got")
+
+
+def test_expected_any_keeps_the_at_least_one_semantics():
+    case = {
+        "question": "q",
+        "expected_any": [
+            {"file": "app.py", "line": 5},
+            {"file": "utils/helpers.py", "line": 1},
+        ],
+    }
+    assert _check([Citation(file="app.py", line=5)], case) is None
+
+
+def test_expected_any_fails_when_none_of_them_appear():
+    case = {"question": "q", "expected_any": [{"file": "app.py", "line": 5}]}
+    problem = _check([Citation(file="other.py", line=5)], case)
+    assert problem is not None
+    assert "expected one of" in problem
+
+
+def test_the_line_tolerance_still_applies():
+    case = {"question": "q", "expected": [{"file": "app.py", "line": 5}]}
+    assert _check([Citation(file="app.py", line=9)], case) is None   # within +/-5
+    assert _check([Citation(file="app.py", line=99)], case) is not None
+
+
+def test_expected_and_expected_any_compose():
+    """A case may demand one citation outright and one of several alternatives."""
+    case = {
+        "question": "q",
+        "expected": [{"file": "app.py", "line": 5}],
+        "expected_any": [{"file": "a.py", "line": 1}, {"file": "b.py", "line": 1}],
+    }
+    assert _check([Citation(file="app.py", line=5)], case) is not None  # no any-hit
+    assert _check(
+        [Citation(file="app.py", line=5), Citation(file="b.py", line=1)], case
+    ) is None
 
 
 # -- the latency harness (consumes Stage 0's traces) ------------------------
