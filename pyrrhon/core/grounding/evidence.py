@@ -111,6 +111,22 @@ class EvidenceLedger:
             self._record_blame(path, args)
             return
 
+        # symbol_context prints a numbered window of the DEFINING file, whose
+        # path is not in the arguments — the tool discovers it, so it is the
+        # first path:line in the output. Handled separately so the window's
+        # lines count as observed, not just the header line. The call sites it
+        # lists are points, not ranges: their source was never displayed.
+        if name == "symbol_context":
+            references = extract_references(result)
+            if references:
+                defining = references[0][0]
+                numbered = [int(n) for n in _NUMBERED.findall(result)]
+                if numbered:
+                    self.record_range(defining, min(numbered), max(numbered))
+            for rel, line in references:
+                self.record_line(rel, line)
+            return
+
         # read_file: the numbered gutter is the exact record of what was shown.
         numbered = [int(n) for n in _NUMBERED.findall(result)]
         if isinstance(path, str) and numbered:
