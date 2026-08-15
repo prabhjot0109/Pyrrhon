@@ -46,10 +46,11 @@ def model_command(args: str, ctx: CommandContext) -> str:
     if slot_name == "fast":
         ctx.agent.llm = llm
         return f"fast slot is now {provider}/{model}."
-    # Stored for M4's escalation logic; validated (provider + key) today so
-    # the user finds out about a bad config now, not mid-question later.
-    ctx.agent.deep_llm = llm
-    return f"deep slot is now {provider}/{model} (escalation lands in M4)."
+    # Through the seam, not a bare assignment: think_deeper captured the model
+    # at construction, so writing the attribute alone left escalation calling
+    # the old one while this line claimed otherwise.
+    ctx.agent.set_deep_llm(llm)
+    return f"deep slot is now {provider}/{model}."
 
 
 @command("code", "Open the current citation in VS Code")

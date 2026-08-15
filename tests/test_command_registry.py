@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 from pyrrhon.commands.registry import CommandContext, command, dispatch
@@ -57,3 +58,19 @@ async def test_help_lists_registered_commands():
     response = await dispatch("/help", make_ctx())
     assert "/help — List available commands" in response
     assert "/echo-test — Echo the arguments back (test-only)" in response
+
+
+def test_re_registering_a_command_name_warns(caplog):
+    """Tools warn on collision (repl.py:166); commands silently overwrote, so a
+    plugin could replace /settings or /help with nothing in the log."""
+    with caplog.at_level(logging.WARNING, logger="pyrrhon.commands"):
+
+        @command("collide-probe", "first")
+        def _first(args, ctx):
+            return "first"
+
+        @command("collide-probe", "second")
+        def _second(args, ctx):
+            return "second"
+
+    assert any("collide-probe" in record.message for record in caplog.records)

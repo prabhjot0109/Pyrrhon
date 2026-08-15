@@ -2,8 +2,8 @@ from pathlib import Path
 
 from pyrrhon.core.agent.loop import Agent
 from pyrrhon.core.events import Citation, SpeechChunk
-from pyrrhon.core.grounding.gate import GroundingGate
-from pyrrhon.core.providers.llm import LLMReply
+from pyrrhon.core.grounding.gate import LINE_UNSEEN_HEDGE, GroundingGate
+from pyrrhon.core.providers.llm import LLMReply, ToolCall
 from pyrrhon.core.tools.repo import ReadFileTool
 from tests.helpers import FakeLLM
 
@@ -96,3 +96,126 @@ async def test_no_gate_keeps_m0_behavior():
     agent = Agent(llm=fake, tools=[], system_prompt="t", repo_root=FIXTURE)
     events = [event async for event in agent.run_turn([], "hi")]
     assert events == [SpeechChunk(text="see bogus.py:3.")]  # ungated, uncited
+
+
+# -- provenance end-to-end (M13) --------------------------------------------
+
+
+def _repo(tmp_path: Path) -> Path:
+    (tmp_path / "app.py").write_text(
+        "\n".join(f"line {n}" for n in range(1, 51)), encoding="utf-8"
+    )
+    return tmp_path
+
+
+def _provenance_agent(tmp_path: Path, replies) -> Agent:
+    return Agent(
+        llm=FakeLLM(replies),
+        tools=[ReadFileTool(tmp_path)],
+        system_prompt="s",
+        repo_root=tmp_path,
+        grounding_gate=GroundingGate(tmp_path, require_provenance=True),
+    )
+
+
+async def _spoken(agent: Agent, history: list[dict], text: str) -> str:
+    chunks = [
+        event.text
+        async for event in agent.run_turn(history, text)
+        if isinstance(event, SpeechChunk)
+    ]
+    return " ".join(chunks)
+
+
+async def test_a_line_the_model_read_is_cited(tmp_path: Path):
+    agent = _provenance_agent(
+        _repo(tmp_path),
+        [
+            LLMReply(tool_calls=(ToolCall(id="1", name="read_file", arguments={"path": "app.py"}),)),
+            LLMReply(text="The handler is at app.py:12."),
+        ],
+    )
+    assert "app.py:12" in await _spoken(agent, [], "where is it?")
+
+
+async def test_a_line_the_model_never_read_is_downgraded(tmp_path: Path):
+    """No tool call at all — the model simply asserts a plausible location."""
+    agent = _provenance_agent(
+        _repo(tmp_path), [LLMReply(text="The handler is at app.py:12.")]
+    )
+    spoken = await _spoken(agent, [], "where is it?")
+    assert "app.py:12" not in spoken
+    assert LINE_UNSEEN_HEDGE in spoken
+
+
+async def test_reading_a_different_file_does_not_license_the_citation(tmp_path: Path):
+    """Evidence is per-file, not per-turn: opening one file proves nothing
+    about a line in another."""
+    repo = _repo(tmp_path)
+    (repo / "other.py").write_text("x = 1\n", encoding="utf-8")
+    agent = _provenance_agent(
+        repo,
+        [
+            LLMReply(tool_calls=(ToolCall(id="1", name="read_file", arguments={"path": "other.py"}),)),
+            LLMReply(text="The handler is at app.py:12."),
+        ],
+    )
+    spoken = await _spoken(agent, [], "where is it?")
+    assert "app.py:12" not in spoken
+    assert LINE_UNSEEN_HEDGE in spoken
+
+
+async def test_a_line_outside_the_window_the_model_read_is_downgraded(tmp_path: Path):
+    """Read lines 1-20, cite line 44: the file was opened, that line was not."""
+    agent = _provenance_agent(
+        _repo(tmp_path),
+        [
+            LLMReply(
+                tool_calls=(
+                    ToolCall(
+                        id="1",
+                        name="read_file",
+                        arguments={"path": "app.py", "start_line": 1, "end_line": 20},
+                    ),
+                )
+            ),
+            LLMReply(text="See app.py:12 and app.py:44."),
+        ],
+    )
+    spoken = await _spoken(agent, [], "where is it?")
+    assert "app.py:12" in spoken
+    assert "app.py:44" not in spoken
+    assert LINE_UNSEEN_HEDGE in spoken
+
+
+async def test_the_ledger_is_fresh_every_turn(tmp_path: Path):
+    """Evidence from turn 1 must not license a citation in turn 2 — the model
+    may be talking about a file that changed, and 'I read it earlier' is
+    exactly the reasoning that produces stale-line citations."""
+    agent = _provenance_agent(
+        _repo(tmp_path),
+        [
+            LLMReply(tool_calls=(ToolCall(id="1", name="read_file", arguments={"path": "app.py"}),)),
+            LLMReply(text="Read it."),
+            LLMReply(text="The handler is at app.py:12."),
+        ],
+    )
+    history: list[dict] = []
+    await _spoken(agent, history, "read it")
+    spoken = await _spoken(agent, history, "now where is it?")
+    assert "app.py:12" not in spoken
+    assert LINE_UNSEEN_HEDGE in spoken
+
+
+async def test_provenance_defaults_off_so_an_unread_line_still_cites(tmp_path: Path):
+    """The rollout guarantee: until the eval says otherwise, a build_agent-shaped
+    gate behaves exactly as it did before M13."""
+    repo = _repo(tmp_path)
+    agent = Agent(
+        llm=FakeLLM([LLMReply(text="The handler is at app.py:12.")]),
+        tools=[ReadFileTool(repo)],
+        system_prompt="s",
+        repo_root=repo,
+        grounding_gate=GroundingGate(repo),
+    )
+    assert "app.py:12" in await _spoken(agent, [], "where is it?")

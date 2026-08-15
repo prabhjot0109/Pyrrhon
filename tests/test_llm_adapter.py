@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 import respx
@@ -72,3 +74,44 @@ def test_create_llm_allows_keyless_local_provider(monkeypatch):
     slot = ModelSlot(provider="ollama", model="qwen3:8b")
     llm = create_llm(slot, Settings())
     assert llm.model == "qwen3:8b"  # no MissingAPIKeyError for keyless providers
+
+
+@respx.mock
+async def test_generation_knobs_are_omitted_when_unset():
+    """Default behaviour must be byte-identical to before [model] existed —
+    providers differ on whether an explicit null is acceptable."""
+    route = respx.post(f"{BASE}/chat/completions").mock(
+        return_value=httpx.Response(
+            200, json=_completion({"role": "assistant", "content": "ok"})
+        )
+    )
+    llm = OpenAICompatLLM(model="test-model", api_key="k", base_url=BASE)
+    await llm.chat([{"role": "user", "content": "hello"}])
+    body = json.loads(route.calls[0].request.content)
+    assert "max_tokens" not in body
+    assert "temperature" not in body
+
+
+@respx.mock
+async def test_generation_knobs_are_sent_when_configured():
+    route = respx.post(f"{BASE}/chat/completions").mock(
+        return_value=httpx.Response(
+            200, json=_completion({"role": "assistant", "content": "ok"})
+        )
+    )
+    llm = OpenAICompatLLM(
+        model="test-model", api_key="k", base_url=BASE,
+        max_tokens=256, temperature=0.2,
+    )
+    await llm.chat([{"role": "user", "content": "hello"}])
+    body = json.loads(route.calls[0].request.content)
+    assert body["max_tokens"] == 256
+    assert body["temperature"] == 0.2
+
+
+def test_create_llm_plumbs_the_model_section(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+    settings = Settings.model_validate({"model": {"max_tokens": 512, "temperature": 0.5}})
+    llm = create_llm(ModelSlot(provider="groq", model="m"), settings)
+    assert llm.max_tokens == 512
+    assert llm.temperature == 0.5

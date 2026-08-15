@@ -18,12 +18,11 @@ import io
 from collections.abc import AsyncGenerator
 
 import soundfile
+from huggingface_hub import AsyncInferenceClient
 from openai.types.audio import Transcription
 from pipecat.frames.frames import ErrorFrame, Frame
 from pipecat.services.tts_service import TTSService
 from pipecat.services.whisper.base_stt import BaseWhisperSTTService
-
-from huggingface_hub import AsyncInferenceClient
 
 
 class HuggingFaceSTTService(BaseWhisperSTTService):

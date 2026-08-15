@@ -10,8 +10,8 @@ from pyrrhon.voice.pipeline import VoiceUnavailableError, run_voice, speech_path
 
 def fake_session() -> SimpleNamespace:
     # Duck-typed stand-in: run_voice/speech_path only touch .agent.allow_retry
-    # before any audio work happens.
-    return SimpleNamespace(agent=SimpleNamespace(allow_retry=True))
+    # and .agent.voice_active before any audio work happens.
+    return SimpleNamespace(agent=SimpleNamespace(allow_retry=True, voice_active=False))
 
 
 async def test_missing_groq_key_degrades_with_clear_message(monkeypatch):
@@ -32,13 +32,18 @@ def test_speech_path_disables_retry_and_restores_even_on_error():
     session = fake_session()
     with speech_path(session):
         assert session.agent.allow_retry is False
+        # Voice drives -> spoken delivery style.
+        assert session.agent.voice_active is True
     assert session.agent.allow_retry is True
+    assert session.agent.voice_active is False
 
     with pytest.raises(RuntimeError):
         with speech_path(session):
             assert session.agent.allow_retry is False
+            assert session.agent.voice_active is True
             raise RuntimeError("pipeline blew up")
     assert session.agent.allow_retry is True
+    assert session.agent.voice_active is False
 
 
 async def test_controller_start_stop_toggles_background_task(monkeypatch):

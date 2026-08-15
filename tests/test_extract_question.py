@@ -56,8 +56,21 @@ async def test_design_mode_question_reply_yields_askuser():
     assert kinds.index("AskUser") > kinds.index("SpeechChunk")
 
 
-async def test_understand_mode_never_yields_askuser():
+async def test_understand_mode_yields_askuser_too():
+    """Changed in M10, by design. extract_question was always mode-agnostic,
+    and VOICE_STYLE tells the model to end most turns by offering the next
+    thread — those offers ARE questions, and a channel that highlights them is
+    what makes the walk-through feel like a conversation. Mode now changes
+    only the styling, not whether the event is emitted."""
     agent = make_agent([LLMReply(text="Want to see the code?")], mode="understand")
+    events = await collect(agent, "explain app.py")
+    assert AskUser(question="Want to see the code?") in events
+
+
+async def test_understand_mode_statement_reply_yields_no_askuser():
+    """The trailing '?' is still the only trigger — a plain answer is not a
+    question in either mode."""
+    agent = make_agent([LLMReply(text="app.py prints a greeting.")], mode="understand")
     events = await collect(agent, "explain app.py")
     assert not [e for e in events if isinstance(e, AskUser)]
 

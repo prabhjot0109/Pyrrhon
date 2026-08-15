@@ -1,0 +1,61 @@
+# Code-intelligence eval (M14). Run against Pyrrhon itself:
+#   uv run python -m pyrrhon.evals.grounding evals/understanding.yaml --repo .
+#
+# `max_rounds` is the point of this file: symbol_context claims to answer a
+# dependency question in ONE tool round where find_symbol -> find_references ->
+# read_file took three. A citation-only eval cannot tell those apart, because
+# both spellings end up citing the same line.
+#
+# Two classes of case, because the claim is conditional and measuring it
+# unconditionally measures nothing:
+#
+#   IDENTIFIER cases name the symbol exactly. symbol_context is supposed to be
+#   the only tool call, so the floor is 2 rounds (one tool round, one answer
+#   round) and max_rounds: 2 is a real assertion.
+#
+#   CONCEPT cases describe the code in words. The tool cannot help until a
+#   search has turned the phrase into a name, so they legitimately cost a
+#   discovery round first. Capping them at 2 would fail a model that is
+#   behaving correctly -- measured 2026-08-15, "the tool guard's duplicate
+#   check" went grep -> symbol_context, which is the intended fall-back.
+#
+# Line numbers were read out of the live index on 2026-08-15, not guessed, and
+# _one_matches allows LINE_TOLERANCE=5 either side. They will drift as the repo
+# moves; re-derive with SymbolIndex.find_symbol rather than adjusting by eye.
+
+# -- IDENTIFIER cases: the round-trip claim, stated exactly ------------------
+
+- question: "Where is run_turn defined and what calls it?"
+  max_rounds: 2
+  expected:
+    - {file: pyrrhon/core/agent/loop.py, line: 290}
+
+- question: "Where is is_duplicate defined and what calls it?"
+  max_rounds: 2
+  expected:
+    - {file: pyrrhon/core/agent/guards.py, line: 41}
+
+- question: "Where is GroundingGate defined and who uses it?"
+  max_rounds: 2
+  expected:
+    - {file: pyrrhon/core/grounding/gate.py, line: 96}
+
+# Multi-language reach (Tasks 1-2). Against Pyrrhon itself the fixture repo is
+# the only TS present, so this is scoped to a symbol that exists there.
+- question: "Where is the Greeter class defined?"
+  max_rounds: 2
+  expected:
+    - {file: tests/fixtures/polyglot_repo/app.ts, line: 3}
+
+# -- CONCEPT cases: discovery first, then the symbol -------------------------
+
+- question: "Where is the tool guard's duplicate check, and who calls it?"
+  max_rounds: 5
+  expected:
+    - {file: pyrrhon/core/agent/guards.py, line: 41}
+
+- question: "What is the busiest file in this repo and why?"
+  max_rounds: 4
+  expected_any:
+    - {file: pyrrhon/core/tools/ast_index.py, line: 116}
+    - {file: pyrrhon/core/agent/loop.py, line: 186}

@@ -64,6 +64,36 @@ def compact_tool_results(history: list[dict]) -> int:
     return elided
 
 
+def hard_compact_tool_results(history: list[dict], keep_recent: int = 1) -> int:
+    """Recovery compaction for a mid-turn context-window overflow: elide EVERY
+    bulky tool result except the most recent `keep_recent`, including the
+    current turn's (which compact_tool_results deliberately leaves intact).
+
+    Unlike compact_tool_results this ignores the last-user boundary — when the
+    provider rejects the prompt as too long, room must be reclaimed from the
+    fresh results too. The most recent result is kept so the model still has the
+    evidence it was about to reason over. Mutates in place; returns the count
+    elided. Grounding is unaffected (the gate verifies against the repo).
+    """
+    tool_idxs = [
+        i
+        for i, m in enumerate(history)
+        if m.get("role") == "tool"
+        and isinstance(m.get("content"), str)
+        and len(m["content"]) > TOOL_STUB_MIN
+    ]
+    to_elide = tool_idxs[:-keep_recent] if keep_recent else tool_idxs
+    for i in to_elide:
+        content = history[i]["content"]
+        dropped = len(content) - TOOL_STUB_KEEP
+        history[i]["content"] = (
+            content[:TOOL_STUB_KEEP]
+            + f"\n…[{dropped} chars elided to fit the context window — "
+            "re-run the tool if needed]"
+        )
+    return len(to_elide)
+
+
 SUMMARY_PROMPT = (
     "Summarize the conversation below so it can be continued later. Keep: the "
     "user's goals, decisions made, key findings about the codebase, and EVERY "

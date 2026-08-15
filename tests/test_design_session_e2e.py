@@ -3,7 +3,7 @@ from pathlib import Path
 from pyrrhon.core.agent.design_prompts import DESIGN_PROMPT
 from pyrrhon.core.events import AskUser, SpeechChunk, ToolCallStarted
 from pyrrhon.core.providers.llm import LLMReply, ToolCall
-from pyrrhon.core.session import Session
+from pyrrhon.core.session import MODE_PREFIX, Session
 from pyrrhon.repl import build_agent
 from tests.helpers import FakeLLM
 
@@ -51,7 +51,7 @@ async def test_scripted_design_session_challenges_then_writes_prd(tmp_path: Path
     agent = build_agent(tmp_path, llm=fake)
     session = Session(agent)
     session.set_mode("design")
-    assert {"role": "system", "content": DESIGN_PROMPT} in session.history
+    assert {"role": "system", "content": MODE_PREFIX + DESIGN_PROMPT} in session.history
 
     # --- Round 1: proposal → challenge, and nothing gets written ---
     round1 = [

@@ -179,3 +179,18 @@ async def test_subagent_tool_failure_returns_error_string():
     assert await tool.run(question="q", context="c") == "report despite missing tool"
     tool_msgs = [m for m in deep.calls[1]["messages"] if m.get("role") == "tool"]
     assert tool_msgs[0]["content"].startswith("ERROR: no tool named")
+
+
+async def test_set_deep_llm_changes_what_think_deeper_actually_calls(tmp_path):
+    from pyrrhon.repl import build_agent
+
+    original = FakeLLM([LLMReply(text="from the original deep model")])
+    replacement = FakeLLM([LLMReply(text="from the replacement deep model")])
+    agent = build_agent(tmp_path, llm=FakeLLM([]), deep_llm=original, home=tmp_path)
+
+    agent.set_deep_llm(replacement)
+
+    report = await agent.tools["think_deeper"].run(question="q", context="c")
+    assert report == "from the replacement deep model"
+    assert agent.deep_llm is replacement
+    assert original.calls == []  # the old model must not be consulted at all

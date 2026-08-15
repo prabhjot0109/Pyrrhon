@@ -1,0 +1,29 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      # No --all-extras: the `voice` extra is pipecat-ai[local], whose PyAudio
+      # needs portaudio.h to compile — absent on the runner. Installing it would
+      # buy nothing. Nothing under tests/ imports PyAudio or the local transport;
+      # the pipecat the tests do import comes from the base dependency
+      # (pipecat-ai[groq,openai,silero]). Syncing without the extra is also the
+      # environment most users have, and the one voice/pipeline.py's lazy import
+      # is written to degrade in.
+      - run: uv sync --dev
+      - run: uv run ruff check .
+      - run: uv run mypy pyrrhon/core
+      # No API keys in CI: every test uses a double (tests/helpers.py:FakeLLM),
+      # and the grounding eval — which needs a real provider — is run by hand,
+      # not here.
+      - run: uv run pytest -q

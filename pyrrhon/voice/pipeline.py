@@ -24,22 +24,32 @@ from pyrrhon.core.events import Event
 from pyrrhon.core.session import Session
 from pyrrhon.voice.bridge import PlaybackObserver, PyrrhonBridgeProcessor
 from pyrrhon.voice.playback import PlaybackTracker
-from pyrrhon.voice.providers import VoiceUnavailableError, create_stt, create_tts
+from pyrrhon.voice.providers import (
+    VoiceUnavailableError,
+    close_voice_service,
+    create_stt,
+    create_tts,
+)
 
 
 @contextlib.contextmanager
 def speech_path(session: Session):
-    """Split-path grounding policy (spec): while voice drives the session,
-    the agent must never take the grounding retry loop — a retry costs a
-    full LLM turnaround and breaks the latency budget. The grounding *gate*
+    """Split-path grounding + delivery policy (spec): while voice drives the
+    session, the agent must never take the grounding retry loop — a retry costs
+    a full LLM turnaround and breaks the latency budget. The grounding *gate*
     still runs; unverifiable file:line claims are stripped from speech and
-    replaced with an honest 'I couldn't verify that.'"""
-    previous = session.agent.allow_retry
+    replaced with an honest 'I couldn't verify that.' We also mark the agent
+    voice-active so run_turn appends the spoken (VOICE_STYLE) delivery instead
+    of the written one; both flip back on /voice off."""
+    previous_retry = session.agent.allow_retry
+    previous_voice = session.agent.voice_active
     session.agent.allow_retry = False
+    session.agent.voice_active = True
     try:
         yield
     finally:
-        session.agent.allow_retry = previous
+        session.agent.allow_retry = previous_retry
+        session.agent.voice_active = previous_voice
 
 
 async def run_voice(
@@ -72,7 +82,7 @@ async def run_voice(
     except ImportError as exc:
         raise VoiceUnavailableError(
             f"Voice dependencies missing ({exc}). "
-            'Run: uv add "pipecat-ai[local,silero,groq,openai]" — staying in text mode.'
+            "Run: uv sync --extra voice — staying in text mode."
         ) from exc
 
     transport = LocalAudioTransport(
@@ -108,3 +118,8 @@ async def run_voice(
             raise VoiceUnavailableError(
                 f"Voice pipeline failed ({exc}) — staying in text mode."
             ) from exc
+        finally:
+            # Runs on /voice off (CancelledError) too — that is the path that
+            # was leaking, since toggling voice is normal and repeated.
+            await close_voice_service(tts)
+            await close_voice_service(stt)

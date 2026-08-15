@@ -14,9 +14,9 @@ Session's cancellable task — barge-in kills the whole investigation.
 from __future__ import annotations
 
 from pyrrhon.core.agent.guards import (
-    DUPLICATE_NOTE,
     ToolGuard,
     assistant_tool_message,
+    run_tool_round,
 )
 from pyrrhon.core.agent.prompts import DEEP_AGENT_PROMPT, DEEP_SYSTEM_PROMPT
 from pyrrhon.core.tools.base import Tool
@@ -77,16 +77,13 @@ class ThinkDeeperTool(Tool):
                 if not reply.tool_calls:
                     return reply.text or "ERROR: deep model returned no text."
                 messages.append(assistant_tool_message(reply))
-                for call in reply.tool_calls:
-                    if guard.is_duplicate(call.name, call.arguments):
-                        result = DUPLICATE_NOTE.format(name=call.name)
-                    else:
-                        result = guard.clip(
-                            await self._run_tool(call.name, call.arguments)
-                        )
-                    messages.append(
-                        {"role": "tool", "tool_call_id": call.id, "content": result}
-                    )
+                # Concurrent, same as the fast loop: a subagent round that
+                # reads four files should cost one read, not four.
+                results = await run_tool_round(reply.tool_calls, self._run_tool, guard)
+                messages.extend(
+                    {"role": "tool", "tool_call_id": call.id, "content": result}
+                    for call, result in zip(reply.tool_calls, results, strict=True)
+                )
                 if guard.exhausted:
                     break
             reply = await self.deep_llm.chat(

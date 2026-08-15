@@ -45,6 +45,15 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Run the provider/API-key setup wizard, then start",
     )
+    parser.add_argument(
+        "--trust-repo",
+        action="store_true",
+        help=(
+            "Grant this repo's .pyrrhon.toml servers/providers and soul files "
+            "without prompting. For automation only — it runs programs the repo "
+            "chose."
+        ),
+    )
     parser.add_argument("--version", action="version", version=f"pyrrhon {__version__}")
     args = parser.parse_args(argv)
 
@@ -57,8 +66,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.text:
         from pyrrhon.repl import run_repl
 
-        run_repl(args.repo, voice=args.voice)
+        run_repl(args.repo, voice=args.voice, trust_repo=args.trust_repo)
     else:
         from pyrrhon.tui.app import run_tui
 
-        run_tui(args.repo, voice=args.voice)
+        run_tui(args.repo, voice=args.voice, trust_repo=args.trust_repo)

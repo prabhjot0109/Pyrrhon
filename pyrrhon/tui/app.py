@@ -8,6 +8,7 @@ from M3 the same loop carries audio (spec: real-time discipline).
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 
 from rich.markdown import Markdown
@@ -17,10 +18,19 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal
 from textual.widgets import Input, RichLog
 
-from pyrrhon.commands import builtin, debug_cmd, mcp_cmd, mode_cmd, plugins_cmd, settings_cmd, voice_cmd  # noqa: F401 — registers commands
+from pyrrhon.commands import (  # noqa: F401 — registers commands
+    builtin,
+    debug_cmd,
+    mcp_cmd,
+    mode_cmd,
+    plugins_cmd,
+    settings_cmd,
+    voice_cmd,
+)
 from pyrrhon.commands.registry import CommandContext, dispatch
 from pyrrhon.config.settings import load_settings
 from pyrrhon.core.agent.loop import Agent
+from pyrrhon.core.citation_link import citation_uri
 from pyrrhon.core.events import (
     AskUser,
     Citation,
@@ -135,10 +145,22 @@ class PyrrhonApp(App):
         from pyrrhon.branding import banner
 
         transcript = self.query_one("#transcript", RichLog)
-        transcript.write(Text(banner(), style="bold cyan"))
+        transcript.write(banner())  # pre-styled Text; an outer style would flatten it
         transcript.write(
             f"Discussing {self.repo_root.name}. Type /help for commands."
         )
+        # Build the symbol index and open the provider connection now, so the
+        # first turn pays neither the cold walk nor the TLS handshake. Held on
+        # self so the tasks aren't GC'd mid-flight.
+        from pyrrhon.repl import (
+            orient_in_background,
+            warm_index_in_background,
+            warm_llm_connection_in_background,
+        )
+
+        self._warm_task = warm_index_in_background(self.agent)
+        self._warm_conn_task = warm_llm_connection_in_background(self.agent)
+        self._orient_task = orient_in_background(self.agent, self._render_event)
         if self._start_voice:
             self.notify(self.voice.start())
 
@@ -149,7 +171,7 @@ class PyrrhonApp(App):
 
     def refresh_status(self) -> None:
         fast = getattr(self.agent.llm, "model", "unknown")
-        deep = getattr(getattr(self.agent, "deep_llm", None), "model", "= fast")
+        deep = getattr(self.agent.deep_llm, "model", "= fast")
         self.query_one(StatusBar).show_status(
             self.session.mode, fast, deep, latency_ms=self.session.last_turn_latency_ms
         )
@@ -201,10 +223,17 @@ class PyrrhonApp(App):
         elif isinstance(event, ToolCallStarted):
             transcript.write(Text(f"→ {event.name}({event.args})", style="dim"))
         elif isinstance(event, Citation):
-            transcript.write(Text(f"📍 {event.file}:{event.line}", style="green"))
+            # Clickable as well as viewer-linked: the pane shows it here, but a
+            # citation is also how the user gets the line open in their editor.
+            uri = citation_uri(self.repo_root, event)
+            label = f"📍 {event.file}:{event.line}"
+            transcript.write(
+                Text(label, style=f"green link {uri}" if uri else "green")
+            )
             self.show_citation(event)
         elif isinstance(event, ScreenArtifact):
-            # M0/M1 never emit these; rendered plainly until M3 refines per-kind.
+            # First real emitter is M14's orientation brief; rendered plainly
+            # until a channel needs per-kind treatment.
             transcript.write(Markdown(event.content))
         elif isinstance(event, AskUser):
             # Design mode's Socratic question, rendered distinctly (spec: M6).
@@ -230,7 +259,7 @@ class PyrrhonApp(App):
             prompt.focus()
 
 
-def run_tui(repo: str, voice: bool = False) -> None:
+def run_tui(repo: str, voice: bool = False, trust_repo: bool = False) -> None:
     """Entry point for the default (TUI) channel."""
     repo_root = Path(repo).resolve()
     if not repo_root.is_dir():
@@ -248,7 +277,9 @@ def run_tui(repo: str, voice: bool = False) -> None:
         # Textual has not taken over the terminal yet — plain input works.
         return input(f"{question} ").strip().lower() in {"y", "yes"}
 
-    plugins, settings = load_channel_plugins(repo_root, _ask)
+    plugins, settings = load_channel_plugins(
+        repo_root, _ask, trust_repo=trust_repo, interactive=sys.stdin.isatty()
+    )
     try:
         # One asyncio.run for MCP lifecycle + Textual: the manager's start()
         # and stop() must be awaited from the same task (anyio rule), so the
@@ -256,7 +287,7 @@ def run_tui(repo: str, voice: bool = False) -> None:
         asyncio.run(_tui_main(repo_root, voice, plugins, settings))
     except MissingAPIKeyError as exc:
         print(exc)
-        raise SystemExit(1)
+        raise SystemExit(1) from exc
 
 
 async def _tui_main(repo_root: Path, voice: bool, plugins, settings) -> None:

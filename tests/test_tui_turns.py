@@ -9,12 +9,12 @@ from pyrrhon.tui.app import PyrrhonApp
 from pyrrhon.tui.widgets import CodeViewer
 from tests.helpers import FakeLLM
 
-FIXTURE = Path(__file__).parent / "fixtures" / "sample_repo"
 
-
-def make_app(replies, repo_root: Path = FIXTURE) -> tuple[PyrrhonApp, FakeLLM]:
+def make_app(replies, repo_root: Path) -> tuple[PyrrhonApp, FakeLLM]:
+    # repo_root must be disposable (the `sample_repo` fixture or tmp_path):
+    # mounting the TUI warms the symbol index, which writes .pyrrhon/cache.db.
     fake = FakeLLM(replies)
-    agent = build_agent(repo_root, llm=fake)
+    agent = build_agent(repo_root, llm=fake, home=repo_root.parent)
     return PyrrhonApp(repo_root=repo_root, agent=agent), fake
 
 
@@ -25,7 +25,7 @@ async def submit(app: PyrrhonApp, pilot, text: str) -> None:
     await pilot.pause()
 
 
-async def test_turn_streams_speech_citation_and_code_jump():
+async def test_turn_streams_speech_citation_and_code_jump(sample_repo: Path):
     replies = [
         LLMReply(
             tool_calls=(
@@ -34,7 +34,7 @@ async def test_turn_streams_speech_citation_and_code_jump():
         ),
         LLMReply(text="greet is defined at utils/helpers.py:1."),
     ]
-    app, fake = make_app(replies)
+    app, fake = make_app(replies, sample_repo)
     async with app.run_test(size=(120, 40)) as pilot:
         await submit(app, pilot, "where is greet defined?")
         assert app.history[-1] == {
@@ -47,8 +47,9 @@ async def test_turn_streams_speech_citation_and_code_jump():
         assert not prompt.disabled and prompt.has_focus  # ready for the next turn
 
 
-async def test_slash_command_short_circuits_the_agent():
-    app, fake = make_app([])  # any LLM call would raise inside FakeLLM
+async def test_slash_command_short_circuits_the_agent(sample_repo: Path):
+    # any LLM call would raise inside FakeLLM
+    app, fake = make_app([], sample_repo)
     async with app.run_test(size=(120, 40)) as pilot:
         await submit(app, pilot, "/help")
         assert fake.calls == []  # the LLM was never touched
@@ -56,8 +57,8 @@ async def test_slash_command_short_circuits_the_agent():
         assert "/model" in app.last_command_response
 
 
-async def test_unknown_command_is_reported():
-    app, fake = make_app([])
+async def test_unknown_command_is_reported(sample_repo: Path):
+    app, fake = make_app([], sample_repo)
     async with app.run_test(size=(120, 40)) as pilot:
         await submit(app, pilot, "/definitely-not-a-command")
         assert "Unknown command" in app.last_command_response
@@ -71,8 +72,9 @@ async def test_init_via_tui(tmp_path: Path):
         assert "soul file created" in app.last_command_response
 
 
-async def test_turn_failure_reports_error_and_recovers():
-    app, fake = make_app([])  # first chat() call raises inside FakeLLM
+async def test_turn_failure_reports_error_and_recovers(sample_repo: Path):
+    # first chat() call raises inside FakeLLM
+    app, fake = make_app([], sample_repo)
     async with app.run_test(size=(120, 40)) as pilot:
         await submit(app, pilot, "hello")
         prompt = app.query_one("#prompt", Input)

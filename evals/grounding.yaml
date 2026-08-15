@@ -1,7 +1,22 @@
-# Grounding eval v0 — question → expected-citation pairs against
-# tests/fixtures/sample_repo. A case passes if any emitted Citation matches
-# the expected file exactly with the line within ±5. Run with a real LLM:
+# Grounding eval, FIXTURE set — runs against tests/fixtures/sample_repo:
 #   uv run python -m pyrrhon.evals.grounding evals/grounding.yaml
+#
+# The real-repo set lives in evals/grounding-self.yaml and needs --repo .
+# They are separate files because a case is only meaningful against the repo
+# its answers were derived from: run this one with --repo . and every expected
+# path is missing; run that one against the fixture and the same is true.
+#
+# See evals/README.md for the full guide. Case keys:
+#
+#   `expected`      — EVERY listed citation must appear (line within +/-5).
+#   `expected_any`  — at least one must appear; use when several locations are
+#                     equally correct answers to the same question.
+#   `must_not_cite` — "*" for no citations at all, or a list of paths.
+#
+# Add --repeat 5 --json baseline.json to also record a latency baseline, then
+# --compare baseline.json on a later run to fail on a regression.
+
+# --- cites the right location ----------------------------------------------
 - question: "Where is the greet function defined?"
   expected:
     - {file: utils/helpers.py, line: 1}
@@ -11,3 +26,13 @@
 - question: "Where is the main entry function of the sample app defined?"
   expected:
     - {file: app.py, line: 4}
+
+# --- admits ignorance (VISION.md criterion 3) ------------------------------
+# Nothing in the sample repo retries, caches, or authenticates. A citation
+# here is a fabrication, however plausible it sounds.
+- question: "How does the retry backoff work in this codebase?"
+  must_not_cite: "*"
+- question: "Where is the authentication middleware defined?"
+  must_not_cite: "*"
+- question: "Which file configures the database connection pool?"
+  must_not_cite: "*"

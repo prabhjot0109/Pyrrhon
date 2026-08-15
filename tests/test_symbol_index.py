@@ -64,11 +64,13 @@ async def test_reindexes_only_changed_files(repo: Path):
         encoding="utf-8",
     )
     _bump_mtime(helpers)
-    await index.ensure_fresh()
+    # force=True bypasses the same-turn freshness debounce: this test edits and
+    # re-indexes synchronously to verify incremental reparse, not the debounce.
+    await index.ensure_fresh(force=True)
     assert await index.find_symbol("shout") == [("utils/helpers.py", 5, "function")]
     # Class definitions get kind "class":
     (repo / "models.py").write_text("class User:\n    pass\n", encoding="utf-8")
-    await index.ensure_fresh()
+    await index.ensure_fresh(force=True)
     assert await index.find_symbol("User") == [("models.py", 1, "class")]
 
 
@@ -76,6 +78,27 @@ async def test_deleted_files_drop_out_of_the_index(repo: Path):
     index = SymbolIndex(repo)
     await index.ensure_fresh()
     (repo / "app.py").unlink()
-    await index.ensure_fresh()
+    await index.ensure_fresh(force=True)
     assert await index.find_symbol("main") == []
     assert await index.find_references("greet") == []
+
+
+async def test_freshness_debounce_skips_rescan_within_window(repo: Path, monkeypatch):
+    index = SymbolIndex(repo)
+    calls = {"n": 0}
+    real = index._sync_ensure_fresh
+
+    def counting():
+        calls["n"] += 1
+        return real()
+
+    monkeypatch.setattr(index, "_sync_ensure_fresh", counting)
+
+    await index.ensure_fresh()  # cold walk
+    await index.ensure_fresh()  # within TTL -> skipped
+    await index.ensure_fresh()  # within TTL -> skipped
+    assert calls["n"] == 1
+
+    # force bypasses the debounce even inside the window.
+    await index.ensure_fresh(force=True)
+    assert calls["n"] == 2

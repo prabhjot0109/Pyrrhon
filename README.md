@@ -33,13 +33,18 @@ Requires Python ≥ 3.12 and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 git clone https://github.com/prabhjot0109/Pyrrhon && cd Pyrrhon
-uv sync
+uv sync                              # text + TUI
+uv sync --extra voice                # ...plus the audio stack, for --voice
 
 uv run pyrrhon --setup               # pick providers, paste keys (stored owner-only)
 uv run pyrrhon /path/to/some/repo    # Textual TUI (default channel)
 uv run pyrrhon --text .              # plain-text REPL
 uv run pyrrhon --voice .             # TUI with the voice pipeline on
 ```
+
+The audio stack (PyAudio and friends) is an optional extra: the text and TUI
+channels never import it, so a plain `uv sync` is a smaller install. Run
+`--voice` without it and Pyrrhon says what to install and stays in text mode.
 
 The first launch without any configuration offers the same wizard
 automatically. Prefer to skip it? Export a key yourself — Text/TUI needs one
@@ -153,11 +158,48 @@ model is wrong:
 - **Keys stay out of the repo.** API keys live in `~/.pyrrhon/credentials.toml`
   (owner-only permissions), never in project config; environment variables
   always take precedence.
-- **Consent for third-party code.** Repo-level plugin code runs only after an
-  explicit one-time consent per repo; MCP servers run only if you configured
-  them.
+- **A cloned repo is untrusted input.** Anything in the repo that would run a
+  program, redirect where your prompts and API key go, or write into Pyrrhon's
+  own instructions needs one explicit consent. See below.
 
-These invariants are pinned by `tests/test_safety.py`.
+These invariants are pinned by `tests/test_safety.py` and
+`tests/test_repo_trust_boundary.py`.
+
+### What a repo may and may not do
+
+You clone a repo you have never read and point Pyrrhon at it. Its
+`.pyrrhon.toml` and `.pyrrhon/` directory are that stranger's input, not your
+configuration, so they are split by what each key can actually *do*:
+
+| Repo supplies | Effect |
+|---|---|
+| `[voice]` (except `tts_url`), `[model]`, `[context]` | Applied. Cosmetic knobs. |
+| `[fast]`, `[deep]`, `[fallbacks]` naming a builtin or *your* provider | Applied. A repo may suggest `groq/llama-3.3`. |
+| `[mcp_servers.*]` | **Needs consent** — it launches a program. |
+| `[providers.*]` | **Needs consent** — it decides where your prompts and API key are sent. |
+| `voice.tts_url` | **Needs consent** — Piper HTTP mode POSTs everything Pyrrhon says to that URL. |
+| `[fast]`/`[deep]`/`[fallbacks]` naming a provider *the repo itself defined* | **Needs consent** — the same key redirection, one level of indirection away. |
+| `.pyrrhon/*.md` (soul files) | **Needs consent** — they are appended to the system prompt, so an ungated one can tell Pyrrhon to stop citing sources. |
+| `.pyrrhon/plugins/*` with tools or commands | **Needs consent** — it is Python that Pyrrhon would import and run. |
+
+Everything needing consent is collected into **one prompt at startup**, listing
+each item and what approving it allows. Saying no is not fatal: the session
+opens normally with the permissions it already has.
+
+Consent is recorded in `<repo>/.pyrrhon/trusted` and **bound to the value's
+content**, not its name. Approving `mcp_servers.indexer = "node ./build.js"`
+approves *that command*; if the repo later changes it, you are asked again.
+Editing a soul file you approved re-prompts for the same reason.
+
+Two conveniences that are not exceptions: your own global
+`~/.pyrrhon/config.toml` is never gated (it is yours), and the files Pyrrhon
+writes itself — `/init`'s `soul.md` and the `remember` tool's `memory.md` —
+self-grant, so you are never asked to approve words you just dictated.
+
+For automation, `pyrrhon --trust-repo` grants everything without prompting.
+It runs programs the repo chose; use it only where you already trust the repo.
+A run with no interactive terminal (piped stdin, CI) refuses silently rather
+than hanging on a prompt or auto-approving.
 
 ## Architecture
 

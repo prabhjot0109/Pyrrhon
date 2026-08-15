@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 from pathlib import Path
 
 from pipecat.frames.frames import (
@@ -212,6 +213,44 @@ async def test_barge_in_during_playback_truncates_to_played_estimate():
     assert bridge.interruptions_broadcast == 1
 
 
+async def test_filler_speaks_when_the_agent_is_slow(monkeypatch):
+    import pyrrhon.voice.bridge as bridge_mod
+
+    monkeypatch.setattr(bridge_mod, "FILLER_DELAY_SEC", 0.02)
+    slow = SlowEchoTool()
+    bridge, session, seen = make_bridge(
+        [LLMReply(tool_calls=(ToolCall(id="c1", name="slow_echo", arguments={}),))],
+        tools=[slow],
+    )
+    await bridge._handle_frame(transcription("walk me through the whole thing"), DOWN)
+    await asyncio.wait_for(slow.started.wait(), timeout=2)
+    await asyncio.sleep(0.06)  # let the filler watchdog fire while the tool hangs
+
+    filler_texts = [f.text for f in bridge.pushed if isinstance(f, TextFrame)]
+    assert any(t in bridge_mod.FILLERS for t in filler_texts)
+    # Ephemeral: the filler never lands in the grounded history.
+    assert all(
+        m.get("content") not in bridge_mod.FILLERS for m in session.history
+    )
+
+    bridge._turn_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await bridge._turn_task
+
+
+async def test_no_filler_when_the_answer_is_immediate(monkeypatch):
+    import pyrrhon.voice.bridge as bridge_mod
+
+    monkeypatch.setattr(bridge_mod, "FILLER_DELAY_SEC", 0.05)
+    bridge, session, seen = make_bridge([LLMReply(text="Quick answer.")])
+    await bridge._handle_frame(transcription("hi"), DOWN)
+    await asyncio.wait_for(bridge._turn_task, timeout=2)
+    await asyncio.sleep(0.1)  # well past the filler delay
+
+    texts = [f.text for f in bridge.pushed if isinstance(f, TextFrame)]
+    assert texts == ["Quick answer."]  # no filler crept in
+
+
 async def test_barge_in_while_idle_is_ignored():
     bridge, session, seen = make_bridge([LLMReply(text="alpha beta")])
     await bridge._handle_frame(transcription("first question"), DOWN)
@@ -224,3 +263,69 @@ async def test_barge_in_while_idle_is_ignored():
     assert session.history[-1]["content"] == "alpha beta"
     assert not [e for e in seen if isinstance(e, TruncateSpeech)]
     assert bridge.interruptions_broadcast == 0
+
+
+# -- tool-aware filler (M10 Stage 4.2) --------------------------------------
+
+
+class SlowNamedTool(SlowEchoTool):
+    """A hanging tool that can pose as any belt member."""
+
+    def __init__(self, name: str):
+        super().__init__()
+        self.name = name
+
+
+async def _fire_filler(monkeypatch, tool_name: str):
+    import pyrrhon.voice.bridge as bridge_mod
+
+    monkeypatch.setattr(bridge_mod, "FILLER_DELAY_SEC", 0.02)
+    tool = SlowNamedTool(tool_name)
+    bridge, session, _seen = make_bridge(
+        [LLMReply(tool_calls=(ToolCall(id="c1", name=tool_name, arguments={"path": "secret/x.py"}),))],
+        tools=[tool],
+    )
+    await bridge._handle_frame(transcription("walk me through it"), DOWN)
+    await asyncio.wait_for(tool.started.wait(), timeout=2)
+    await asyncio.sleep(0.06)
+    texts = [f.text for f in bridge.pushed if isinstance(f, TextFrame)]
+    bridge._turn_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await bridge._turn_task
+    return texts
+
+
+async def test_filler_describes_the_running_tool(monkeypatch):
+    import pyrrhon.voice.bridge as bridge_mod
+
+    texts = await _fire_filler(monkeypatch, "read_file")
+    assert bridge_mod.TOOL_FILLERS["read_file"] in texts
+
+
+async def test_tool_filler_never_leaks_the_arguments(monkeypatch):
+    """The filler bypasses the grounding gate — it is pushed as a raw
+    SpeechChunk — so it must be citation-free BY CONSTRUCTION. The tool was
+    called with path='secret/x.py'; none of that may be spoken."""
+    texts = await _fire_filler(monkeypatch, "grep")
+    assert not any("secret/x.py" in t for t in texts)
+
+
+def test_no_tool_filler_can_carry_a_citation():
+    """A static guard on the table itself: fixed strings keyed on the tool
+    name, never interpolated, so none of them can contain a path:line."""
+    import re
+
+    import pyrrhon.voice.bridge as bridge_mod
+
+    for name, text in bridge_mod.TOOL_FILLERS.items():
+        assert not re.search(r"\S+\.\w+:\d+", text), name
+        assert "{" not in text and "%" not in text, name  # no format placeholders
+
+
+def test_tool_fillers_cover_the_whole_belt():
+    """A new tool should get a line rather than silently falling back to the
+    generic filler."""
+    import pyrrhon.voice.bridge as bridge_mod
+    from tests.test_safety import EXPECTED_BELT
+
+    assert EXPECTED_BELT <= set(bridge_mod.TOOL_FILLERS)
