@@ -62,6 +62,11 @@ class Session:
         # The same turn broken down into its parts (preamble / per-round LLM /
         # tools / gate / retry). None until the first turn completes.
         self.last_turn_trace: TurnTrace | None = None
+        # Duration of the last background compaction. Lives here, not on
+        # TurnTrace: compaction runs AFTER the turn whose trace was already
+        # finished and published, so recording it there produced a metric that
+        # was structurally always zero.
+        self.last_compaction_ms: float | None = None
 
     def set_mode(self, mode: str) -> None:
         """Switch understand <-> design by REWRITING one layered system message.
@@ -184,6 +189,7 @@ class Session:
             self._compaction = None
 
     async def _compact(self, budget: int) -> None:
+        started = time.perf_counter()
         try:
             await maybe_summarize(
                 self.history,
@@ -195,6 +201,8 @@ class Session:
             raise
         except Exception:  # never let an optimization kill the session
             logger.debug("background compaction failed", exc_info=True)
+        finally:
+            self.last_compaction_ms = (time.perf_counter() - started) * 1000.0
 
     def _cancel_compaction(self) -> None:
         """Cancel an in-flight background compaction.

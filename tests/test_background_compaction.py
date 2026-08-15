@@ -179,3 +179,19 @@ async def test_only_one_compaction_is_outstanding_at_a_time():
     assert second is not first
     if second is not None:
         await second
+
+
+async def test_background_compaction_records_its_duration():
+    """Compaction happens off the turn, so it belongs on the Session, not on a
+    TurnTrace that has already been finished and published."""
+    llm = FakeLLM([LLMReply(text="answer."), LLMReply(text="a summary")])
+    session = make_session(llm)
+    bulk(session)
+
+    assert session.last_compaction_ms is None  # nothing has compacted yet
+    await drain(session, "q")
+    assert session._compaction is not None
+    await session._compaction
+
+    assert session.last_compaction_ms is not None
+    assert session.last_compaction_ms >= 0.0

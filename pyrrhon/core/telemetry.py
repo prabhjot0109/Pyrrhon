@@ -145,7 +145,6 @@ class TurnTrace:
     rounds: list[RoundTrace] = field(default_factory=list)
     retry_ms: float = 0.0
     forced_answer_ms: float = 0.0
-    compaction_ms: float = 0.0
     first_speech_ms: float | None = None
     total_ms: float | None = None
     prompt_chars: int = 0
@@ -168,11 +167,6 @@ class TurnTrace:
     @contextmanager
     def time_forced_answer(self) -> Iterator[None]:
         with _span(lambda ms: setattr(self, "forced_answer_ms", ms)):
-            yield
-
-    @contextmanager
-    def time_compaction(self) -> Iterator[None]:
-        with _span(lambda ms: setattr(self, "compaction_ms", ms)):
             yield
 
     def begin_round(self) -> RoundTrace:
@@ -229,7 +223,6 @@ class TurnTrace:
             "gate_ms": self.gate_ms,
             "retry_ms": self.retry_ms,
             "forced_answer_ms": self.forced_answer_ms,
-            "compaction_ms": self.compaction_ms,
             "rounds": len(self.rounds),
             "tool_calls": self.tool_calls,
             "prompt_chars": self.prompt_chars,
