@@ -207,9 +207,15 @@ def create_tts(voice: VoiceSettings):
                 raise _import_error(exc, "piper") from exc
             import aiohttp
 
-            return PiperHttpTTSService(
-                base_url=voice.tts_url, aiohttp_session=aiohttp.ClientSession()
+            session = aiohttp.ClientSession()
+            service = PiperHttpTTSService(
+                base_url=voice.tts_url, aiohttp_session=session
             )
+            # Stashed so the pipeline can close it on teardown. Pipecat does not
+            # own a session it was handed, so without this every /voice on leaks
+            # one plus its connector.
+            service._pyrrhon_session = session
+            return service
         # Default: in-process Piper — downloads the voice model on first use,
         # nothing else to run. Local, free, keyless.
         try:
@@ -224,3 +230,14 @@ def create_tts(voice: VoiceSettings):
     raise VoiceUnavailableError(
         f"Unknown tts_provider '{provider}'. Valid: {', '.join(TTS_PROVIDERS)}."
     )
+
+
+async def close_voice_service(service: object) -> None:
+    """Close any resource a factory attached to `service`. Safe on anything."""
+    session = getattr(service, "_pyrrhon_session", None)
+    if session is None:
+        return
+    try:
+        await session.close()
+    except Exception:  # teardown must never mask the reason we are tearing down
+        pass
