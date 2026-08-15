@@ -59,6 +59,21 @@ from pyrrhon.plugins.loader import log as plugin_log
 
 log = logging.getLogger("pyrrhon.bootstrap")
 
+# What the deep subagent does NOT inherit from the builtin belt. Named as an
+# exclusion rather than a second hand-written list because the two belts used
+# to be maintained side by side: adding a read-only tool to one and forgetting
+# the other silently gave think_deeper a weaker belt than the main loop, with
+# no test to catch it. Derivation makes that drift impossible.
+#
+# think_deeper itself is absent because Agent.__init__ registers it, so it is
+# never in the builtin list this filters.
+DEEP_EXCLUDED = frozenset({
+    "write_spec",    # the deep pass is read-only
+    "remember",      # the fast model owns memory
+    "web_search",    # repo questions stay in the repo
+    "web_fetch",
+})
+
 
 def warm_index_in_background(agent: Agent) -> asyncio.Task | None:
     """Kick off the symbol index's cold build so the first index-using turn
@@ -175,7 +190,11 @@ def build_agent(
         except MissingAPIKeyError:
             deep_llm = None  # no key for the deep slot -> think_deeper not registered
     index = SymbolIndex(repo_root)
-    tools = [
+    # The reviewed, in-tree belt. Kept as its own list because the deep
+    # subagent's belt is derived from it below — MCP adapters and plugin tools
+    # join `tools` afterwards and are deliberately NOT inherited (uncontrolled
+    # cost, and neither is covered by the safety review).
+    builtin_tools = [
         ReadFileTool(repo_root),
         GrepTool(repo_root),
         GlobTool(repo_root),
@@ -197,8 +216,8 @@ def build_agent(
         # Always registered: DESIGN_PROMPT instructs its use, and the
         # understand-mode prompt forbids writing spec files.
         WriteSpecTool(repo_root),
-        *(extra_tools or []),  # MCP adapters join here
     ]
+    tools = [*builtin_tools, *(extra_tools or [])]  # MCP adapters join here
     existing = {tool.name for tool in tools}
     for plugin in plugins:
         for tool in plugin.tools:
@@ -214,22 +233,11 @@ def build_agent(
     plugin_prompts = "\n\n".join(p.prompt_text for p in plugins if p.prompt_text)
     if plugin_prompts:
         system_prompt += f"\n# Plugin context\n\n{plugin_prompts}\n"
-    # The deep subagent's read-only belt. Excluded on purpose: think_deeper
-    # (recursion), write_spec (read-only), remember (fast model owns memory),
-    # web tools (repo questions stay in the repo), MCP/plugin tools
-    # (uncontrolled cost).
-    deep_tools = [
-        ReadFileTool(repo_root),
-        GrepTool(repo_root),
-        GlobTool(repo_root),
-        FindSymbolTool(index),
-        SymbolContextTool(index, repo_root),
-        DependenciesTool(index),
-        RepoMapTool(index),
-        GitLogTool(repo_root),
-        GitBlameTool(repo_root),
-        GitShowTool(repo_root),
-    ]
+    # Derived, not hand-listed — see DEEP_EXCLUDED. Instances are shared with
+    # the main belt rather than rebuilt: every tool is immutable after
+    # construction (the only mutable state, the parse cache and its locks,
+    # lives on SymbolIndex, which both belts already shared).
+    deep_tools = [t for t in builtin_tools if t.name not in DEEP_EXCLUDED]
     agent = Agent(
         llm=llm,
         tools=tools,
@@ -249,10 +257,10 @@ def build_agent(
     # Agent knows — and the Agent cannot exist until the belt does. Patched
     # explicitly rather than closed over a not-yet-bound name, so the ordering
     # dependency is visible instead of being a NameError waiting to happen.
-    for belt in (tools, deep_tools):
-        for tool in belt:
-            if isinstance(tool, RepoMapTool):
-                tool._mentions = lambda: agent._mentions_now
+    # One pass covers both belts now that deep_tools shares their instances.
+    for tool in tools:
+        if isinstance(tool, RepoMapTool):
+            tool._mentions = lambda: agent._mentions_now
     return agent
 
 

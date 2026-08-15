@@ -26,6 +26,11 @@ EXPECTED_BELT = {
 
 READ_ONLY = EXPECTED_BELT - {"write_spec", "remember", "think_deeper"}
 
+# What think_deeper actually gets. Narrower than READ_ONLY: the web tools are
+# read-only with respect to the repo, but a subagent loop is excluded from
+# them on cost grounds, not safety ones — repo questions stay in the repo.
+EXPECTED_DEEP_BELT = READ_ONLY - {"web_search", "web_fetch"}
+
 
 @pytest.fixture
 def agent(tmp_path):
@@ -41,6 +46,38 @@ def test_the_tool_belt_is_exactly_the_reviewed_set(agent):
 def test_deep_subagent_belt_is_read_only(agent):
     deep = agent.tools["think_deeper"]
     assert set(deep.tools) <= READ_ONLY
+
+
+def test_deep_subagent_belt_is_exactly_the_read_only_belt(agent):
+    """Not just a subset — the whole of it.
+
+    The subset check above catches a write tool sneaking into the deep belt.
+    It cannot catch the opposite drift: a read-only tool added to the main
+    belt and forgotten in the deep one, which silently leaves think_deeper
+    less capable than the loop that escalates to it. While the two belts were
+    hand-maintained side by side that was a live hazard with no failing test.
+    build_agent now derives one from the other, and this pins the result.
+    """
+    deep = agent.tools["think_deeper"]
+    assert set(deep.tools) == EXPECTED_DEEP_BELT
+
+
+def test_deep_belt_does_not_inherit_mcp_or_plugin_tools(agent, tmp_path):
+    """Derivation filters the builtin belt, not the assembled one — an MCP
+    server or plugin must not widen the deep subagent's reach by arriving."""
+
+    class _Extra(WriteSpecTool):
+        name = "mcp__probe"
+
+    widened = build_agent(
+        tmp_path,
+        llm=FakeLLM([]),
+        deep_llm=FakeLLM([]),
+        home=tmp_path,
+        extra_tools=[_Extra(tmp_path)],
+    )
+    assert "mcp__probe" in widened.tools
+    assert set(widened.tools["think_deeper"].tools) == EXPECTED_DEEP_BELT
 
 
 def test_symbol_context_replaced_find_references_and_added_no_capability(agent):
