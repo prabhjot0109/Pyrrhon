@@ -51,7 +51,7 @@
 - Consumes: `extract_references` from `pyrrhon/core/grounding/citations.py`.
 - Produces: `EvidenceLedger()` with `record_tool_result(name: str, args: dict, result: str) -> None`, `observed(rel: str, line: int) -> bool`, `record_range(rel: str, start: int, end: int) -> None`, `record_line(rel: str, line: int) -> None`, and `files: set[str]`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_evidence.py
@@ -136,12 +136,12 @@ def test_an_error_result_records_nothing():
     assert ledger.files == set()
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_evidence.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'pyrrhon.core.grounding.evidence'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```python
 # pyrrhon/core/grounding/evidence.py
@@ -243,12 +243,12 @@ class EvidenceLedger:
             self.record_line(rel, line)
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_evidence.py -v`
 Expected: PASS (7 tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pyrrhon/core/grounding/evidence.py tests/test_evidence.py
@@ -268,7 +268,7 @@ git commit -m "feat(grounding): per-turn evidence ledger of observed line ranges
 - Produces: `GroundedText(speech_text, citations, unverified, unseen)`; `GroundingGate(root, require_provenance: bool = False)`; `GroundingGate.check(text, evidence: EvidenceLedger | None = None)`.
 - Constant: `LINE_UNSEEN_HEDGE = "I haven't actually opened that line this session."`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_grounding_gate.py (append)
@@ -325,12 +325,12 @@ async def test_no_ledger_at_all_behaves_as_if_provenance_were_off(tmp_path):
     assert result.speech_text == "The handler is at app.py:12."
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_grounding_gate.py -v`
 Expected: FAIL — `TypeError: GroundingGate.__init__() got an unexpected keyword argument 'require_provenance'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `pyrrhon/core/grounding/gate.py`:
 
@@ -432,18 +432,18 @@ class GroundingGate:
         return LINE_UNSEEN_HEDGE
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_grounding_gate.py tests/test_agent_gate.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Confirm the hot path did not regress**
+- [x] **Step 5: Confirm the hot path did not regress**
 
 Run: `uv run pytest tests/test_latency.py -v`
 Expected: PASS. The added work per reference is one dict lookup and a list scan
 over that file's ranges — no I/O.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add pyrrhon/core/grounding/gate.py tests/test_grounding_gate.py
@@ -464,7 +464,7 @@ git commit -m "feat(gate): downgrade citations to lines we never opened, behind 
 - Consumes: `EvidenceLedger` (Task 1), `GroundingGate.check(text, evidence)` (Task 2).
 - Produces: `Agent.__init__(..., require_provenance: bool = False)` is **not** added — the flag lives on the gate, which the agent already owns. `Agent._evidence: EvidenceLedger` is created per turn and passed to every `check` call. New settings section: `[grounding] require_provenance`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_agent_gate.py (append)
@@ -537,12 +537,12 @@ async def test_the_ledger_is_fresh_every_turn(tmp_path):
     assert LINE_UNSEEN_HEDGE in spoken
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_agent_gate.py -k unseen -v`
 Expected: FAIL — the citation survives; no hedge is spoken.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `pyrrhon/core/agent/loop.py`, create the ledger at the top of `_run_turn`:
 
@@ -613,17 +613,17 @@ In `pyrrhon/repl.py`'s `build_agent`, pass it through:
         ),
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_agent_gate.py tests/test_grounding_gate.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Run the full suite**
+- [x] **Step 5: Run the full suite**
 
 Run: `uv run pytest -q`
 Expected: all green — provenance is off by default, so nothing else changes.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add pyrrhon/core/agent/loop.py pyrrhon/config/settings.py pyrrhon/repl.py tests/test_agent_gate.py
@@ -648,7 +648,7 @@ expected entry that matches, so a case listing three required citations passes
 when the model produces one. Every current case lists exactly one, which is why
 nobody noticed — and which is also why fixing it now is free.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_grounding_eval.py (append)
@@ -688,12 +688,12 @@ def test_the_line_tolerance_still_applies():
     assert _check([Citation(file="app.py", line=99)], case) is not None
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_grounding_eval.py -v`
 Expected: FAIL — the partial-match case returns `None` (a pass).
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```python
 def _one_matches(citations: list[Citation], exp: dict) -> bool:
@@ -730,12 +730,12 @@ Delete the old `_matches`. Document both keys in the header comment of
 # `must_not_cite` — "*" for no citations at all, or a list of paths.
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_grounding_eval.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pyrrhon/evals/grounding.py evals/grounding.yaml tests/test_grounding_eval.py
@@ -758,7 +758,7 @@ git commit -m "fix(evals): expected now requires every citation; add expected_an
 distinguish a model that reads from a model that guesses, because in a two-file
 repo guessing is nearly always right.
 
-- [ ] **Step 1: Extend the case set**
+- [x] **Step 1: Extend the case set**
 
 Append to `evals/grounding.yaml`. These run with `--repo .` against Pyrrhon
 itself, where the answers are known and the repo is big enough that guessing
@@ -797,7 +797,7 @@ fails:
   must_not_cite: ["pyrrhon/core/events.py"]
 ```
 
-- [ ] **Step 2: Write the eval README**
+- [x] **Step 2: Write the eval README**
 
 Create `evals/README.md` documenting: the two case files, every case key, how to
 run each (`--repo .` for the real-repo set), what `--repeat`/`--json`/`--compare`
@@ -810,7 +810,7 @@ Run: `uv run python -m pyrrhon.evals.grounding evals/grounding.yaml --repo . --j
 Expected: record the score. Fabrication classes are expected to FAIL here — that
 is the finding, and the baseline for Task 8.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add evals/grounding.yaml evals/README.md
@@ -835,7 +835,7 @@ git commit -m "test(evals): real-repo cases and fabrication classes for the grou
 has zero evals — the push-back is prompt-only and entirely unmeasured, which
 means a prompt edit could silently destroy it.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_design_eval.py
@@ -874,12 +874,12 @@ def test_writing_a_spec_before_the_reasoning_fails():
     assert "write_spec" in problem
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_design_eval.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'pyrrhon.evals.design'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```python
 # pyrrhon/evals/design.py
@@ -1006,7 +1006,7 @@ if __name__ == "__main__":
   must_not_write_spec: true
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_design_eval.py -v`
 Expected: PASS
@@ -1017,7 +1017,7 @@ Run: `uv run python -m pyrrhon.evals.design evals/design.yaml --repo .`
 Expected: a score. If cases fail, that is a finding about the design prompt —
 record it in the commit body; **do not** weaken the eval to make it pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add pyrrhon/evals/design.py evals/design.yaml tests/test_design_eval.py
@@ -1040,7 +1040,7 @@ git commit -m "test(evals): measure Act 2 push-back against VISION criterion 4"
 number: how often does provenance fire, and does it fire on cases the model got
 *right*? Without it the flip is a guess.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_grounding_eval.py (append)
@@ -1052,12 +1052,12 @@ def test_the_report_carries_a_downgrade_count():
     assert report.downgrades == 3
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_grounding_eval.py -k downgrade -v`
 Expected: FAIL — `TypeError: EvalReport.__init__() got an unexpected keyword argument 'downgrades'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Add `downgrades: int = field(default=0, compare=False)` to `EvalReport` —
 `compare=False` for the same reason `traces` has it: existing tests assert
@@ -1105,12 +1105,12 @@ Print it beside the score in `main`:
 
 and add `"downgrades": report.downgrades` to the `--json` payload.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_grounding_eval.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pyrrhon/evals/grounding.py pyrrhon/core/agent/loop.py tests/test_grounding_eval.py
@@ -1163,7 +1163,7 @@ correct answers are being downgraded, the ledger is under-recording — the fix
 is a better ledger (a tool whose evidence is not being captured), not a looser
 gate. Record which tool leaked and open a follow-up.
 
-- [ ] **Step 5: Commit the decision**
+- [x] **Step 5: Commit the decision**
 
 ```bash
 git add pyrrhon/config/settings.py docs/superpowers/plans/2026-08-13-pyrrhon-m13-truthful-grounding.md
@@ -1174,9 +1174,101 @@ git commit -m "feat(grounding): enable provenance by default, with the measureme
 
 ## Implementation record
 
-> Fill in during Task 8. Record what was measured, what was decided, and every
-> place this plan turned out to be wrong — the M10 plan's postscript is the
-> model to follow, and it was the most useful part of that document.
+*Implemented 2026-08-15 on `dev`. Tasks 1-7 complete; Task 8 partially blocked.*
+
+### Decision: `require_provenance` stays `False`
+
+**Not flipped, and deliberately so.** The plan's own gate on that decision is
+that the fabrication cases must improve *and* false-positive downgrades on
+correct cases must be zero or near-zero. Neither number exists: no API key is
+configured in this environment, so no LLM-backed eval run was possible. Step 4
+says flip "only if" the data supports it — with no data, the answer is no.
+
+Flipping it on the strength of passing unit tests would be exactly the failure
+this milestone exists to prevent: a confident claim with nothing behind it.
+
+**What is still outstanding**, in order, once a key is available:
+
+```bash
+# 1. Baseline, provenance off.
+uv run python -m pyrrhon.evals.grounding evals/grounding-self.yaml \
+  --repo . --repeat 5 --json provenance-off.json
+
+# 2. Same set with [grounding] require_provenance = true in ~/.pyrrhon/config.toml
+uv run python -m pyrrhon.evals.grounding evals/grounding-self.yaml \
+  --repo . --repeat 5 --json provenance-on.json
+
+# 3. Act 2, unmeasured to date.
+uv run python -m pyrrhon.evals.design evals/design.yaml --repo . --repeat 3
+```
+
+| | provenance off | provenance on |
+|---|---|---|
+| correct-citation cases passed | *not run* | *not run* |
+| fabrication cases passed | *not run* | *not run* |
+| downgrades on correct cases (false positives) | *not run* | *not run* |
+| median `first_speech_ms` | *not run* | *not run* |
+
+The one number that **was** obtainable offline is the hot-path cost, which the
+plan makes a hard constraint (the gate sits on the speech path). Measured over
+3000 iterations of `_check_sync` against this repo, three citations per call,
+line-count cache warm:
+
+| | median | p95 |
+|---|---|---|
+| provenance off | 0.0542 ms | 0.1390 ms |
+| provenance on, lines observed | 0.0576 ms | 0.1361 ms |
+| provenance on, lines unobserved | 0.0745 ms | 0.1747 ms |
+
+**+6.3% on the happy path.** The unobserved path costs ~37% more because it
+runs the regex substitution that rewrites each reference to its bare path —
+but that is the failure path, which already paid that cost for out-of-range
+lines before M13. No I/O was added; a ledger lookup is one dict get and a scan
+of that file's ranges.
+
+### Where this plan turned out to be wrong
+
+1. **Task 1's `repo_map` branch could not have worked.** It routed the
+   file-only tools through `extract_references`, which requires `path:<digits>`.
+   `repo_map` emits `pyrrhon/core/session.py:` as a bare header line with the
+   line numbers on the indented symbol rows beneath it, so nothing would have
+   been recorded and the plan's own test (`"…session.py" in ledger.files`)
+   would have failed. Added a separate `_PATH_TOKEN` regex.
+
+2. **Task 2/3 predate commit `0299142`.** `_stream_round` now de-dupes
+   `(HEDGE, LINE_HEDGE)` so each hedge is spoken once per turn. The plan did
+   not add `LINE_UNSEEN_HEDGE` to that tuple; without it the new hedge repeats
+   once per gated sentence, which aloud sounds broken.
+
+3. **Task 3 added a repo-readable config key without deciding its privilege.**
+   CLAUDE.md requires that call explicitly. `[grounding] require_provenance` is
+   now in `PRIVILEGED_PATHS` — it neither runs nor redirects anything, but it
+   *weakens a safety control*, and the moment this default flips on, an
+   untrusted repo setting it back to `false` would disable provenance checking
+   on its own code. That is a fourth category the list did not previously have.
+
+4. **Task 5 put real-repo cases in the fixture case file.** The two sets need
+   different `--repo` values, so one file means one half always fails. Split
+   into `evals/grounding.yaml` (fixture) and `evals/grounding-self.yaml`
+   (`--repo .`, required).
+
+5. **Every expected line number in Task 5 was wrong.** `gate.py:144`,
+   `loop.py:112`, `session.py:201` were guesses; none survived contact with the
+   files, and two of those files were shifted further by this milestone's own
+   edits. Re-derived all of them. This is an argument for keeping real-repo
+   cases few and re-checking them when they fail — the README says so.
+
+6. **Task 7's placement was ambiguous.** "Extend it wherever a gate result is
+   produced" would double-count `_emit_final`'s pre- and post-retry checks on
+   any turn that retried. Accumulate after the retry only.
+
+### Not done, and why
+
+- **`unseen` does not trigger the self-correction retry.** Only `unverified`
+  does, as before. An unopened line is arguably worth one round trip on the
+  screen path — the model could go and actually read it — but the plan does not
+  ask for it and it is a behaviour change to the retry policy, not a gap in
+  what was asked. Worth considering alongside the Task 8 measurement.
 
 ## Verification
 

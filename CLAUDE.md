@@ -89,6 +89,21 @@ are enforced: `uv run ruff check .` and `uv run mypy pyrrhon/core` are clean and
 gated in CI (`.github/workflows/ci.yml`). See
 `docs/superpowers/plans/2026-08-13-pyrrhon-m11-trust-boundary.md`.
 
+M13 (truthful grounding) — the gate no longer treats "this line exists" as
+"we looked at this line". `Agent` builds a per-turn `EvidenceLedger`
+(`pyrrhon/core/grounding/evidence.py`) recording the line *ranges* each tool
+result actually displayed, and `GroundingGate.check(text, evidence)` classifies
+three ways: observed → cited, real-but-unopened → downgraded to the bare path
+with `LINE_UNSEEN_HEDGE`, unverified → stripped as before. Behind
+`[grounding] require_provenance`, **off by default** and privileged (a repo may
+not relax it without a grant); flipping it on is blocked on the eval runs
+recorded in the plan's Implementation record. Evals gained a real-repo case set
+(`evals/grounding-self.yaml`, needs `--repo .`), fabrication classes that cite a
+real file with no relevant content, `expected`-requires-all semantics plus
+`expected_any`, and an Act 2 runner (`pyrrhon/evals/design.py`) measuring
+VISION criterion 4. `evals/README.md` documents all of it. See
+`docs/superpowers/plans/2026-08-13-pyrrhon-m13-truthful-grounding.md`.
+
 
 ## Design constraints (do not violate without discussion)
 
