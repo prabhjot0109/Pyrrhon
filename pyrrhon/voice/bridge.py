@@ -90,9 +90,6 @@ TOOL_FILLERS = {
     "grep": "Searching the repo for that…",
     "glob": "Looking for the right files…",
     "find_symbol": "Finding where that's defined…",
-    # find_references left the belt in M14; symbol_context answers the same
-    # question plus the definition and its source, so the filler covers both.
-    "find_references": "Checking what calls it…",
     "symbol_context": "Pulling up that symbol and what calls it…",
     "list_dependencies": "Tracing the imports…",
     "repo_map": "Getting the lay of the land…",
