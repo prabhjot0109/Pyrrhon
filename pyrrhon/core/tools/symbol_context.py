@@ -25,11 +25,26 @@ DEFAULT_CONTEXT_LINES = 20
 
 class SymbolContextTool(Tool):
     name = "symbol_context"
+    # Gated on knowing the exact identifier, deliberately. The first wording
+    # only claimed to beat "separate definition/reference/dependency lookups",
+    # and measured against Pyrrhon itself the model never picked it: asked
+    # "where is the tool guard's duplicate check, and who calls it?" it reached
+    # for grep, then read_file, taking three rounds. It does not think of grep
+    # as a "definition lookup", so naming grep is what makes the rule bite.
+    #
+    # The gate matters as much as the push. Steering hard with no condition
+    # sends concepts here too ("the retry logic"), which returns "No definition
+    # found" and spends a round to learn nothing — turning a 3-round question
+    # into a 4-round one. An identifier is the precise trigger, and the
+    # fall-back clause keeps free text going to grep where it belongs.
     description = (
-        "Everything about one symbol in a single call: where it is defined, the "
-        "source around the definition, what calls it, and the file's import "
-        "edges. Prefer this over separate definition/reference/dependency "
-        "lookups — it is one round trip instead of three."
+        "Everything about one symbol in ONE call: where it is defined, the source "
+        "around it, every call site, and the file's import edges. "
+        "Use this FIRST whenever you know the exact identifier of a function, "
+        "class, or method — do not grep for a name you already know, and do not "
+        "follow this with read_file. It replaces all three in one round trip. "
+        "Use grep instead only when you have a concept or phrase rather than an "
+        "identifier (e.g. 'the retry logic')."
     )
     parameters = {
         "type": "object",

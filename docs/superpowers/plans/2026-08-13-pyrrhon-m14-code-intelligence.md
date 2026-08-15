@@ -1449,6 +1449,91 @@ Note the ceiling leaves only 108 chars of headroom, which sits awkwardly against
 the test comment's "a tool description may be reworded". Kept at the plan's
 "round up to the next 500" rule; revisit if it trips on an innocuous edit.
 
+### Task 7 Step 5: the eval found what the plan predicted it might
+
+First run, 2/5 passed, with two cases blowing `max_rounds` at 7 and 8. The plan
+says to treat that as the finding and fix the tool description before relaxing
+the cap. Tracing one case showed the cause exactly:
+
+```
+Q: Where is the tool guard's duplicate check, and who calls it?
+   tools=[grep, read_file]   rounds=3      # symbol_context never called
+```
+
+The original description only claimed to beat "separate definition/reference/
+dependency lookups", and the model does not classify `grep` as one of those.
+Rewritten to gate on knowing an exact identifier, to name `grep` explicitly, and
+to keep a fall-back clause so concepts still route to search. After:
+
+```
+Q: Where is run_turn defined and what calls it?
+   tools=[symbol_context]    rounds=2      # the floor: 1 tool round + 1 answer
+Q: Where is the tool guard's duplicate check, and who calls it?
+   tools=[grep, symbol_context, ...]       # correct fall-back; phrase, not a name
+```
+
+That second result exposed a flaw in the eval itself, not the tool: the question
+names a *concept*, so no amount of steering can make it a 2-round question — a
+search has to turn the phrase into a name first. `understanding.yaml` now
+separates IDENTIFIER cases (`max_rounds: 2`, a real assertion about the claim)
+from CONCEPT cases (a discovery round is legitimate). Capping the latter at 2
+was measuring the wrong thing.
+
+Belt schema after the rewrite: **7087 chars**, `symbol_context` 595 → 790.
+Ceiling raised 7000 → 7500. ~49 extra tokens per tool-bearing turn to remove up
+to two model round trips.
+
+**Recorded result** (`--repo .`, cerebras/gemma-4-31b, 2026-08-15):
+
+| | before description fix | after |
+|---|---|---|
+| passed | 2/5 | **4/6** |
+| total_ms median | 63,410 | **2,898** |
+| llm_ms median | 63,298 | 2,799 |
+| tool_wall_ms median | 111 | 65 |
+| gate_ms median | 11 | 7 |
+| provenance downgrades | 0 | 0 |
+
+The 22x latency drop is the first run having been rate-limited, not a code win —
+single questions measured 1-2s per LLM round throughout. Do not read either
+column as a channel latency baseline.
+
+**Two cases still fail, left as findings rather than tuned green:**
+
+1. *"Where is GroundingGate defined and who uses it?"* — 3 rounds against a cap
+   of 2. One round over; the identifier is named, so this is the claim not quite
+   landing rather than a mis-specified case. Worth a trace before M15.
+2. *"What is the busiest file in this repo and why?"* — cited
+   `pyrrhon/core/providers/llm.py:80` where the repo map ranks
+   `ast_index.py` first. "Busiest" is a judgment call, so a citation assertion
+   is a weak instrument here; either the case needs a sharper question or the
+   model is not consulting `repo_map`. Not resolved.
+
+Widening `expected_any` until both pass would be teaching to the test, so
+neither was touched.
+
+### Answers pointed at, not pasted (2026-08-15, user-directed)
+
+`TEXT_STYLE` used to say "short fenced code snippets are welcome", which made
+answers reprint source the reader already has. Changed to: say what the code
+does in prose, cite `path:line`, quote at most a short inline expression when
+the exact wording is the point.
+
+To make that trade honest the pointer has to be followable, so citations are now
+OSC 8 hyperlinks (`pyrrhon/core/citation_link.py`) in both channels — Rich
+`[link=]` in the REPL, a `link` style in the TUI, alongside the existing code
+viewer. `file://…#L<n>`; terminals without OSC 8 render the text unchanged.
+The URI is re-checked for repo containment because this is the step that hands a
+model-produced path to the user's shell.
+
+**The source window in `symbol_context` output was NOT removed**, and the
+measurement is why: the window is 1124 chars (~281 tokens, 23% of the output)
+and the whole tool call costs 2.8ms. Dropping it would force a `read_file`
+round back on — a full model turnaround, 1-2s — to save ~281 tokens of prefill.
+It is also never shown to the user: channels print `→ symbol_context({args})`,
+never the result. The visible code came from `TEXT_STYLE`, which is what
+changed.
+
 ### Unrelated defect found and fixed
 
 `tests/test_telemetry.py::test_tool_round_records_each_call_and_the_round_wall_clock`

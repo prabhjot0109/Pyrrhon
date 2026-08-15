@@ -68,7 +68,12 @@ def test_the_deep_subagent_belt_gained_symbol_context_and_stayed_read_only(agent
 # The belt's schema rides on every tool-bearing turn, so its size is a latency
 # property, not a style one. Pinned as a ceiling rather than an equality: a
 # tool description may be reworded, but the belt may not quietly double.
-MAX_BELT_SCHEMA_CHARS = 7000
+#
+# Measured 7087 chars over 15 tools after symbol_context's description was
+# rewritten to gate on knowing an exact identifier (595 -> 790). That is ~49
+# extra tokens on every tool-bearing turn, spent to remove up to two whole
+# model round trips — the trade the milestone exists to make.
+MAX_BELT_SCHEMA_CHARS = 7500
 
 
 def test_the_belt_schema_stays_within_its_latency_budget(agent):
@@ -177,3 +182,26 @@ async def test_web_fetch_refuses_internal_addresses():
         "http://[::1]/",
     ):
         assert "ERROR" in await WebFetchTool().run(url=evil)
+
+
+def test_the_text_style_does_not_invite_pasted_source():
+    """M14: answers point at path:line instead of reprinting the file.
+
+    The reader has the repo open and the citation is clickable, so a fenced
+    copy of what is already on disk costs tokens and latency and buys nothing.
+    Pinned because the previous wording explicitly welcomed code snippets, and
+    this is a deliberate product decision rather than a phrasing preference.
+    """
+    from pyrrhon.core.agent.prompts import TEXT_STYLE
+
+    assert "Do NOT paste source code back at the reader" in TEXT_STYLE
+    assert "code snippets are welcome" not in TEXT_STYLE
+
+
+def test_symbol_context_is_gated_on_knowing_an_identifier(agent):
+    """Steering the model here unconditionally sends concepts to a tool that
+    answers 'No definition found', spending a round to learn nothing. The
+    description must name both the trigger and the grep fall-back."""
+    description = agent.tools["symbol_context"].description
+    assert "exact identifier" in description
+    assert "grep" in description

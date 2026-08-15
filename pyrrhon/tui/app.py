@@ -30,6 +30,7 @@ from pyrrhon.commands import (  # noqa: F401 — registers commands
 from pyrrhon.commands.registry import CommandContext, dispatch
 from pyrrhon.config.settings import load_settings
 from pyrrhon.core.agent.loop import Agent
+from pyrrhon.core.citation_link import citation_uri
 from pyrrhon.core.events import (
     AskUser,
     Citation,
@@ -222,7 +223,13 @@ class PyrrhonApp(App):
         elif isinstance(event, ToolCallStarted):
             transcript.write(Text(f"→ {event.name}({event.args})", style="dim"))
         elif isinstance(event, Citation):
-            transcript.write(Text(f"📍 {event.file}:{event.line}", style="green"))
+            # Clickable as well as viewer-linked: the pane shows it here, but a
+            # citation is also how the user gets the line open in their editor.
+            uri = citation_uri(self.repo_root, event)
+            label = f"📍 {event.file}:{event.line}"
+            transcript.write(
+                Text(label, style=f"green link {uri}" if uri else "green")
+            )
             self.show_citation(event)
         elif isinstance(event, ScreenArtifact):
             # First real emitter is M14's orientation brief; rendered plainly

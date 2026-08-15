@@ -25,6 +25,7 @@ from pyrrhon.config.settings import Settings, load_settings
 from pyrrhon.config.trust import Grant, read_trust_file, record_grants
 from pyrrhon.core.agent.loop import Agent
 from pyrrhon.core.agent.soul import build_system_prompt, pending_soul_grants
+from pyrrhon.core.citation_link import citation_markup
 from pyrrhon.core.events import (
     AskUser,
     Citation,
@@ -480,7 +481,7 @@ async def _turn(session: Session, user: str, console: Console, ui: ConsoleUI) ->
             console.print(Markdown(event.text))
         elif isinstance(event, Citation):
             ui.last_citation = event  # /code opens the most recent citation
-            console.print(f"[green]📍 {event.file}:{event.line}[/green]")
+            console.print(citation_markup(session.agent.repo_root, event))
         elif isinstance(event, AskUser):
             # Design mode's Socratic question, rendered distinctly (spec: M6).
             console.print(f"[bold magenta]? {event.question}[/bold magenta]")
