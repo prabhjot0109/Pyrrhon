@@ -1,7 +1,14 @@
 from pathlib import Path
 
 from pyrrhon.core.events import Citation
-from pyrrhon.core.grounding.gate import GroundedText, GroundingGate
+from pyrrhon.core.grounding.evidence import EvidenceLedger
+from pyrrhon.core.grounding.gate import (
+    HEDGE,
+    LINE_HEDGE,
+    LINE_UNSEEN_HEDGE,
+    GroundedText,
+    GroundingGate,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_repo"
 
@@ -120,3 +127,100 @@ async def test_escaping_paths_are_cached_as_rejections(tmp_path: Path):
     gate = GroundingGate(tmp_path)
     for _ in range(3):
         assert (await gate.check("see ../outside.py:1")).unverified != ()
+
+
+# -- provenance: did we actually OPEN the line? (M13) ------------------------
+#
+# Three-way now, not two: verified-and-observed stands, verified-but-unobserved
+# is downgraded to the bare path, unverified is stripped exactly as before.
+
+
+def _repo(tmp_path: Path) -> Path:
+    (tmp_path / "app.py").write_text(
+        "\n".join(f"line {n}" for n in range(1, 51)), encoding="utf-8"
+    )
+    return tmp_path
+
+
+async def test_an_observed_line_is_cited_normally(tmp_path: Path):
+    gate = GroundingGate(_repo(tmp_path), require_provenance=True)
+    ledger = EvidenceLedger()
+    ledger.record_range("app.py", 1, 40)
+    result = await gate.check("The handler is at app.py:12.", ledger)
+    assert result.speech_text == "The handler is at app.py:12."
+    assert [(c.file, c.line) for c in result.citations] == [("app.py", 12)]
+    assert result.unseen == ()
+
+
+async def test_a_real_but_unobserved_line_is_downgraded_to_the_bare_path(tmp_path: Path):
+    """The failure this milestone exists for: line 12 of app.py is real, so the
+    old gate passed it — even though the model never opened the file."""
+    gate = GroundingGate(_repo(tmp_path), require_provenance=True)
+    result = await gate.check("The handler is at app.py:12.", EvidenceLedger())
+    assert "app.py:12" not in result.speech_text
+    assert "app.py" in result.speech_text
+    assert LINE_UNSEEN_HEDGE in result.speech_text
+    assert result.unseen == ("app.py:12",)
+    assert result.citations == ()
+
+
+async def test_a_nonexistent_file_is_still_stripped_whole(tmp_path: Path):
+    gate = GroundingGate(_repo(tmp_path), require_provenance=True)
+    result = await gate.check("See services/auth.py:9.", EvidenceLedger())
+    assert "services/auth.py" not in result.speech_text
+    assert result.unverified == ("services/auth.py:9",)
+
+
+async def test_a_fabricated_path_outranks_an_unopened_line_in_the_hedge(tmp_path: Path):
+    """Severity ordering: saying only "I haven't opened that line" when a wholly
+    invented path is also present would understate the worse claim."""
+    gate = GroundingGate(_repo(tmp_path), require_provenance=True)
+    result = await gate.check(
+        "See app.py:12 and services/auth.py:9.", EvidenceLedger()
+    )
+    assert result.unseen == ("app.py:12",)
+    assert result.unverified == ("services/auth.py:9",)
+    assert result.speech_text.endswith(HEDGE)
+
+
+async def test_an_out_of_range_line_outranks_an_unopened_one(tmp_path: Path):
+    gate = GroundingGate(_repo(tmp_path), require_provenance=True)
+    result = await gate.check("See app.py:12 and app.py:999.", EvidenceLedger())
+    assert result.unseen == ("app.py:12",)
+    assert result.unverified == ("app.py:999",)
+    assert result.speech_text.endswith(LINE_HEDGE)
+
+
+async def test_provenance_off_preserves_todays_behaviour_exactly(tmp_path: Path):
+    gate = GroundingGate(_repo(tmp_path), require_provenance=False)
+    result = await gate.check("The handler is at app.py:12.", EvidenceLedger())
+    assert result.speech_text == "The handler is at app.py:12."
+    assert [(c.file, c.line) for c in result.citations] == [("app.py", 12)]
+    assert result.unseen == ()
+
+
+async def test_no_ledger_at_all_behaves_as_if_provenance_were_off(tmp_path: Path):
+    """Callers that predate the ledger (tests, the M0 path) must not start
+    hedging just because they pass nothing."""
+    gate = GroundingGate(_repo(tmp_path), require_provenance=True)
+    result = await gate.check("The handler is at app.py:12.")
+    assert result.speech_text == "The handler is at app.py:12."
+
+
+async def test_one_hedge_even_when_several_lines_are_unopened(tmp_path: Path):
+    gate = GroundingGate(_repo(tmp_path), require_provenance=True)
+    result = await gate.check("See app.py:12, app.py:30 and app.py:44.", EvidenceLedger())
+    assert result.unseen == ("app.py:12", "app.py:30", "app.py:44")
+    assert result.speech_text.count(LINE_UNSEEN_HEDGE) == 1
+
+
+async def test_a_partially_observed_file_downgrades_only_the_unseen_line(tmp_path: Path):
+    """The model read lines 1-20; citing 12 is honest, citing 44 is not."""
+    gate = GroundingGate(_repo(tmp_path), require_provenance=True)
+    ledger = EvidenceLedger()
+    ledger.record_range("app.py", 1, 20)
+    result = await gate.check("See app.py:12 and app.py:44.", ledger)
+    assert [(c.file, c.line) for c in result.citations] == [("app.py", 12)]
+    assert result.unseen == ("app.py:44",)
+    assert "app.py:12" in result.speech_text
+    assert "app.py:44" not in result.speech_text
