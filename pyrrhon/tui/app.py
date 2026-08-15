@@ -152,12 +152,14 @@ class PyrrhonApp(App):
         # first turn pays neither the cold walk nor the TLS handshake. Held on
         # self so the tasks aren't GC'd mid-flight.
         from pyrrhon.repl import (
+            orient_in_background,
             warm_index_in_background,
             warm_llm_connection_in_background,
         )
 
         self._warm_task = warm_index_in_background(self.agent)
         self._warm_conn_task = warm_llm_connection_in_background(self.agent)
+        self._orient_task = orient_in_background(self.agent, self._render_event)
         if self._start_voice:
             self.notify(self.voice.start())
 
@@ -223,7 +225,8 @@ class PyrrhonApp(App):
             transcript.write(Text(f"📍 {event.file}:{event.line}", style="green"))
             self.show_citation(event)
         elif isinstance(event, ScreenArtifact):
-            # M0/M1 never emit these; rendered plainly until M3 refines per-kind.
+            # First real emitter is M14's orientation brief; rendered plainly
+            # until a channel needs per-kind treatment.
             transcript.write(Markdown(event.content))
         elif isinstance(event, AskUser):
             # Design mode's Socratic question, rendered distinctly (spec: M6).

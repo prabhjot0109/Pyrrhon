@@ -25,7 +25,13 @@ from pyrrhon.config.settings import Settings, load_settings
 from pyrrhon.config.trust import Grant, read_trust_file, record_grants
 from pyrrhon.core.agent.loop import Agent
 from pyrrhon.core.agent.soul import build_system_prompt, pending_soul_grants
-from pyrrhon.core.events import AskUser, Citation, SpeechChunk, ToolCallStarted
+from pyrrhon.core.events import (
+    AskUser,
+    Citation,
+    ScreenArtifact,
+    SpeechChunk,
+    ToolCallStarted,
+)
 from pyrrhon.core.grounding.gate import GroundingGate
 from pyrrhon.core.mcp import MCPManager
 from pyrrhon.core.providers.llm import (
@@ -43,6 +49,7 @@ from pyrrhon.core.tools.ast_index import (
 from pyrrhon.core.tools.base import Tool
 from pyrrhon.core.tools.git import GitBlameTool, GitLogTool, GitShowTool
 from pyrrhon.core.tools.memory import RememberTool
+from pyrrhon.core.tools.orientation import build_orientation
 from pyrrhon.core.tools.repo import GlobTool, GrepTool, ReadFileTool
 from pyrrhon.core.tools.spec_writer import WriteSpecTool
 from pyrrhon.core.tools.symbol_context import SymbolContextTool
@@ -77,6 +84,30 @@ def warm_index_in_background(agent: Agent) -> asyncio.Task | None:
             log.debug("index warm-up failed; will build lazily", exc_info=True)
 
     return asyncio.create_task(_warm())
+
+
+def orient_in_background(
+    agent: Agent, render: Callable[[ScreenArtifact], object]
+) -> asyncio.Task | None:
+    """Render the orientation brief once the index is warm, off the startup path.
+
+    Never awaited by the caller: a brief is a nicety, and the first prompt must
+    not wait on a cold index walk to appear. Same fire-and-forget shape as the
+    warm-ups above, and for the same reason — a repo with no readable source is
+    a normal case, not a startup failure.
+    """
+    tool = agent.tools.get("find_symbol")
+    index = getattr(tool, "index", None)
+    if index is None:
+        return None
+
+    async def _orient() -> None:
+        try:
+            render(await build_orientation(agent.repo_root, index))
+        except Exception:  # pragma: no cover - never let a brief break startup
+            log.debug("orientation brief failed", exc_info=True)
+
+    return asyncio.create_task(_orient())
 
 
 def _active_openai_client(llm):
@@ -386,6 +417,11 @@ async def _repl_main(
         if plugins:
             loaded = ", ".join(f"{p.manifest.name}@{p.manifest.version}" for p in plugins)
             console.print(f"[dim]plugins: {loaded}[/dim]")
+        # After the banner, before the first prompt is waited on. Ref held so
+        # the task isn't garbage-collected mid-build.
+        orient = orient_in_background(  # noqa: F841
+            agent, lambda brief: console.print(Markdown(brief.content))
+        )
         await _repl_loop(agent, console, repo_root, mcp=manager, plugins=plugins)
     finally:
         await manager.stop()  # same task as start() — anyio cancel-scope rule
