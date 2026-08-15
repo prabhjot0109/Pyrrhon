@@ -132,11 +132,16 @@ async def _run_cases(cases: list[dict], agent_factory, repeat: int = 1) -> EvalR
             # getattr: an agent double without the attribute simply contributes
             # nothing, the same tolerance last_trace already gets.
             downgrades += len(getattr(agent, "last_unseen", ()))
-            problem = _check(citations, case)
-            if problem is None:
+            problems = [
+                p for p in (
+                    _check(citations, case),
+                    _check_rounds(case, len(trace.rounds) if trace else 0),
+                ) if p
+            ]
+            if not problems:
                 passed += 1
             else:
-                failures.append(f"{case['question']!r}: {problem}")
+                failures.append(f"{case['question']!r}: {'; '.join(problems)}")
     return EvalReport(
         total=len(cases) * max(1, repeat),
         passed=passed,
@@ -173,6 +178,20 @@ def _check(citations: list[Citation], case: dict) -> str | None:
         want = " | ".join(f"{e['file']}:{e['line']}" for e in any_of)
         return f"expected one of {want}, got {got}"
     return None
+
+
+def _check_rounds(case: dict, rounds: int) -> str | None:
+    """None when within budget, else an explanation.
+
+    Round count is the measurable form of the code-intelligence claim: folding
+    three lookups into symbol_context is only real if the model stops taking
+    three turns to answer. A citation-only eval cannot tell the two apart —
+    both spellings end up citing the same line.
+    """
+    cap = case.get("max_rounds")
+    if cap is None or rounds <= cap:
+        return None
+    return f"took {rounds} model rounds, expected at most {cap}"
 
 
 def _one_matches(citations: list[Citation], exp: dict) -> bool:
@@ -232,7 +251,14 @@ def main(argv: list[str] | None = None) -> int:
 
     # Imported here, not at module top: only the CLI needs a real,
     # API-key-backed agent — unit tests inject FakeLLM-backed factories.
+    from pyrrhon.config.credentials import load_credentials
     from pyrrhon.repl import build_agent
+
+    # `pyrrhon --setup` writes keys to ~/.pyrrhon/credentials.toml and only the
+    # wizard ever read them back, so the eval command CLAUDE.md documents failed
+    # with MissingAPIKeyError on a machine that was correctly configured.
+    # setdefault semantics mean a real env var still wins.
+    load_credentials()
 
     repo_root = args.repo.resolve()
     report = run_eval(args.yaml_path, lambda: build_agent(repo_root), args.repeat)

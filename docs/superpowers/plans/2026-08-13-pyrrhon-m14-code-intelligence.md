@@ -56,7 +56,7 @@
 "`ast_index.py:_iter_files_with_mtime` hardcodes `.py`; the extension set must
 become table-driven in the same change, or new grammars will never see a file."
 
-- [ ] **Step 1: Create the fixture repo**
+- [x] **Step 1: Create the fixture repo**
 
 ```typescript
 // tests/fixtures/polyglot_repo/app.ts
@@ -101,7 +101,7 @@ Add `tests/fixtures/polyglot_repo/` to the fixture fence in `tests/conftest.py`
 alongside `sample_repo` — M10 added that fence because indexing a checked-in
 fixture writes a `cache.db` that survives into later runs.
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 ```python
 # tests/test_languages.py
@@ -189,12 +189,12 @@ def test_python_behaviour_is_unchanged():
     assert spec.parse_imports("from pkg import api", "") == ["pkg", "pkg.api"]
 ```
 
-- [ ] **Step 3: Run test to verify it fails**
+- [x] **Step 3: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_languages.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'pyrrhon.core.tools.languages'`
 
-- [ ] **Step 4: Write minimal implementation**
+- [x] **Step 4: Write minimal implementation**
 
 ```python
 # pyrrhon/core/tools/languages.py
@@ -337,7 +337,7 @@ def spec_for_extension(ext: str) -> LanguageSpec | None:
     return _BY_EXTENSION.get(ext.lower())
 ```
 
-- [ ] **Step 5: Run test to verify it passes**
+- [x] **Step 5: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_languages.py -v`
 Expected: PASS. If a capture test fails, the node name is wrong for your
@@ -345,7 +345,7 @@ grammar version — inspect the real tree with:
 `python -c "from tree_sitter import Parser; from tree_sitter_language_pack import get_language; print(Parser(get_language('go')).parse(open('tests/fixtures/polyglot_repo/server.go','rb').read()).root_node)"`
 and correct the query. Do not skip the test.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add pyrrhon/core/tools/languages.py tests/test_languages.py tests/fixtures/polyglot_repo/ tests/conftest.py
@@ -364,7 +364,7 @@ git commit -m "feat(index): table-driven language specs for python, ts/tsx, js, 
 - Consumes: `INDEXABLE_EXTENSIONS`, `spec_for_extension`, `compiled` from Task 1.
 - Produces: `symbols` and `files` tables gain a `lang TEXT` column; `SymbolIndex.find_symbol` returns `(file, line, kind)` unchanged; `SymbolIndex.languages() -> dict[str, int]` (file count per language, for the orientation brief).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_multilang_index.py
@@ -426,12 +426,12 @@ async def test_python_indexing_is_unchanged(tmp_path):
     assert await index.find_symbol("greet") == [("m.py", 1, "function")]
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_multilang_index.py -v`
 Expected: FAIL — `assert [] == [("app.ts", 3, "class")]`; the walk yields only `.py`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Replace the module-level grammar/query globals in `ast_index.py` with imports
 from `languages.py`. Add `lang` to the schema:
@@ -549,19 +549,19 @@ Add the census:
         return {lang: count for lang, count in rows if lang}
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_multilang_index.py tests/test_symbol_index.py tests/test_ast_tools.py tests/test_import_graph.py tests/test_repo_map.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Confirm the cold-index cost on a real polyglot repo**
+- [x] **Step 5: Confirm the cold-index cost on a real polyglot repo**
 
 Run the index over a checkout with TS and Go present and record the wall time.
 If it exceeds a few seconds, note it — M4's docstring already names the
 remedy (a `ProcessPoolExecutor` behind the same async interface) and it is a
 follow-up, not this task.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add pyrrhon/core/tools/ast_index.py tests/test_multilang_index.py
@@ -586,7 +586,7 @@ git commit -m "feat(index): index every language in the table; version and rebui
 trip is a full model turnaround, so this is the single biggest remaining
 structural latency win.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_symbol_context.py
@@ -642,12 +642,12 @@ async def test_every_line_it_shows_becomes_citable_evidence(tmp_path):
     assert ledger.observed("mod.py", 7)  # inside the shown window
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_symbol_context.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'pyrrhon.core.tools.symbol_context'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```python
 # pyrrhon/core/tools/symbol_context.py
@@ -763,12 +763,12 @@ if name == "symbol_context":
     return
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_symbol_context.py tests/test_evidence.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pyrrhon/core/tools/symbol_context.py pyrrhon/core/grounding/evidence.py tests/test_symbol_context.py
@@ -834,7 +834,7 @@ Measured against the installed belt:
 amended belt costs ~55 tokens more per tool-bearing turn and buys back a
 capability. Claim the round trips; do not claim the schema.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_safety.py — replace the EXPECTED_BELT constant
@@ -892,13 +892,13 @@ async def test_truncated_references_still_report_the_full_blast_radius(tmp_path)
     assert "c1.py" in result and "c2.py" in result
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_safety.py tests/test_symbol_context.py -v`
 Expected: FAIL — `symbol_context` is not in the belt; the rollup assertion fails
 because Task 3's truncation drops the tail silently.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 First, make the truncation lossless in aggregate. In
 `pyrrhon/core/tools/symbol_context.py`, replace the reference block from Task 3:
@@ -928,12 +928,12 @@ and `deep_tools` (line 181). **Leave `DependenciesTool(index)` in both** — see
 the reasoning above. Leave the `FindReferencesTool` class in place; it is still
 useful programmatically and its own tests still pass.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_safety.py tests/test_symbol_context.py tests/test_build_agent_m4.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Pin the belt's schema budget deterministically**
+- [x] **Step 5: Pin the belt's schema budget deterministically**
 
 The original step said to read `trace.schema_chars` "via `/debug-history` or the
 latency harness `--json`" and compare against "the M13 baseline". Neither exists:
@@ -964,7 +964,7 @@ next 500, and record the exact measured number in the commit body. Claim the
 round trips in the message, not a schema saving — the amended belt is ~219 chars
 *larger* per turn and that is the right trade.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add pyrrhon/repl.py pyrrhon/core/tools/symbol_context.py tests/test_safety.py tests/test_symbol_context.py
@@ -989,7 +989,7 @@ git commit -m "refactor(belt): symbol_context replaces find_references, one roun
 counting with no conversation awareness", so asking about auth returns the same
 ranking as asking about the parser.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_repo_map.py (append)
@@ -1028,12 +1028,12 @@ async def test_the_cache_distinguishes_different_mention_sets(tmp_path):
     assert first != second  # a generation-only cache key would return `first`
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_repo_map.py -v`
 Expected: FAIL — `TypeError: build_repo_map() got an unexpected keyword argument 'mentioned'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```python
 # A mentioned file outranks reference count, but does not erase it: within the
@@ -1106,12 +1106,12 @@ constructing the agent before the tool, so build the belt, construct the
 `Agent`, then patch the tool's `_mentions` callable. Do it explicitly with a
 comment rather than a closure over a not-yet-bound name.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_repo_map.py tests/test_ast_tools.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pyrrhon/core/tools/ast_index.py pyrrhon/core/agent/loop.py pyrrhon/repl.py tests/test_repo_map.py
@@ -1131,7 +1131,7 @@ git commit -m "feat(repo-map): rank files the conversation is actually about"
 - Consumes: `SymbolIndex.languages()` (Task 2), `SymbolIndex.build_repo_map`, `GitLogTool`.
 - Produces: `build_orientation(repo_root: Path, index: SymbolIndex) -> ScreenArtifact` — the first real emitter of `ScreenArtifact`, unused since M0.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_orientation.py
@@ -1170,12 +1170,12 @@ async def test_an_empty_repo_produces_an_honest_brief(tmp_path):
     assert "no indexed source" in content.lower()
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_orientation.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'pyrrhon.core.tools.orientation'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```python
 # pyrrhon/core/tools/orientation.py
@@ -1241,12 +1241,12 @@ existing warm-ups — it must never delay the first prompt:
                 log.debug("orientation brief failed", exc_info=True)
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_orientation.py tests/test_tui_app.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pyrrhon/core/tools/orientation.py pyrrhon/repl.py pyrrhon/tui/app.py tests/test_orientation.py
@@ -1271,7 +1271,7 @@ Stage 3's quality claim and measures nothing without it." The claim is
 specifically that a dependency question costs one tool round instead of three,
 so the eval has to assert the round count, not just the citation.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_grounding_eval.py (append)
@@ -1288,12 +1288,12 @@ def test_a_case_without_a_cap_never_fails_on_rounds():
     assert _check_rounds({}, rounds=99) is None
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_grounding_eval.py -k rounds -v`
 Expected: FAIL — `ImportError: cannot import name '_check_rounds'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```python
 def _check_rounds(case: dict, rounds: int) -> str | None:
@@ -1351,19 +1351,19 @@ Call it in `_run_cases` alongside `_check`, using the trace already collected:
     - {file: pyrrhon/core/agent/loop.py, line: 175}
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_grounding_eval.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Run the eval and record the numbers**
+- [x] **Step 5: Run the eval and record the numbers**
 
 Run: `uv run python -m pyrrhon.evals.grounding evals/understanding.yaml --repo . --repeat 3 --json understanding.json`
 Expected: a score plus the round counts. If `max_rounds` fails, that is the
 finding — `symbol_context` is not being reached for. Fix the tool description
 before relaxing the cap, and record what changed.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add evals/understanding.yaml pyrrhon/evals/grounding.py tests/test_grounding_eval.py
@@ -1374,10 +1374,217 @@ git commit -m "test(evals): measure the code-intelligence claim in model rounds,
 
 ## Implementation record
 
-> Fill in as tasks land: what was measured (cold-index time on a polyglot repo,
-> schema_chars before and after the belt change, round counts on
-> understanding.yaml), and every place this plan was wrong. Grammar node names
-> are the most likely — record the corrected queries.
+Executed 2026-08-15 on branch `m14-code-intelligence`, against
+tree-sitter 0.25.2 / tree-sitter-language-pack 1.12.2.
+
+### Where the plan was wrong
+
+**Fixture line numbers were internally inconsistent (Task 1 Step 1 / Task 2).**
+The fixture listings carry a `// tests/fixtures/...` header comment, but Task 2
+then expects `Greeter` at `app.ts:3` and `Server` at `server.go:5` — true only
+*without* the header — while expecting `formatName` at `helpers.js:2`, true only
+*with* it. Resolved by dropping the header from all three fixtures and
+correcting the expectation to `helpers.js:1`.
+
+**The `require()` import query was a no-op (Task 1 Step 4).** As specified,
+`(call_expression function: (identifier) @import (#eq? @import "require"))`
+captures the *identifier* `require`, whose text contains no module specifier, so
+`_parse_js_imports` returns `[]` — a silently dead import edge for the form most
+`.js` in the wild actually uses. Corrected to capture the whole call:
+
+```
+((call_expression function: (identifier) @_fn) @import
+ (#eq? @_fn "require"))
+```
+
+Verified that the `#eq?` predicate genuinely filters (py-tree-sitter applies
+standard predicates in `QueryCursor.captures`) — without that, every call
+expression would have become an import edge. Pinned by
+`test_a_commonjs_require_is_an_import_edge_too`.
+
+**Every other node name in the plan was correct** for language-pack 1.12.2. No
+query needed adjusting; all capture tests passed first run.
+
+**Task 4's truncation test passed for the wrong reason.** `assert "c2.py" in
+result` is satisfied by the `imported by:` line, which says nothing about call
+sites, so the test was green before the rollup existed. Tightened to assert the
+rollup text itself (`"…and 10 more in c2.py (10)"`), which is genuinely RED
+against Task 3's truncation.
+
+**Task 4 missed the voice filler.** `TOOL_FILLERS` in `pyrrhon/voice/bridge.py`
+is keyed on tool name; dropping `find_references` from the belt without adding
+`symbol_context` would leave the voice channel silent during the commonest
+lookup. Added.
+
+**The Verification section's grounding command is wrong.** It says
+`grounding.yaml --repo .`, but per `evals/README.md` and the file's own header
+`grounding.yaml` runs against `tests/fixtures/sample_repo` with **no** `--repo`,
+and only `grounding-self.yaml` takes `--repo .`. Run as written, every expected
+path is missing. Note also that running the fixture set leaves
+`tests/fixtures/sample_repo/.pyrrhon/cache.db` behind, which trips
+`conftest.py`'s pristine-fixture fence on the *next* pytest run — delete it
+afterwards.
+
+**The eval CLI could not see stored credentials (Task 7 Step 5).**
+`pyrrhon --setup` writes keys to `~/.pyrrhon/credentials.toml`, and only
+`config/wizard.py` ever read them back, so the eval command CLAUDE.md documents
+died with `MissingAPIKeyError` on a correctly configured machine. Added
+`load_credentials()` to both `evals/grounding.py` and `evals/design.py` mains;
+`setdefault` semantics keep a real env var winning.
+
+### Measured
+
+**Cold index** (Task 2 Step 5):
+
+| Repo | Files | Cold | Warm re-walk |
+|---|---|---|---|
+| Pyrrhon (python-dominant) | 154 | 438 ms | 9 ms |
+| A real TS/JS checkout | 38 | 1070 ms | — |
+
+Grammar first-compile: typescript 46.5 ms, javascript 22.9 ms, python 21.0 ms,
+go 7.3 ms (~100 ms for all four). Lazy compilation therefore saves a
+python-only repo ~77 ms. Both well inside "a few seconds" — the
+`ProcessPoolExecutor` follow-up M4's docstring names is not needed yet.
+
+**Belt schema** (Task 4 Step 5): **6892 chars over 15 tools**, ceiling pinned at
+7000. Per-tool: grep 788, write_spec 673, think_deeper 597, symbol_context 595,
+git_blame 493, git_log 458, read_file 454, web_search 445, list_dependencies
+407, remember 369, find_symbol 343, web_fetch 343, git_show 337, repo_map 313,
+glob 277. This confirms Appendix A exactly: `symbol_context` 595 vs
+`find_references` 376 = **+219 chars/turn**. The milestone claims the round-trip
+collapse, not a schema saving.
+
+Note the ceiling leaves only 108 chars of headroom, which sits awkwardly against
+the test comment's "a tool description may be reworded". Kept at the plan's
+"round up to the next 500" rule; revisit if it trips on an innocuous edit.
+
+### Task 7 Step 5: the eval found what the plan predicted it might
+
+First run, 2/5 passed, with two cases blowing `max_rounds` at 7 and 8. The plan
+says to treat that as the finding and fix the tool description before relaxing
+the cap. Tracing one case showed the cause exactly:
+
+```
+Q: Where is the tool guard's duplicate check, and who calls it?
+   tools=[grep, read_file]   rounds=3      # symbol_context never called
+```
+
+The original description only claimed to beat "separate definition/reference/
+dependency lookups", and the model does not classify `grep` as one of those.
+Rewritten to gate on knowing an exact identifier, to name `grep` explicitly, and
+to keep a fall-back clause so concepts still route to search. After:
+
+```
+Q: Where is run_turn defined and what calls it?
+   tools=[symbol_context]    rounds=2      # the floor: 1 tool round + 1 answer
+Q: Where is the tool guard's duplicate check, and who calls it?
+   tools=[grep, symbol_context, ...]       # correct fall-back; phrase, not a name
+```
+
+That second result exposed a flaw in the eval itself, not the tool: the question
+names a *concept*, so no amount of steering can make it a 2-round question — a
+search has to turn the phrase into a name first. `understanding.yaml` now
+separates IDENTIFIER cases (`max_rounds: 2`, a real assertion about the claim)
+from CONCEPT cases (a discovery round is legitimate). Capping the latter at 2
+was measuring the wrong thing.
+
+Belt schema after the rewrite: **7087 chars**, `symbol_context` 595 → 790.
+Ceiling raised 7000 → 7500. ~49 extra tokens per tool-bearing turn to remove up
+to two model round trips.
+
+**Recorded result** (`--repo .`, cerebras/gemma-4-31b, 2026-08-15):
+
+| | before description fix | after |
+|---|---|---|
+| passed | 2/5 | **4/6** |
+| total_ms median | 63,410 | **2,898** |
+| llm_ms median | 63,298 | 2,799 |
+| tool_wall_ms median | 111 | 65 |
+| gate_ms median | 11 | 7 |
+| provenance downgrades | 0 | 0 |
+
+The 22x latency drop is the first run having been rate-limited, not a code win —
+single questions measured 1-2s per LLM round throughout. Do not read either
+column as a channel latency baseline.
+
+**Two cases still fail, left as findings rather than tuned green:**
+
+1. *"Where is GroundingGate defined and who uses it?"* — 3 rounds against a cap
+   of 2. One round over; the identifier is named, so this is the claim not quite
+   landing rather than a mis-specified case. Worth a trace before M15.
+2. *"What is the busiest file in this repo and why?"* — cited
+   `pyrrhon/core/providers/llm.py:80` where the repo map ranks
+   `ast_index.py` first. "Busiest" is a judgment call, so a citation assertion
+   is a weak instrument here; either the case needs a sharper question or the
+   model is not consulting `repo_map`. Not resolved.
+
+Widening `expected_any` until both pass would be teaching to the test, so
+neither was touched.
+
+### Manual polyglot check (Verification item 3)
+
+Pointed at a real TypeScript checkout (28 indexed files: 22 ts, 6 js) and asked
+"Where is SurfaceStore defined and what calls it?", against ground truth
+confirmed by hand first:
+
+```
+tools : ['symbol_context', 'grep']       # symbol_context reached for FIRST
+rounds: 3
+cites : src/render/store.ts:84  <- hand-verified `export class SurfaceStore {`
+        src/main.ts:32          <- hand-verified instantiation site
+```
+
+The answer was prose plus `path:line`, no fenced code — the TEXT_STYLE change
+holding outside the fixture too.
+
+**A real Go repo was not available on this machine**, so Go coverage rests on
+`tests/fixtures/polyglot_repo/server.go` (capture tests, indexing tests, and
+`languages()` census) rather than a live checkout. Worth doing before M15.
+
+### Answers pointed at, not pasted (2026-08-15, user-directed)
+
+`TEXT_STYLE` used to say "short fenced code snippets are welcome", which made
+answers reprint source the reader already has. Changed to: say what the code
+does in prose, cite `path:line`, quote at most a short inline expression when
+the exact wording is the point.
+
+To make that trade honest the pointer has to be followable, so citations are now
+OSC 8 hyperlinks (`pyrrhon/core/citation_link.py`) in both channels — Rich
+`[link=]` in the REPL, a `link` style in the TUI, alongside the existing code
+viewer. `file://…#L<n>`; terminals without OSC 8 render the text unchanged.
+The URI is re-checked for repo containment because this is the step that hands a
+model-produced path to the user's shell.
+
+**The source window in `symbol_context` output was NOT removed**, and the
+measurement is why: the window is 1124 chars (~281 tokens, 23% of the output)
+and the whole tool call costs 2.8ms. Dropping it would force a `read_file`
+round back on — a full model turnaround, 1-2s — to save ~281 tokens of prefill.
+It is also never shown to the user: channels print `→ symbol_context({args})`,
+never the result. The visible code came from `TEXT_STYLE`, which is what
+changed.
+
+### Unrelated defect found and fixed
+
+`tests/test_telemetry.py::test_tool_round_records_each_call_and_the_round_wall_clock`
+began failing ~5 of 8 full-suite runs on this branch while passing 5/5 on `dev`
+and 5/5 in isolation. Investigated rather than dismissed as flake.
+
+Root cause is a **test defect**, not a dispatch regression. The tools are bare
+`asyncio.sleep(0.05)` and `_run_tool` is a bare `await`, so nothing inside the
+measured span can consume time. Instrumenting the suite showed gen2 GC pauses of
+90–194 ms are routine by the time these tests run (~290k live objects). A pause
+inside the ~50 ms window inflates the slowest span without changing the sum,
+dragging `parallel_speedup` toward 1.0 — the exact value that signals sequential
+dispatch, so a false negative and a true positive are indistinguishable. The
+observed failure was 1.4986 against a 1.5 threshold.
+
+The branches differ by 1% in heap (dev 290,708 vs M14 293,730 live objects) but
+sit at different GC phases (`counts=(283,5,5)` vs `(542,4,8)`): M14's 42 extra
+tests merely re-roll when the collector fires.
+
+Fixed by suspending automatic collection across the measurement, which removes
+the confound rather than relaxing the threshold — sequential dispatch still
+scores 1.0 and still fails. Verified 5/5 clean full runs.
 
 ## Verification
 

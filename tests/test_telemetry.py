@@ -9,8 +9,10 @@ measured in the same run, which is stable regardless of machine speed.
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from pyrrhon.core.agent.loop import Agent
@@ -24,6 +26,35 @@ from pyrrhon.core.tools.repo import ReadFileTool
 from tests.helpers import FakeLLM
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_repo"
+
+
+@contextmanager
+def no_gc_pause():
+    """Suspend automatic collection across a timing measurement.
+
+    The one place this suite compares wall-clock against total is the
+    concurrent-dispatch check below, and a ratio over a ~50ms window is
+    unusually fragile: a gen2 pause inflates the slowest span without changing
+    the sum, dragging the ratio toward 1.0 — which is exactly the value that
+    signals the regression the test exists to catch. A false negative and a
+    true positive become indistinguishable.
+
+    Measured on this suite, gen2 pauses of 90-190ms are routine by the time
+    these tests run (~290k live objects), and whether one lands inside the
+    window depends only on GC phase — which shifts whenever the number of
+    preceding tests changes. M14 added 42 tests and flipped the failure rate
+    from 0/5 runs to ~5/8 with no change to the dispatch path at all.
+
+    Suspending the collector removes the confound rather than relaxing the
+    threshold: sequential dispatch still scores 1.0 and still fails.
+    """
+    enabled = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if enabled:
+            gc.enable()
 
 
 class SlowTool(Tool):
@@ -150,7 +181,8 @@ async def test_tool_round_records_each_call_and_the_round_wall_clock():
         LLMReply(text="done."),
     ]
     agent = make_agent(replies, tools=[SlowTool("slow_a"), SlowTool("slow_b")])
-    await drain(agent, [], "run both tools")
+    with no_gc_pause():
+        await drain(agent, [], "run both tools")
 
     trace = agent.last_trace
     assert trace.tool_calls == 2

@@ -30,6 +30,7 @@ from pyrrhon.commands import (  # noqa: F401 — registers commands
 from pyrrhon.commands.registry import CommandContext, dispatch
 from pyrrhon.config.settings import load_settings
 from pyrrhon.core.agent.loop import Agent
+from pyrrhon.core.citation_link import citation_uri
 from pyrrhon.core.events import (
     AskUser,
     Citation,
@@ -152,12 +153,14 @@ class PyrrhonApp(App):
         # first turn pays neither the cold walk nor the TLS handshake. Held on
         # self so the tasks aren't GC'd mid-flight.
         from pyrrhon.repl import (
+            orient_in_background,
             warm_index_in_background,
             warm_llm_connection_in_background,
         )
 
         self._warm_task = warm_index_in_background(self.agent)
         self._warm_conn_task = warm_llm_connection_in_background(self.agent)
+        self._orient_task = orient_in_background(self.agent, self._render_event)
         if self._start_voice:
             self.notify(self.voice.start())
 
@@ -220,10 +223,17 @@ class PyrrhonApp(App):
         elif isinstance(event, ToolCallStarted):
             transcript.write(Text(f"→ {event.name}({event.args})", style="dim"))
         elif isinstance(event, Citation):
-            transcript.write(Text(f"📍 {event.file}:{event.line}", style="green"))
+            # Clickable as well as viewer-linked: the pane shows it here, but a
+            # citation is also how the user gets the line open in their editor.
+            uri = citation_uri(self.repo_root, event)
+            label = f"📍 {event.file}:{event.line}"
+            transcript.write(
+                Text(label, style=f"green link {uri}" if uri else "green")
+            )
             self.show_citation(event)
         elif isinstance(event, ScreenArtifact):
-            # M0/M1 never emit these; rendered plainly until M3 refines per-kind.
+            # First real emitter is M14's orientation brief; rendered plainly
+            # until a channel needs per-kind treatment.
             transcript.write(Markdown(event.content))
         elif isinstance(event, AskUser):
             # Design mode's Socratic question, rendered distinctly (spec: M6).

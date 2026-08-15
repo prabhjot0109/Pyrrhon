@@ -19,7 +19,7 @@ from tests.helpers import FakeLLM  # scripted-replies double, defined in tests/h
 
 EXPECTED_BELT = {
     "read_file", "grep", "glob", "remember",
-    "find_symbol", "find_references", "list_dependencies", "repo_map",
+    "find_symbol", "symbol_context", "list_dependencies", "repo_map",
     "git_log", "git_blame", "git_show",
     "web_search", "web_fetch", "write_spec", "think_deeper",
 }
@@ -41,6 +41,46 @@ def test_the_tool_belt_is_exactly_the_reviewed_set(agent):
 def test_deep_subagent_belt_is_read_only(agent):
     deep = agent.tools["think_deeper"]
     assert set(deep.tools) <= READ_ONLY
+
+
+def test_symbol_context_replaced_find_references_and_added_no_capability(agent):
+    """The M14 belt change. symbol_context takes the same `name` argument as
+    find_references and returns its rows plus more, from the same read-only
+    index, so nothing new became reachable and nothing became unanswerable."""
+    assert "symbol_context" in agent.tools
+    assert "find_references" not in agent.tools
+
+
+def test_path_addressed_dependency_questions_survived_the_belt_change(agent):
+    """list_dependencies is path-addressed; symbol_context is name-addressed.
+    'What imports loop.py?' has no symbol to hang on, so this tool is not
+    redundant and must not be dropped as if it were."""
+    assert "list_dependencies" in agent.tools
+    assert "path" in agent.tools["list_dependencies"].parameters["properties"]
+
+
+def test_the_deep_subagent_belt_gained_symbol_context_and_stayed_read_only(agent):
+    deep = agent.tools["think_deeper"]
+    assert "symbol_context" in deep.tools
+    assert set(deep.tools) <= READ_ONLY
+
+
+# The belt's schema rides on every tool-bearing turn, so its size is a latency
+# property, not a style one. Pinned as a ceiling rather than an equality: a
+# tool description may be reworded, but the belt may not quietly double.
+#
+# Measured 7087 chars over 15 tools after symbol_context's description was
+# rewritten to gate on knowing an exact identifier (595 -> 790). That is ~49
+# extra tokens on every tool-bearing turn, spent to remove up to two whole
+# model round trips — the trade the milestone exists to make.
+MAX_BELT_SCHEMA_CHARS = 7500
+
+
+def test_the_belt_schema_stays_within_its_latency_budget(agent):
+    total = sum(len(str(s)) for s in agent._tool_schemas())
+    assert total <= MAX_BELT_SCHEMA_CHARS, (
+        f"belt schema grew to {total} chars; every tool-bearing turn pays this"
+    )
 
 
 async def test_git_show_rejects_flag_injection(tmp_path):
@@ -142,3 +182,26 @@ async def test_web_fetch_refuses_internal_addresses():
         "http://[::1]/",
     ):
         assert "ERROR" in await WebFetchTool().run(url=evil)
+
+
+def test_the_text_style_does_not_invite_pasted_source():
+    """M14: answers point at path:line instead of reprinting the file.
+
+    The reader has the repo open and the citation is clickable, so a fenced
+    copy of what is already on disk costs tokens and latency and buys nothing.
+    Pinned because the previous wording explicitly welcomed code snippets, and
+    this is a deliberate product decision rather than a phrasing preference.
+    """
+    from pyrrhon.core.agent.prompts import TEXT_STYLE
+
+    assert "Do NOT paste source code back at the reader" in TEXT_STYLE
+    assert "code snippets are welcome" not in TEXT_STYLE
+
+
+def test_symbol_context_is_gated_on_knowing_an_identifier(agent):
+    """Steering the model here unconditionally sends concepts to a tool that
+    answers 'No definition found', spending a round to learn nothing. The
+    description must name both the trigger and the grep fall-back."""
+    description = agent.tools["symbol_context"].description
+    assert "exact identifier" in description
+    assert "grep" in description

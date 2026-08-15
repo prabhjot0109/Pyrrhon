@@ -105,6 +105,27 @@ VISION criterion 4. `evals/README.md` documents all of it. See
 `docs/superpowers/plans/2026-08-13-pyrrhon-m13-truthful-grounding.md`.
 
 
+M14 (code intelligence) — the symbol index is table-driven
+(`pyrrhon/core/tools/languages.py`): python, typescript, tsx, javascript, and
+go, with grammars compiled lazily and every query verified by *capture* against
+the installed grammar, not merely by compiling. The cache carries a `lang`
+column behind `_SCHEMA_VERSION` (a bump drops and rebuilds — the cache is
+derived). `symbol_context` (`pyrrhon/core/tools/symbol_context.py`) answers
+definition + source + call sites + import edges in one round and **replaced
+`find_references` on the belt**; `list_dependencies` stays, because it is
+path-addressed and `symbol_context` is name-addressed. Its description is
+deliberately gated on knowing an exact identifier — steering harder sends
+concepts to a tool that can only answer "No definition found". The repo map
+takes a conversation-mention boost (`build_repo_map(mentioned=...)`, wired
+through `Agent._mentions_now`), and `build_orientation`
+(`pyrrhon/core/tools/orientation.py`) emits the first real `ScreenArtifact` at
+session start. Answers point at `path:line` rather than pasting source, and
+citations are OSC 8 hyperlinks (`pyrrhon/core/citation_link.py`).
+`evals/understanding.yaml` measures the round-trip claim via `max_rounds`, split
+into identifier cases (cap 2) and concept cases (a discovery round is
+legitimate). See
+`docs/superpowers/plans/2026-08-13-pyrrhon-m14-code-intelligence.md`.
+
 ## Design constraints (do not violate without discussion)
 
 - **Voice-first, screen-supported — not voice-only.** Voice drives; the terminal
