@@ -25,7 +25,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+import sys
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from pyrrhon.config.settings import Settings, load_settings
@@ -34,6 +35,7 @@ from pyrrhon.core.agent.loop import Agent
 from pyrrhon.core.agent.soul import build_system_prompt, pending_soul_grants
 from pyrrhon.core.events import ScreenArtifact
 from pyrrhon.core.grounding.gate import GroundingGate
+from pyrrhon.core.mcp import MCPManager
 from pyrrhon.core.providers.llm import MissingAPIKeyError, create_llm_with_fallbacks
 from pyrrhon.core.tools.ast_index import (
     DependenciesTool,
@@ -344,3 +346,65 @@ def load_channel_plugins(
 
     plugins = manager.load_all(allow_repo_code=_repo_code_allowed(repo_root, manager))
     return plugins, merge_plugin_settings(settings, plugins)
+
+
+def start_channel(
+    repo: str,
+    serve: Callable[[Agent, MCPManager, list[LoadedPlugin]], Awaitable[None]],
+    ask: Callable[[str], bool],
+    report: Callable[[str], None],
+    trust_repo: bool = False,
+) -> tuple[list[LoadedPlugin], Settings]:
+    """Run a channel's whole startup, then hand it a live Agent.
+
+    Both screen channels had this sequence written out separately, in the same
+    order, for the same reasons — and the order is load-bearing at three
+    points, so a divergence between the copies would have been a subtle bug
+    rather than an obvious one:
+
+      * the consent gate runs BEFORE the event loop, because the settings it
+        unlocks decide which MCP servers get started;
+      * `interactive` comes from isatty(), because piped stdin must refuse
+        rather than block;
+      * MCPManager.start() and .stop() must be awaited from the SAME task
+        (anyio cancel-scope rule), which is why the agent is built inside
+        `asyncio.run` and not handed in.
+
+    `serve` receives the assembled Agent, the running manager, and the loaded
+    plugins, and owns the channel's main loop. `report` prints a fatal message
+    in whatever styling the channel uses. Returns the plugins and merged
+    settings for any caller that needs them after the loop exits.
+    """
+    repo_root = Path(repo).resolve()
+    if not repo_root.is_dir():
+        report(f"Not a directory: {repo_root}")
+        raise SystemExit(1)
+
+    from pyrrhon.config.wizard import ensure_configured
+
+    ensure_configured()  # stored keys → env; first run offers the wizard
+    plugins, settings = load_channel_plugins(
+        repo_root, ask, trust_repo=trust_repo, interactive=sys.stdin.isatty()
+    )
+
+    async def _main() -> None:
+        manager = MCPManager(settings.mcp_servers)
+        mcp_tools = await manager.start()  # never raises; dead servers log once
+        try:
+            agent = build_agent(
+                repo_root, extra_tools=mcp_tools, settings=settings, plugins=plugins
+            )
+            await serve(agent, manager, plugins)
+        finally:
+            await manager.stop()  # same task as start() — anyio cancel-scope rule
+
+    try:
+        asyncio.run(_main())
+    except MissingAPIKeyError as exc:
+        report(str(exc))
+        # `from exc`: the message is already printed, but chaining keeps the
+        # cause honest for anyone who runs this under a debugger.
+        raise SystemExit(1) from exc
+    except KeyboardInterrupt:
+        pass
+    return plugins, settings

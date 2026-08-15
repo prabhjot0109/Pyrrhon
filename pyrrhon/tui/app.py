@@ -7,8 +7,6 @@ from M3 the same loop carries audio (spec: real-time discipline).
 
 from __future__ import annotations
 
-import asyncio
-import sys
 from pathlib import Path
 
 from rich.markdown import Markdown
@@ -19,12 +17,12 @@ from textual.containers import Horizontal
 from textual.widgets import Input, RichLog
 
 from pyrrhon.bootstrap import (
-    build_agent,
-    load_channel_plugins,
     orient_in_background,
+    start_channel,
     warm_index_in_background,
     warm_llm_connection_in_background,
 )
+from pyrrhon.channels import EventRenderer
 from pyrrhon.commands import (  # noqa: F401 — registers commands
     builtin,
     debug_cmd,
@@ -49,7 +47,7 @@ from pyrrhon.core.events import (
     VoiceNotice,
 )
 from pyrrhon.core.mcp import MCPManager
-from pyrrhon.core.providers.llm import FallbackLLM, MissingAPIKeyError
+from pyrrhon.core.providers.llm import FallbackLLM
 from pyrrhon.core.session import Session
 from pyrrhon.tui.widgets import CodeViewer, StatusBar
 from pyrrhon.voice import VoiceController
@@ -64,6 +62,63 @@ def _redact_secret_echo(text: str) -> str:
     if len(parts) >= 4 and parts[0] == "/settings" and parts[1] == "key":
         return " ".join(parts[:3]) + " ****"
     return text
+
+
+class TuiRenderer(EventRenderer):
+    """Core events as transcript writes and code-viewer jumps.
+
+    Composition rather than inheritance on the App: PyrrhonApp already
+    subclasses Textual's App, and mixing a second base into a Textual widget
+    invites metaclass surprises for no gain.
+    """
+
+    def __init__(self, app: "PyrrhonApp"):
+        self._app = app
+
+    @property
+    def _transcript(self) -> RichLog:
+        return self._app.query_one("#transcript", RichLog)
+
+    def on_transcription(self, event: Transcription) -> None:
+        # What STT heard — mirrors the typed "you>" so voice and text read
+        # the same in the transcript. The 🎙 marks it as spoken input.
+        self._transcript.write(Text(f"🎙 you> {event.text}", style="bold cyan"))
+
+    def on_voice_notice(self, event: VoiceNotice) -> None:
+        style = "bold red" if event.is_error else "yellow"
+        self._transcript.write(Text(event.text, style=style))
+        self._app.notify(
+            event.text, severity="error" if event.is_error else "information"
+        )
+
+    def on_speech(self, event: SpeechChunk) -> None:
+        self._transcript.write(Markdown(event.text))
+
+    def on_tool_started(self, event: ToolCallStarted) -> None:
+        self._transcript.write(Text(f"→ {event.name}({event.args})", style="dim"))
+
+    def on_citation(self, event: Citation) -> None:
+        # Clickable as well as viewer-linked: the pane shows it here, but a
+        # citation is also how the user gets the line open in their editor.
+        uri = citation_uri(self._app.repo_root, event)
+        label = f"📍 {event.file}:{event.line}"
+        self._transcript.write(
+            Text(label, style=f"green link {uri}" if uri else "green")
+        )
+        self._app.show_citation(event)
+
+    def on_artifact(self, event: ScreenArtifact) -> None:
+        # First real emitter is M14's orientation brief; rendered plainly
+        # until a channel needs per-kind treatment.
+        self._transcript.write(Markdown(event.content))
+
+    def on_question(self, event: AskUser) -> None:
+        # Design mode's Socratic question, rendered distinctly (spec: M6).
+        self._transcript.write(Text(f"? {event.question}", style="bold magenta"))
+
+    def on_interrupted(self, event: TruncateSpeech) -> None:
+        # Voice barge-in: history was rewritten to what was actually heard.
+        self._transcript.write(Text("⏹ interrupted", style="dim"))
 
 
 class PyrrhonApp(App):
@@ -106,6 +161,7 @@ class PyrrhonApp(App):
         self.last_citation: Citation | None = None
         self.last_command_response: str | None = None
         self._start_voice = start_voice
+        self._renderer = TuiRenderer(self)
         if isinstance(agent.llm, FallbackLLM):
             llm = agent.llm
             # Spec: provider failure -> one-sentence notice. on_switch fires
@@ -209,39 +265,11 @@ class PyrrhonApp(App):
 
     def _render_event(self, event) -> None:
         """Render one core event into the panes — agent turns and the M3
-        voice bridge (via VoiceController's on_event) both land here."""
-        transcript = self.query_one("#transcript", RichLog)
-        if isinstance(event, Transcription):
-            # What STT heard — mirrors the typed "you>" so voice and text read
-            # the same in the transcript. The 🎙 marks it as spoken input.
-            transcript.write(Text(f"🎙 you> {event.text}", style="bold cyan"))
-        elif isinstance(event, VoiceNotice):
-            style = "bold red" if event.is_error else "yellow"
-            transcript.write(Text(event.text, style=style))
-            self.notify(event.text, severity="error" if event.is_error else "information")
-        elif isinstance(event, SpeechChunk):
-            transcript.write(Markdown(event.text))
-        elif isinstance(event, ToolCallStarted):
-            transcript.write(Text(f"→ {event.name}({event.args})", style="dim"))
-        elif isinstance(event, Citation):
-            # Clickable as well as viewer-linked: the pane shows it here, but a
-            # citation is also how the user gets the line open in their editor.
-            uri = citation_uri(self.repo_root, event)
-            label = f"📍 {event.file}:{event.line}"
-            transcript.write(
-                Text(label, style=f"green link {uri}" if uri else "green")
-            )
-            self.show_citation(event)
-        elif isinstance(event, ScreenArtifact):
-            # First real emitter is M14's orientation brief; rendered plainly
-            # until a channel needs per-kind treatment.
-            transcript.write(Markdown(event.content))
-        elif isinstance(event, AskUser):
-            # Design mode's Socratic question, rendered distinctly (spec: M6).
-            transcript.write(Text(f"? {event.question}", style="bold magenta"))
-        elif isinstance(event, TruncateSpeech):
-            # Voice barge-in: history was rewritten to what was actually heard.
-            transcript.write(Text("⏹ interrupted", style="dim"))
+        voice bridge (via VoiceController's on_event) both land here.
+
+        Kept as a bound method because three callers pass it around as a plain
+        callable (the voice bridge, the orientation task, and _agent_turn)."""
+        self._renderer.render(event)
 
     async def _agent_turn(self, user_text: str) -> None:
         """Consume the core event stream inside a worker — the UI never blocks."""
@@ -262,46 +290,22 @@ class PyrrhonApp(App):
 
 def run_tui(repo: str, voice: bool = False, trust_repo: bool = False) -> None:
     """Entry point for the default (TUI) channel."""
-    repo_root = Path(repo).resolve()
-    if not repo_root.is_dir():
-        print(f"Not a directory: {repo_root}")
-        raise SystemExit(1)
-
-    from pyrrhon.config.wizard import ensure_configured
-
-    ensure_configured()  # stored keys → env; first run offers the wizard
 
     def _ask(question: str) -> bool:
         # Textual has not taken over the terminal yet — plain input works.
         return input(f"{question} ").strip().lower() in {"y", "yes"}
 
-    plugins, settings = load_channel_plugins(
-        repo_root, _ask, trust_repo=trust_repo, interactive=sys.stdin.isatty()
-    )
-    try:
-        # One asyncio.run for MCP lifecycle + Textual: the manager's start()
-        # and stop() must be awaited from the same task (anyio rule), so the
-        # app runs via run_async() inside that task instead of App.run().
-        asyncio.run(_tui_main(repo_root, voice, plugins, settings))
-    except MissingAPIKeyError as exc:
-        print(exc)
-        raise SystemExit(1) from exc
-
-
-async def _tui_main(repo_root: Path, voice: bool, plugins, settings) -> None:
-    manager = MCPManager(settings.mcp_servers)
-    mcp_tools = await manager.start()  # never raises; dead servers log one warning
-    try:
-        agent = build_agent(
-            repo_root, extra_tools=mcp_tools, settings=settings, plugins=plugins
-        )
+    async def _serve(agent: Agent, manager: MCPManager, plugins: list) -> None:
+        # run_async() rather than App.run(): start_channel already owns the
+        # asyncio.run, and the MCP manager's start()/stop() must be awaited
+        # from that same task (anyio cancel-scope rule).
         app = PyrrhonApp(
-            repo_root=repo_root,
+            repo_root=agent.repo_root,
             agent=agent,
             start_voice=voice,
             mcp=manager,
             plugins=plugins,
         )
         await app.run_async()
-    finally:
-        await manager.stop()
+
+    start_channel(repo, _serve, ask=_ask, report=print, trust_repo=trust_repo)

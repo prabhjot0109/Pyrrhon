@@ -1,27 +1,27 @@
 """Text REPL — the first (and thinnest) channel over the headless core.
 
-Startup (trust gate, agent construction, warm-ups) lives in
-`pyrrhon.bootstrap`, which every channel shares. What is left here is only
-what makes this channel a channel: reading a line, and rendering events.
+Startup (trust gate, agent construction, MCP lifecycle, warm-ups) lives in
+`pyrrhon.bootstrap`; event dispatch lives in `pyrrhon.channels`. What is left
+here is only what makes this channel a channel: reading a line, and choosing
+how each event looks as terminal output.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import sys
 from pathlib import Path
 
 from rich.console import Console
 from rich.markdown import Markdown
 
 from pyrrhon.bootstrap import (
-    build_agent,
-    load_channel_plugins,
     orient_in_background,
+    start_channel,
     warm_index_in_background,
     warm_llm_connection_in_background,
 )
+from pyrrhon.channels import EventRenderer
 from pyrrhon.commands import (  # noqa: F401 — registers commands
     builtin,
     debug_cmd,
@@ -32,11 +32,16 @@ from pyrrhon.commands import (  # noqa: F401 — registers commands
     voice_cmd,
 )
 from pyrrhon.commands.registry import CommandContext, dispatch
-from pyrrhon.config.settings import Settings
 from pyrrhon.core.citation_link import citation_markup
-from pyrrhon.core.events import AskUser, Citation, SpeechChunk, ToolCallStarted
+from pyrrhon.core.events import (
+    AskUser,
+    Citation,
+    ScreenArtifact,
+    SpeechChunk,
+    ToolCallStarted,
+)
 from pyrrhon.core.mcp import MCPManager
-from pyrrhon.core.providers.llm import FallbackLLM, MissingAPIKeyError
+from pyrrhon.core.providers.llm import FallbackLLM
 from pyrrhon.core.session import Session
 from pyrrhon.plugins import LoadedPlugin
 
@@ -54,56 +59,50 @@ class ConsoleUI:
         self._console.print(text)
 
 
+class ConsoleRenderer(EventRenderer):
+    """Core events as terminal output.
+
+    Hooks left at their no-op defaults are the deliberate omissions: this
+    channel has no code pane, no microphone, and nothing useful to say about a
+    tool *finishing* — the started line already told the user what is running.
+    """
+
+    def __init__(self, console: Console, ui: ConsoleUI, repo_root: Path):
+        self._console = console
+        self._ui = ui
+        self._repo_root = repo_root
+
+    def on_tool_started(self, event: ToolCallStarted) -> None:
+        self._console.print(f"[dim]→ {event.name}({event.args})[/dim]")
+
+    def on_speech(self, event: SpeechChunk) -> None:
+        self._console.print(Markdown(event.text))
+
+    def on_citation(self, event: Citation) -> None:
+        self._ui.last_citation = event  # /code opens the most recent citation
+        self._console.print(citation_markup(self._repo_root, event))
+
+    def on_artifact(self, event: ScreenArtifact) -> None:
+        self._console.print(Markdown(event.content))
+
+    def on_question(self, event: AskUser) -> None:
+        # Design mode's Socratic question, rendered distinctly (spec: M6).
+        self._console.print(f"[bold magenta]? {event.question}[/bold magenta]")
+
+
 def run_repl(repo: str, voice: bool = False, trust_repo: bool = False) -> None:
     console = Console()
-    repo_root = Path(repo).resolve()
-    if not repo_root.is_dir():
-        console.print(f"[red]Not a directory: {repo_root}[/red]")
-        raise SystemExit(1)
-
-    from pyrrhon.config.wizard import ensure_configured
-
-    ensure_configured()  # stored keys → env; first run offers the wizard
     if voice:
         # Voice is a TUI-channel feature; the plain REPL stays text-only.
         console.print(
             "[yellow]--voice needs the TUI — run plain `pyrrhon` for voice; "
             "continuing in text mode.[/yellow]"
         )
+
     def _ask(question: str) -> bool:
         return console.input(f"[yellow]{question}[/yellow] ").strip().lower() in {"y", "yes"}
 
-    # Consent + plugin loading run before the event loop exists: the merged
-    # settings decide which MCP servers _repl_main starts. isatty() decides
-    # whether prompting is even possible — piped stdin must refuse, not hang.
-    plugins, settings = load_channel_plugins(
-        repo_root, _ask, trust_repo=trust_repo, interactive=sys.stdin.isatty()
-    )
-    try:
-        # Agent construction happens inside the loop: the MCP manager's
-        # start()/stop() must run in the same asyncio task (anyio rule).
-        asyncio.run(_repl_main(console, repo_root, plugins, settings))
-    except MissingAPIKeyError as exc:
-        console.print(f"[red]{exc}[/red]")
-        # `from exc`: the message is already printed, but chaining keeps the
-        # cause honest for anyone who runs this under a debugger.
-        raise SystemExit(1) from exc
-    except KeyboardInterrupt:
-        pass
-
-
-async def _repl_main(
-    console: Console,
-    repo_root: Path,
-    plugins: list[LoadedPlugin],
-    settings: Settings,
-) -> None:
-    manager = MCPManager(settings.mcp_servers)
-    mcp_tools = await manager.start()  # never raises; dead servers log one warning
-    try:
-        agent = build_agent(
-            repo_root, extra_tools=mcp_tools, settings=settings, plugins=plugins
-        )
+    async def _serve(agent, manager: MCPManager, plugins: list[LoadedPlugin]) -> None:
         # Both warm-ups overlap startup and the user's first utterance. Refs
         # held so neither task is garbage-collected mid-flight.
         warm = warm_index_in_background(agent)  # noqa: F841
@@ -112,19 +111,29 @@ async def _repl_main(
 
         console.print(banner())  # pre-styled Text; an outer style would flatten it
         console.print(
-            f"Discussing [cyan]{repo_root.name}[/cyan]. Commands: /help, /quit"
+            f"Discussing [cyan]{agent.repo_root.name}[/cyan]. Commands: /help, /quit"
         )
         if plugins:
-            loaded = ", ".join(f"{p.manifest.name}@{p.manifest.version}" for p in plugins)
-            console.print(f"[dim]plugins: {loaded}[/dim]")
+            names = ", ".join(
+                f"{p.manifest.name}@{p.manifest.version}" for p in plugins
+            )
+            console.print(f"[dim]plugins: {names}[/dim]")
         # After the banner, before the first prompt is waited on. Ref held so
         # the task isn't garbage-collected mid-build.
         orient = orient_in_background(  # noqa: F841
             agent, lambda brief: console.print(Markdown(brief.content))
         )
-        await _repl_loop(agent, console, repo_root, mcp=manager, plugins=plugins)
-    finally:
-        await manager.stop()  # same task as start() — anyio cancel-scope rule
+        await _repl_loop(
+            agent, console, agent.repo_root, mcp=manager, plugins=plugins
+        )
+
+    start_channel(
+        repo,
+        _serve,
+        ask=_ask,
+        report=lambda msg: console.print(f"[red]{msg}[/red]"),
+        trust_repo=trust_repo,
+    )
 
 
 async def _repl_loop(
@@ -173,14 +182,6 @@ async def _repl_loop(
 
 
 async def _turn(session: Session, user: str, console: Console, ui: ConsoleUI) -> None:
+    renderer = ConsoleRenderer(console, ui, session.agent.repo_root)
     async for event in session.run_turn(user):
-        if isinstance(event, ToolCallStarted):
-            console.print(f"[dim]→ {event.name}({event.args})[/dim]")
-        elif isinstance(event, SpeechChunk):
-            console.print(Markdown(event.text))
-        elif isinstance(event, Citation):
-            ui.last_citation = event  # /code opens the most recent citation
-            console.print(citation_markup(session.agent.repo_root, event))
-        elif isinstance(event, AskUser):
-            # Design mode's Socratic question, rendered distinctly (spec: M6).
-            console.print(f"[bold magenta]? {event.question}[/bold magenta]")
+        renderer.render(event)
