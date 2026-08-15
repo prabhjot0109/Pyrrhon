@@ -204,7 +204,7 @@ def build_agent(
         GitBlameTool(repo_root),
         GitShowTool(repo_root),
     ]
-    return Agent(
+    agent = Agent(
         llm=llm,
         tools=tools,
         system_prompt=system_prompt,
@@ -219,6 +219,15 @@ def build_agent(
         context_budget_tokens=settings.context.budget_tokens,
         context_keep_last=settings.context.keep_last_messages,
     )
+    # The repo map ranks up whatever the live turn is about, which only the
+    # Agent knows — and the Agent cannot exist until the belt does. Patched
+    # explicitly rather than closed over a not-yet-bound name, so the ordering
+    # dependency is visible instead of being a NameError waiting to happen.
+    for belt in (tools, deep_tools):
+        for tool in belt:
+            if isinstance(tool, RepoMapTool):
+                tool._mentions = lambda: agent._mentions_now
+    return agent
 
 
 def collect_pending_grants(repo_root: Path) -> list[Grant]:

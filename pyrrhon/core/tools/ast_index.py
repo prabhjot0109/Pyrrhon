@@ -18,6 +18,7 @@ import os
 import sqlite3
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from tree_sitter import Parser, QueryCursor
@@ -105,6 +106,12 @@ def _package_of(rel: str) -> str:
 # roughly one conversational turn.
 INDEX_FRESH_TTL_SEC = 10.0
 
+# A mentioned file outranks reference count, but does not erase it: within the
+# mentioned set the usual ranking still applies. Additive rather than a
+# separate section so the map stays one ordered list the model can read
+# top-down. 1000 is comfortably above any realistic cross-file reference count.
+MENTION_BOOST = 1000
+
 
 class SymbolIndex:
     """Lazy per-repo symbol index. __init__ does no I/O — first use builds it."""
@@ -122,7 +129,8 @@ class SymbolIndex:
         # on it (currently the repo map) stay valid until the index actually
         # changes, rather than being rebuilt on a timer.
         self._generation = 0
-        self._repo_map_cache: tuple[int, int, str] | None = None
+        # (cache key, rendered). The key is (generation, max_chars, mentioned).
+        self._repo_map_cache: tuple[tuple[int, int, frozenset[str]], str] | None = None
 
     async def ensure_fresh(self, force: bool = False) -> None:
         async with self._lock:
@@ -148,8 +156,10 @@ class SymbolIndex:
     async def find_importers(self, rel_file: str) -> list[str]:
         return await asyncio.to_thread(self._sync_find_importers, rel_file)
 
-    async def build_repo_map(self, max_chars: int = 6000) -> str:
-        return await asyncio.to_thread(self._sync_build_repo_map, max_chars)
+    async def build_repo_map(
+        self, max_chars: int = 6000, mentioned: frozenset[str] = frozenset()
+    ) -> str:
+        return await asyncio.to_thread(self._sync_build_repo_map, max_chars, mentioned)
 
     async def languages(self) -> dict[str, int]:
         """Indexed file count per language, busiest first."""
@@ -320,20 +330,27 @@ class SymbolIndex:
             ).fetchall()
         return [file for (file,) in rows]
 
-    def _sync_build_repo_map(self, max_chars: int) -> str:
+    def _sync_build_repo_map(self, max_chars: int, mentioned: frozenset[str]) -> str:
         """Aider-style repo map: files ordered by how much the rest of the
         repo references their symbols; top symbols listed per file. Pure
         counting over the refs table — no graph traversal, so import cycles
         cannot recurse.
 
-        Memoised on the index generation. The query runs a correlated
-        subquery per symbol row and then rebuilds the whole string, and
-        nothing about the result can change while the index does not — so a
-        repeat call within a turn, or across turns with no edits, is free.
+        `mentioned` are files the live conversation named, which outrank
+        reference count. Without it the map answers the same way whether you
+        asked about auth or about the parser (M10 Stage 3's own criticism).
+
+        Memoised on the index generation, the budget, AND the mention set. The
+        query runs a correlated subquery per symbol row and then rebuilds the
+        whole string, and nothing about the result can change while those three
+        do not — so a repeat call within a turn is free. Keying on generation
+        alone would serve the previous question's ranking for the rest of the
+        session, which is worse than no personalisation at all.
         """
         cached = self._repo_map_cache
-        if cached is not None and cached[0] == self._generation and cached[1] == max_chars:
-            return cached[2]
+        key = (self._generation, max_chars, mentioned)
+        if cached is not None and cached[0] == key:
+            return cached[1]
         with self._db_lock:
             rows = self._db_conn().execute(
                 """
@@ -349,7 +366,10 @@ class SymbolIndex:
             by_file.setdefault(file, []).append((name, kind, line, uses))
         ranked = sorted(
             by_file.items(),
-            key=lambda item: sum(u for *_ignored, u in item[1]),
+            key=lambda item: (
+                sum(u for *_ignored, u in item[1])
+                + (MENTION_BOOST if item[0] in mentioned else 0)
+            ),
             reverse=True,
         )
         lines: list[str] = []
@@ -366,7 +386,7 @@ class SymbolIndex:
             lines.append(chunk)
             used += len(chunk) + 1
         rendered = "\n".join(lines) or "No symbols indexed yet."
-        self._repo_map_cache = (self._generation, max_chars, rendered)
+        self._repo_map_cache = (key, rendered)
         return rendered
 
 
@@ -460,9 +480,17 @@ class RepoMapTool(Tool):
     )
     parameters = {"type": "object", "properties": {}}
 
-    def __init__(self, index: SymbolIndex):
+    def __init__(
+        self,
+        index: SymbolIndex,
+        mentions: Callable[[], frozenset[str]] | None = None,
+    ):
         self.index = index
+        # A callable, not the Agent: the tool must not hold a back-reference to
+        # the thing that calls it. build_agent patches this in after the Agent
+        # exists, because the mention set is a property of the live turn.
+        self._mentions = mentions or (lambda: frozenset())
 
     async def run(self) -> str:
         await self.index.ensure_fresh()
-        return await self.index.build_repo_map()
+        return await self.index.build_repo_map(mentioned=self._mentions())

@@ -41,7 +41,7 @@ from pyrrhon.core.events import (
     ToolCallFinished,
     ToolCallStarted,
 )
-from pyrrhon.core.grounding.citations import extract_citations
+from pyrrhon.core.grounding.citations import extract_citations, extract_references
 from pyrrhon.core.grounding.evidence import EvidenceLedger
 from pyrrhon.core.grounding.gate import (
     HEDGE,
@@ -205,6 +205,9 @@ class Agent:
     ):
         self.llm = llm
         self.tools = {tool.name: tool for tool in tools}
+        # Repo paths the live turn is about, refreshed at the top of each turn.
+        # RepoMapTool reads it through a callable build_agent patches in.
+        self._mentions_now: frozenset[str] = frozenset()
         self.system_prompt = system_prompt
         self.repo_root = repo_root
         self.max_tool_rounds = max_tool_rounds
@@ -326,6 +329,8 @@ class Agent:
             else:
                 history.insert(0, {"role": "system", "content": system_content})
             history.append({"role": "user", "content": user_text})
+            # After the append, so the question being asked right now counts.
+            self._mentions_now = self._conversation_mentions(history)
             # Only the pure, local pass runs before round one. maybe_summarize
             # is a full LLM round trip and used to sit right here, in front of
             # the first token of every over-budget turn; Session now runs it
@@ -511,6 +516,24 @@ class Agent:
             text = await self._forced_answer(history)
         async for event in self._emit_final(history, text, trace, streaming):
             yield event
+
+    # How far back a path stays "what the conversation is about". Bounded so a
+    # long session does not end up marking every file mentioned — which is the
+    # same as no personalisation, but with a bigger repo-map cache key.
+    MENTION_WINDOW = 12
+
+    def _conversation_mentions(self, history: list[dict]) -> frozenset[str]:
+        """Repo paths named anywhere in the recent conversation.
+
+        Reuses the citation regex rather than a new one: a path worth citing is
+        a path worth ranking up, and one regex is one thing to keep correct.
+        """
+        found: set[str] = set()
+        for message in history[-self.MENTION_WINDOW:]:
+            content = message.get("content")
+            if isinstance(content, str):
+                found.update(rel for rel, _line in extract_references(content))
+        return frozenset(found)
 
     def _tool_schemas(self) -> list[dict]:
         """The tool belt's JSON schemas, rebuilt only when the belt changes.
