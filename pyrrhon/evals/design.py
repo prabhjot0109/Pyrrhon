@@ -106,8 +106,13 @@ def main(argv: list[str] | None = None) -> int:
 
     # Imported here, not at module top: only the CLI needs a real,
     # API-key-backed session — unit tests inject scripted doubles.
+    from pyrrhon.config.credentials import load_credentials
     from pyrrhon.core.session import Session
     from pyrrhon.repl import build_agent
+
+    # Same gap as the grounding eval: keys written by `pyrrhon --setup` were
+    # invisible here. setdefault semantics mean a real env var still wins.
+    load_credentials()
 
     repo_root = args.repo.resolve()
     report = run_design_eval(

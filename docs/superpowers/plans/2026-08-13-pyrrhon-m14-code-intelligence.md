@@ -1374,10 +1374,103 @@ git commit -m "test(evals): measure the code-intelligence claim in model rounds,
 
 ## Implementation record
 
-> Fill in as tasks land: what was measured (cold-index time on a polyglot repo,
-> schema_chars before and after the belt change, round counts on
-> understanding.yaml), and every place this plan was wrong. Grammar node names
-> are the most likely — record the corrected queries.
+Executed 2026-08-15 on branch `m14-code-intelligence`, against
+tree-sitter 0.25.2 / tree-sitter-language-pack 1.12.2.
+
+### Where the plan was wrong
+
+**Fixture line numbers were internally inconsistent (Task 1 Step 1 / Task 2).**
+The fixture listings carry a `// tests/fixtures/...` header comment, but Task 2
+then expects `Greeter` at `app.ts:3` and `Server` at `server.go:5` — true only
+*without* the header — while expecting `formatName` at `helpers.js:2`, true only
+*with* it. Resolved by dropping the header from all three fixtures and
+correcting the expectation to `helpers.js:1`.
+
+**The `require()` import query was a no-op (Task 1 Step 4).** As specified,
+`(call_expression function: (identifier) @import (#eq? @import "require"))`
+captures the *identifier* `require`, whose text contains no module specifier, so
+`_parse_js_imports` returns `[]` — a silently dead import edge for the form most
+`.js` in the wild actually uses. Corrected to capture the whole call:
+
+```
+((call_expression function: (identifier) @_fn) @import
+ (#eq? @_fn "require"))
+```
+
+Verified that the `#eq?` predicate genuinely filters (py-tree-sitter applies
+standard predicates in `QueryCursor.captures`) — without that, every call
+expression would have become an import edge. Pinned by
+`test_a_commonjs_require_is_an_import_edge_too`.
+
+**Every other node name in the plan was correct** for language-pack 1.12.2. No
+query needed adjusting; all capture tests passed first run.
+
+**Task 4's truncation test passed for the wrong reason.** `assert "c2.py" in
+result` is satisfied by the `imported by:` line, which says nothing about call
+sites, so the test was green before the rollup existed. Tightened to assert the
+rollup text itself (`"…and 10 more in c2.py (10)"`), which is genuinely RED
+against Task 3's truncation.
+
+**Task 4 missed the voice filler.** `TOOL_FILLERS` in `pyrrhon/voice/bridge.py`
+is keyed on tool name; dropping `find_references` from the belt without adding
+`symbol_context` would leave the voice channel silent during the commonest
+lookup. Added.
+
+**The eval CLI could not see stored credentials (Task 7 Step 5).**
+`pyrrhon --setup` writes keys to `~/.pyrrhon/credentials.toml`, and only
+`config/wizard.py` ever read them back, so the eval command CLAUDE.md documents
+died with `MissingAPIKeyError` on a correctly configured machine. Added
+`load_credentials()` to both `evals/grounding.py` and `evals/design.py` mains;
+`setdefault` semantics keep a real env var winning.
+
+### Measured
+
+**Cold index** (Task 2 Step 5):
+
+| Repo | Files | Cold | Warm re-walk |
+|---|---|---|---|
+| Pyrrhon (python-dominant) | 154 | 438 ms | 9 ms |
+| A real TS/JS checkout | 38 | 1070 ms | — |
+
+Grammar first-compile: typescript 46.5 ms, javascript 22.9 ms, python 21.0 ms,
+go 7.3 ms (~100 ms for all four). Lazy compilation therefore saves a
+python-only repo ~77 ms. Both well inside "a few seconds" — the
+`ProcessPoolExecutor` follow-up M4's docstring names is not needed yet.
+
+**Belt schema** (Task 4 Step 5): **6892 chars over 15 tools**, ceiling pinned at
+7000. Per-tool: grep 788, write_spec 673, think_deeper 597, symbol_context 595,
+git_blame 493, git_log 458, read_file 454, web_search 445, list_dependencies
+407, remember 369, find_symbol 343, web_fetch 343, git_show 337, repo_map 313,
+glob 277. This confirms Appendix A exactly: `symbol_context` 595 vs
+`find_references` 376 = **+219 chars/turn**. The milestone claims the round-trip
+collapse, not a schema saving.
+
+Note the ceiling leaves only 108 chars of headroom, which sits awkwardly against
+the test comment's "a tool description may be reworded". Kept at the plan's
+"round up to the next 500" rule; revisit if it trips on an innocuous edit.
+
+### Unrelated defect found and fixed
+
+`tests/test_telemetry.py::test_tool_round_records_each_call_and_the_round_wall_clock`
+began failing ~5 of 8 full-suite runs on this branch while passing 5/5 on `dev`
+and 5/5 in isolation. Investigated rather than dismissed as flake.
+
+Root cause is a **test defect**, not a dispatch regression. The tools are bare
+`asyncio.sleep(0.05)` and `_run_tool` is a bare `await`, so nothing inside the
+measured span can consume time. Instrumenting the suite showed gen2 GC pauses of
+90–194 ms are routine by the time these tests run (~290k live objects). A pause
+inside the ~50 ms window inflates the slowest span without changing the sum,
+dragging `parallel_speedup` toward 1.0 — the exact value that signals sequential
+dispatch, so a false negative and a true positive are indistinguishable. The
+observed failure was 1.4986 against a 1.5 threshold.
+
+The branches differ by 1% in heap (dev 290,708 vs M14 293,730 live objects) but
+sit at different GC phases (`counts=(283,5,5)` vs `(542,4,8)`): M14's 42 extra
+tests merely re-roll when the collector fires.
+
+Fixed by suspending automatic collection across the measurement, which removes
+the confound rather than relaxing the threshold — sequential dispatch still
+scores 1.0 and still fails. Verified 5/5 clean full runs.
 
 ## Verification
 

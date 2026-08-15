@@ -1,0 +1,41 @@
+# Code-intelligence eval (M14). Run against Pyrrhon itself:
+#   uv run python -m pyrrhon.evals.grounding evals/understanding.yaml --repo .
+#
+# `max_rounds` is the point of this file: symbol_context claims to answer a
+# dependency question in ONE tool round where find_symbol -> find_references ->
+# read_file took three. A citation-only eval cannot tell those apart, because
+# both spellings end up citing the same line.
+#
+# Line numbers were read out of the live index on 2026-08-15, not guessed, and
+# _one_matches allows LINE_TOLERANCE=5 either side. They will drift as the repo
+# moves; re-derive with SymbolIndex.find_symbol rather than adjusting by eye.
+
+- question: "Where is run_turn defined and what calls it?"
+  max_rounds: 2
+  expected:
+    - {file: pyrrhon/core/agent/loop.py, line: 290}
+
+- question: "What depends on the grounding gate?"
+  max_rounds: 2
+  expected_any:
+    - {file: pyrrhon/core/agent/loop.py, line: 46}
+    - {file: pyrrhon/repl.py, line: 35}
+
+- question: "Where is the tool guard's duplicate check, and who calls it?"
+  max_rounds: 2
+  expected:
+    - {file: pyrrhon/core/agent/guards.py, line: 41}
+
+- question: "What is the busiest file in this repo and why?"
+  max_rounds: 2
+  expected_any:
+    - {file: pyrrhon/core/tools/ast_index.py, line: 116}
+    - {file: pyrrhon/core/agent/loop.py, line: 186}
+
+# Multi-language reach (Tasks 1-2). Only meaningful against a polyglot
+# checkout; against Pyrrhon itself the fixture repo is the only TS/Go present,
+# so this is scoped to a symbol that exists there.
+- question: "Where is Greeter defined?"
+  max_rounds: 2
+  expected:
+    - {file: tests/fixtures/polyglot_repo/app.ts, line: 3}

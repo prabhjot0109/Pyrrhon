@@ -308,3 +308,18 @@ def test_compare_latency_ignores_metrics_absent_from_the_baseline():
     from pyrrhon.evals.grounding import compare_latency
 
     assert compare_latency({"ttft_ms": {"median": 900.0}}, {}, tolerance=1.2) == []
+
+
+# -- round-count budget (M14) ------------------------------------------------
+
+from pyrrhon.evals.grounding import _check_rounds  # noqa: E402
+
+
+def test_a_case_can_cap_the_number_of_model_rounds():
+    assert _check_rounds({"max_rounds": 2}, rounds=2) is None
+    problem = _check_rounds({"max_rounds": 2}, rounds=4)
+    assert problem is not None and "4" in problem
+
+
+def test_a_case_without_a_cap_never_fails_on_rounds():
+    assert _check_rounds({}, rounds=99) is None
