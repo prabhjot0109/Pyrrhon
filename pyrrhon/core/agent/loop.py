@@ -227,6 +227,9 @@ class Agent:
         # invokes _emit_final directly — several tests do — never trips on a
         # missing attribute.
         self._evidence = EvidenceLedger()
+        # References this turn that were real-but-unopened. Diagnostics for the
+        # eval harness, not conversation state — same status as last_trace.
+        self.last_unseen: tuple[str, ...] = ()
         self._schema_cache: list[dict] = []
         self._schema_cache_key: tuple[str, ...] | None = None
         # Owned, not just consumed. Channels swap the deep slot at runtime
@@ -306,6 +309,7 @@ class Agent:
         # of the cheap existence check; this one is about what the model was
         # SHOWN, which expires with the turn.
         self._evidence = EvidenceLedger()
+        self.last_unseen = ()
         # The base prompt is channel-agnostic; the delivery style (spoken vs.
         # written) is chosen per turn from the current voice_active flag and
         # refreshed on the leading system message. Refreshing (not just
@@ -607,6 +611,11 @@ class Agent:
             with time_gate():
                 gated = await self.grounding_gate.check(text, self._evidence)
 
+        # After the retry, not before: a retry replaces the text wholesale, so
+        # counting the draft's downgrades too would double-count a turn that
+        # then went on to cite correctly.
+        self.last_unseen = (*self.last_unseen, *gated.unseen)
+
         if record:
             history.append({"role": "assistant", "content": gated.speech_text})
         yield SpeechChunk(text=gated.speech_text)
@@ -631,6 +640,8 @@ class Agent:
         timer = round_trace.time_gate() if round_trace else nullcontext()
         with timer:
             gated = await self.grounding_gate.check(stripped, self._evidence)
+        # Streamed sentences never retry, so every downgrade here is final.
+        self.last_unseen = (*self.last_unseen, *gated.unseen)
         return gated.speech_text, list(gated.citations)
 
     async def _stream_round(

@@ -212,6 +212,59 @@ def test_expected_and_expected_any_compose():
     ) is None
 
 
+# -- provenance downgrades (M13) --------------------------------------------
+#
+# The rollout decision needs a number: how often does provenance fire, and does
+# it fire on cases the model got RIGHT? Without that the flip is a guess.
+
+
+def test_the_report_carries_a_downgrade_count():
+    report = EvalReport(total=1, passed=1, failures=[], downgrades=3)
+    assert report.downgrades == 3
+
+
+def test_downgrades_do_not_affect_report_equality():
+    """compare=False, for the same reason traces has it: the exact-equality
+    assertions elsewhere in this file must keep working."""
+    assert EvalReport(total=1, passed=1, failures=[], downgrades=7) == EvalReport(
+        total=1, passed=1, failures=[]
+    )
+
+
+def _provenance_factory(replies: list[LLMReply]):
+    def factory() -> Agent:
+        return Agent(
+            llm=FakeLLM(list(replies)),
+            tools=[],
+            system_prompt="t",
+            repo_root=FIXTURE,
+            grounding_gate=GroundingGate(FIXTURE, require_provenance=True),
+            allow_retry=False,
+        )
+
+    return factory
+
+
+def test_the_runner_counts_downgrades_across_cases(tmp_path: Path):
+    yaml_path = tmp_path / "eval.yaml"
+    yaml_path.write_text(ONE_CASE, encoding="utf-8")
+    # utils/helpers.py:1 is real, and no tool was ever called — so with
+    # provenance on it is a downgrade, and the case fails for lack of a citation.
+    factory = _provenance_factory([LLMReply(text="greet is at utils/helpers.py:1.")])
+    report = run_eval(yaml_path, factory, repeat=2)
+    assert report.downgrades == 2
+    assert report.passed == 0
+
+
+def test_a_clean_run_reports_zero_downgrades(tmp_path: Path):
+    yaml_path = tmp_path / "eval.yaml"
+    yaml_path.write_text(ONE_CASE, encoding="utf-8")
+    factory = make_factory([[LLMReply(text="greet is at utils/helpers.py:1.")]])
+    report = run_eval(yaml_path, factory)
+    assert report.downgrades == 0
+    assert report.passed == 1
+
+
 # -- the latency harness (consumes Stage 0's traces) ------------------------
 
 

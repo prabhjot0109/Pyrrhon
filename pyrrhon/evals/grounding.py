@@ -71,6 +71,11 @@ class EvalReport:
     # compare=False: existing tests assert `report == EvalReport(total=..., ...)`
     # and must keep doing so. Traces are diagnostics, not part of the result.
     traces: list[dict] = field(default_factory=list, compare=False)
+    # How many references across the run were real-but-unopened, i.e. downgraded
+    # for lack of provenance. The number M13's rollout decision rests on: if
+    # this is non-zero on cases the model got RIGHT, the ledger is
+    # under-recording and the fix is a better ledger, not a looser gate.
+    downgrades: int = field(default=0, compare=False)
 
     @property
     def latency(self) -> dict:
@@ -112,6 +117,7 @@ async def _run_cases(cases: list[dict], agent_factory, repeat: int = 1) -> EvalR
     passed = 0
     failures: list[str] = []
     traces: list[dict] = []
+    downgrades = 0
     for _ in range(max(1, repeat)):
         for case in cases:
             agent = agent_factory()
@@ -123,6 +129,9 @@ async def _run_cases(cases: list[dict], agent_factory, repeat: int = 1) -> EvalR
             trace = getattr(agent, "last_trace", None)
             if trace is not None:
                 traces.append(trace.as_dict())
+            # getattr: an agent double without the attribute simply contributes
+            # nothing, the same tolerance last_trace already gets.
+            downgrades += len(getattr(agent, "last_unseen", ()))
             problem = _check(citations, case)
             if problem is None:
                 passed += 1
@@ -133,6 +142,7 @@ async def _run_cases(cases: list[dict], agent_factory, repeat: int = 1) -> EvalR
         passed=passed,
         failures=failures,
         traces=traces,
+        downgrades=downgrades,
     )
 
 
@@ -227,6 +237,7 @@ def main(argv: list[str] | None = None) -> int:
     repo_root = args.repo.resolve()
     report = run_eval(args.yaml_path, lambda: build_agent(repo_root), args.repeat)
     print(f"grounding eval: {report.passed}/{report.total} passed")
+    print(f"  provenance downgrades: {report.downgrades}")
     for failure in report.failures:
         print(f"  FAIL {failure}")
 
@@ -241,6 +252,7 @@ def main(argv: list[str] | None = None) -> int:
                     "total": report.total,
                     "passed": report.passed,
                     "failures": report.failures,
+                    "downgrades": report.downgrades,
                     "latency": latency,
                     "traces": report.traces,
                 },
