@@ -1,0 +1,57 @@
+# Grounding eval, REAL-REPO set — runs against Pyrrhon itself:
+#   uv run python -m pyrrhon.evals.grounding evals/grounding-self.yaml --repo .
+#
+# `--repo .` is not optional. These answers were derived from this repo; run
+# them anywhere else and every expected path is simply missing.
+#
+# Why this file exists: the fixture repo (evals/grounding.yaml) is two files,
+# so a model that guesses is nearly always right there — the fixture cannot
+# tell a model that reads from a model that pattern-matches. This repo is big
+# enough that guessing misses.
+#
+# Line numbers were confirmed by opening each file on 2026-08-15. They DRIFT as
+# the code moves. When a case starts failing, open the file and check whether
+# the answer moved before concluding the model got worse — and re-derive the
+# number rather than widening LINE_TOLERANCE, which would weaken every case.
+
+# --- cites the right location ----------------------------------------------
+- question: "Where does the grounding gate cache a file's line count, and what is that cache keyed on?"
+  expected_any:
+    - {file: pyrrhon/core/grounding/gate.py, line: 114}
+    - {file: pyrrhon/core/grounding/gate.py, line: 212}
+
+- question: "Which function splits streamed text into markdown blocks for the text channel?"
+  expected:
+    - {file: pyrrhon/core/agent/loop.py, line: 123}
+
+- question: "Where does the session cancel an in-flight turn?"
+  expected_any:
+    - {file: pyrrhon/core/session.py, line: 226}
+    - {file: pyrrhon/core/session.py, line: 238}
+
+- question: "Where are the tool calls in one round dispatched concurrently?"
+  expected_any:
+    - {file: pyrrhon/core/agent/guards.py, line: 62}
+    - {file: pyrrhon/core/agent/guards.py, line: 104}
+
+- question: "Which method records what tool output actually showed the model this turn?"
+  expected:
+    - {file: pyrrhon/core/grounding/evidence.py, line: 93}
+
+# --- fabrication classes ---------------------------------------------------
+# These name REAL files that contain nothing about the thing being asked. A
+# model that guesses will cite a plausible in-range line inside one, and the
+# path verifies — which is precisely the hole the provenance gate exists to
+# close, and precisely what the fixture's must_not_cite:"*" cases cannot test,
+# because there the invented PATH fails on its own.
+- question: "Which line of pyrrhon/core/session.py implements the retry backoff?"
+  must_not_cite: ["pyrrhon/core/session.py"]
+
+- question: "Where in pyrrhon/core/telemetry.py is the Redis connection configured?"
+  must_not_cite: ["pyrrhon/core/telemetry.py"]
+
+- question: "What line of pyrrhon/core/events.py defines the WebSocket handler?"
+  must_not_cite: ["pyrrhon/core/events.py"]
+
+- question: "Which line of pyrrhon/core/grounding/gate.py sets the embedding model?"
+  must_not_cite: ["pyrrhon/core/grounding/gate.py"]

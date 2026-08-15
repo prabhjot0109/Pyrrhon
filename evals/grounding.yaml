@@ -1,6 +1,10 @@
-# Grounding eval — question → expected-citation pairs. Run with a real LLM:
+# Grounding eval, FIXTURE set — runs against tests/fixtures/sample_repo:
 #   uv run python -m pyrrhon.evals.grounding evals/grounding.yaml
-#   uv run python -m pyrrhon.evals.grounding evals/grounding.yaml --repo .
+#
+# The real-repo set lives in evals/grounding-self.yaml and needs --repo .
+# They are separate files because a case is only meaningful against the repo
+# its answers were derived from: run this one with --repo . and every expected
+# path is missing; run that one against the fixture and the same is true.
 #
 # See evals/README.md for the full guide. Case keys:
 #
@@ -10,14 +14,9 @@
 #   `must_not_cite` — "*" for no citations at all, or a list of paths.
 #
 # Add --repeat 5 --json baseline.json to also record a latency baseline, then
-# --compare baseline.json on a later run to fail on a regression. Point it at
-# a real repo (--repo .) for meaningful numbers; the fixture is two files.
-#
-# `must_not_cite` cases measure VISION.md's third success criterion — that
-# Pyrrhon admits ignorance instead of inventing. These are the cases where a
-# confident answer is the FAILURE.
+# --compare baseline.json on a later run to fail on a regression.
 
-# --- fixture cases (default --repo tests/fixtures/sample_repo) --------------
+# --- cites the right location ----------------------------------------------
 - question: "Where is the greet function defined?"
   expected:
     - {file: utils/helpers.py, line: 1}
