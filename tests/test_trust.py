@@ -120,6 +120,29 @@ def test_repo_tts_url_is_privileged_but_the_rest_of_voice_is_not():
     assert [g.key for g in pending] == ["voice.tts_url"]
 
 
+def test_a_repo_cannot_relax_the_grounding_gate_without_consent():
+    """M13: require_provenance neither runs nor redirects anything — it WEAKENS
+    a hard requirement. Once the default flips on, a repo silently setting it
+    back to false would disable provenance checking on its own code."""
+    allowed, pending = partition_repo_config(
+        {"grounding": {"require_provenance": False}}, {}, EMPTY
+    )
+    assert allowed["grounding"] == {}
+    assert [g.key for g in pending] == ["grounding.require_provenance"]
+
+
+def test_a_granted_grounding_setting_is_applied():
+    grant = Grant(
+        "config", "grounding.require_provenance", digest_value(True), "tighten"
+    )
+    trusted = TrustFile(plugins=frozenset(), grants=frozenset({grant.line}))
+    allowed, pending = partition_repo_config(
+        {"grounding": {"require_provenance": True}}, {}, trusted
+    )
+    assert allowed["grounding"] == {"require_provenance": True}
+    assert pending == []
+
+
 def test_a_repo_slot_naming_a_builtin_provider_is_allowed():
     allowed, pending = partition_repo_config(
         {"fast": {"provider": "groq", "model": "llama-3.3-70b-versatile"}}, {}, EMPTY

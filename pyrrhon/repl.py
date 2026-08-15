@@ -204,7 +204,9 @@ def build_agent(
         tools=tools,
         system_prompt=system_prompt,
         repo_root=repo_root,
-        grounding_gate=GroundingGate(repo_root),
+        grounding_gate=GroundingGate(
+            repo_root, require_provenance=settings.grounding.require_provenance
+        ),
         # REPL is a screen channel → default allow_retry=True. M3's speech
         # path constructs its Agent with allow_retry=False (spec split-path).
         deep_llm=deep_llm,

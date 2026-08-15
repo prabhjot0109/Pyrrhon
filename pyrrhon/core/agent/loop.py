@@ -42,7 +42,13 @@ from pyrrhon.core.events import (
     ToolCallStarted,
 )
 from pyrrhon.core.grounding.citations import extract_citations
-from pyrrhon.core.grounding.gate import HEDGE, LINE_HEDGE, GroundingGate
+from pyrrhon.core.grounding.evidence import EvidenceLedger
+from pyrrhon.core.grounding.gate import (
+    HEDGE,
+    LINE_HEDGE,
+    LINE_UNSEEN_HEDGE,
+    GroundingGate,
+)
 from pyrrhon.core.providers.llm import (
     ContextLengthExceededError,
     InvalidToolCallError,
@@ -216,6 +222,11 @@ class Agent:
         # doesn't violate "Agent owns no conversation state" above. Session
         # copies it out into `last_turn_trace` once the turn ends.
         self.last_trace: TurnTrace | None = None
+        # What tool output actually SHOWED the model, this turn. Replaced (not
+        # cleared) at the top of every turn; initialised here so a caller that
+        # invokes _emit_final directly — several tests do — never trips on a
+        # missing attribute.
+        self._evidence = EvidenceLedger()
         self._schema_cache: list[dict] = []
         self._schema_cache_key: tuple[str, ...] | None = None
         # Owned, not just consumed. Channels swap the deep slot at runtime
@@ -288,6 +299,13 @@ class Agent:
     async def _run_turn(
         self, history: list[dict], user_text: str, trace: TurnTrace
     ) -> AsyncIterator[Event]:
+        # Fresh per turn, deliberately. Evidence from an earlier turn is not
+        # evidence now: the file may have changed, and "I read it a while ago"
+        # is precisely the reasoning that produces confident stale-line
+        # citations. The gate's own line-count cache handles cross-turn reuse
+        # of the cheap existence check; this one is about what the model was
+        # SHOWN, which expires with the turn.
+        self._evidence = EvidenceLedger()
         # The base prompt is channel-agnostic; the delivery style (spoken vs.
         # written) is chosen per turn from the current voice_active flag and
         # refreshed on the leading system message. Refreshing (not just
@@ -449,7 +467,7 @@ class Agent:
                 if self.grounding_gate is not None:
                     with round_trace.time_gate():
                         narration = (
-                            await self.grounding_gate.check(narration)
+                            await self.grounding_gate.check(narration, self._evidence)
                         ).speech_text
                 if narration.strip():
                     yield SpeechChunk(text=narration)
@@ -474,6 +492,9 @@ class Agent:
                 for call, result in zip(reply.tool_calls, results, strict=True)
             )
             for call, result in zip(reply.tool_calls, results, strict=True):
+                # Record BEFORE the event: the next round's answer may cite
+                # what this result showed, and the gate consults the ledger.
+                self._evidence.record_tool_result(call.name, call.arguments, result)
                 yield ToolCallFinished(
                     name=call.name, result_preview=result[:PREVIEW_LEN]
                 )
@@ -559,7 +580,7 @@ class Agent:
             return
 
         with time_gate():
-            gated = await self.grounding_gate.check(text)
+            gated = await self.grounding_gate.check(text, self._evidence)
         if gated.unverified and self.allow_retry and not streaming:
             # Exactly ONE self-correction round-trip (screen path).
             #
@@ -584,7 +605,7 @@ class Agent:
             text = retry_reply.text or text
             # Gate the retry result WITHOUT further retry.
             with time_gate():
-                gated = await self.grounding_gate.check(text)
+                gated = await self.grounding_gate.check(text, self._evidence)
 
         if record:
             history.append({"role": "assistant", "content": gated.speech_text})
@@ -609,7 +630,7 @@ class Agent:
             return stripped, []
         timer = round_trace.time_gate() if round_trace else nullcontext()
         with timer:
-            gated = await self.grounding_gate.check(stripped)
+            gated = await self.grounding_gate.check(stripped, self._evidence)
         return gated.speech_text, list(gated.citations)
 
     async def _stream_round(
@@ -677,7 +698,7 @@ class Agent:
                 # sentence carrying it keeps it, later ones are trimmed. The
                 # information is identical; the repetition is just noise, and
                 # aloud it sounds broken.
-                for hedge in (HEDGE, LINE_HEDGE):
+                for hedge in (HEDGE, LINE_HEDGE, LINE_UNSEEN_HEDGE):
                     if hedge in speech:
                         if hedge in hedged:
                             speech = speech.replace(hedge, "").strip()

@@ -30,9 +30,9 @@ class TagGate:
     """Fake grounding gate: proves per-sentence gating by tagging every
     sentence it clears."""
 
-    async def check(self, text):
+    async def check(self, text, evidence=None):
         return SimpleNamespace(
-            speech_text=f"[gated] {text}", citations=[], unverified=()
+            speech_text=f"[gated] {text}", citations=[], unverified=(), unseen=()
         )
 
 

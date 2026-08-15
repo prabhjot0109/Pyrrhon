@@ -114,6 +114,22 @@ class ContextSettings(BaseModel):
     keep_last_messages: int = 8      # recent messages kept verbatim
 
 
+class GroundingSettings(BaseModel):
+    """Grounding strictness (TOML section [grounding]).
+
+    require_provenance: a citation must point at a line some tool result in
+    THIS turn actually displayed, not merely a line that exists. Defaults off
+    until the M13 eval shows the pass rate holds — it is a real tightening, and
+    a false downgrade makes Pyrrhon sound unsure about work it genuinely did.
+
+    Unprivileged on purpose: a repo can only make this gate STRICTER or leave
+    it as-is, and neither direction runs code, redirects a key, or writes the
+    system prompt. See PRIVILEGED_PATHS below for what does.
+    """
+
+    require_provenance: bool = False
+
+
 class Settings(BaseModel):
     fast: ModelSlot = ModelSlot(provider="groq", model="llama-3.3-70b-versatile")
     deep: ModelSlot | None = None
@@ -121,6 +137,7 @@ class Settings(BaseModel):
     voice: VoiceSettings = VoiceSettings()
     model: ModelSettings = ModelSettings()
     context: ContextSettings = ContextSettings()
+    grounding: GroundingSettings = GroundingSettings()
     mcp_servers: dict[str, MCPServerConfig] = {}
     # Slot name ("fast"/"deep") -> providers tried IN ORDER after the slot's
     # primary. Entry format: "provider" or "provider/model" (first '/' splits).
@@ -163,7 +180,20 @@ def _read_toml(path: Path) -> dict:
 # sets it exfiltrates the conversation. The partition is therefore keyed on
 # dotted paths, not on top-level table names — privilege does not line up with
 # TOML's table boundaries and pretending it does is how tts_url got missed.
-PRIVILEGED_PATHS: tuple[str, ...] = ("mcp_servers", "providers", "voice.tts_url")
+#
+# `grounding.require_provenance` is here for a fourth reason: it does not run,
+# redirect, or write anything — it WEAKENS a safety control. While the default
+# is off a repo could only tighten it, but the moment M13's measurement flips
+# that default, an untrusted repo setting it back to false would silently
+# disable provenance checking on its own code. Grounding is a hard requirement
+# (CLAUDE.md), so who may relax it is exactly the kind of decision this list is
+# for, and deciding it now costs nothing.
+PRIVILEGED_PATHS: tuple[str, ...] = (
+    "mcp_servers",
+    "providers",
+    "voice.tts_url",
+    "grounding.require_provenance",
+)
 
 # Safe unless they point at a provider the REPO defined — a repo may suggest
 # `groq/llama-3.3`, but may not aim a slot at its own base_url.
@@ -173,6 +203,7 @@ _EFFECTS = {
     "mcp_servers": "run a program",
     "providers": "send prompts and your API key to",
     "voice.tts_url": "send everything Pyrrhon says to",
+    "grounding.require_provenance": "relax or tighten citation checking",
     "fast": "choose the model for",
     "deep": "choose the model for",
     "fallbacks": "choose the fallback models for",
@@ -267,6 +298,22 @@ def partition_repo_config(
             pending.append(grant)
     if "voice" in repo_data:
         allowed["voice"] = voice
+
+    # Same shape as tts_url, different reason: this one weakens the grounding
+    # gate rather than redirecting anything. See PRIVILEGED_PATHS.
+    grounding = dict(repo_data.get("grounding") or {})
+    if "require_provenance" in grounding:
+        strict = grounding.pop("require_provenance")
+        grant = Grant(
+            "config", "grounding.require_provenance", digest_value(strict),
+            _describe("grounding.require_provenance", "require_provenance", strict),
+        )
+        if granted.has(grant):
+            grounding["require_provenance"] = strict
+        else:
+            pending.append(grant)
+    if "grounding" in repo_data:
+        allowed["grounding"] = grounding
 
     # A slot may only name a provider that is builtin, global, or already
     # granted above — otherwise the repo controls where the key goes.

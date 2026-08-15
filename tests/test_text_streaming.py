@@ -161,10 +161,10 @@ class CountingGate:
     def __init__(self):
         self.checks = 0
 
-    async def check(self, text):
+    async def check(self, text, evidence=None):
         self.checks += 1
         return SimpleNamespace(
-            speech_text=text, citations=[], unverified=("nope.py:9999",)
+            speech_text=text, citations=[], unverified=("nope.py:9999",), unseen=()
         )
 
 
