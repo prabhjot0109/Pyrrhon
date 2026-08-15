@@ -1,11 +1,11 @@
 import sys
 from pathlib import Path
 
+from pyrrhon.bootstrap import build_agent
 from pyrrhon.commands.mcp_cmd import render_mcp_roster
 from pyrrhon.config.settings import MCPServerConfig
 from pyrrhon.core.mcp import MCPManager
 from pyrrhon.core.providers.llm import LLMReply
-from pyrrhon.repl import build_agent
 from tests.helpers import FakeLLM
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_repo"

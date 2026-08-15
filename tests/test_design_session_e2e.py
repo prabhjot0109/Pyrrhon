@@ -1,10 +1,10 @@
 from pathlib import Path
 
+from pyrrhon.bootstrap import build_agent
 from pyrrhon.core.agent.design_prompts import DESIGN_PROMPT
 from pyrrhon.core.events import AskUser, SpeechChunk, ToolCallStarted
 from pyrrhon.core.providers.llm import LLMReply, ToolCall
 from pyrrhon.core.session import MODE_PREFIX, Session
-from pyrrhon.repl import build_agent
 from tests.helpers import FakeLLM
 
 CHALLENGE = (

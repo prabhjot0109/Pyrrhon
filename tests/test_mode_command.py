@@ -1,10 +1,10 @@
 from pathlib import Path
 
 import pyrrhon.commands.mode_cmd  # noqa: F401  (registers /mode)
+from pyrrhon.bootstrap import build_agent
 from pyrrhon.commands.registry import CommandContext, dispatch
 from pyrrhon.core.agent.loop import Agent
 from pyrrhon.core.session import Session
-from pyrrhon.repl import build_agent
 from tests.helpers import FakeLLM
 
 

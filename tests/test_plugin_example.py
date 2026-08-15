@@ -1,9 +1,9 @@
 import shutil
 from pathlib import Path
 
+from pyrrhon.bootstrap import build_agent, load_channel_plugins
 from pyrrhon.core.events import SpeechChunk, ToolCallFinished
 from pyrrhon.core.providers.llm import LLMReply, ToolCall
-from pyrrhon.repl import build_agent, load_channel_plugins
 from tests.helpers import FakeLLM
 
 FIXTURE_PLUGIN = Path(__file__).parent / "fixtures" / "plugins" / "hello-reviewer"

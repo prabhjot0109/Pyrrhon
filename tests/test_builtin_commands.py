@@ -1,9 +1,9 @@
 from pathlib import Path
 
+from pyrrhon.bootstrap import build_agent
 from pyrrhon.commands import builtin  # noqa: F401 — registers /init, /model, /code
 from pyrrhon.commands.registry import CommandContext, dispatch
 from pyrrhon.core.events import Citation
-from pyrrhon.repl import build_agent
 from tests.helpers import FakeLLM
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_repo"

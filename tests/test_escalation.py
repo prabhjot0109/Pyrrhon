@@ -182,7 +182,7 @@ async def test_subagent_tool_failure_returns_error_string():
 
 
 async def test_set_deep_llm_changes_what_think_deeper_actually_calls(tmp_path):
-    from pyrrhon.repl import build_agent
+    from pyrrhon.bootstrap import build_agent
 
     original = FakeLLM([LLMReply(text="from the original deep model")])
     replacement = FakeLLM([LLMReply(text="from the replacement deep model")])

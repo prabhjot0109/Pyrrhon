@@ -3,9 +3,9 @@
 import shutil
 from pathlib import Path
 
+from pyrrhon.bootstrap import warm_index_in_background, warm_llm_connection_in_background
 from pyrrhon.core.agent.loop import Agent
 from pyrrhon.core.tools.ast_index import FindSymbolTool, SymbolIndex
-from pyrrhon.repl import warm_index_in_background, warm_llm_connection_in_background
 from tests.helpers import FakeLLM
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_repo"

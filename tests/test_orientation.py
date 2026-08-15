@@ -60,7 +60,7 @@ async def test_the_channel_helper_renders_the_brief_without_blocking(tmp_path, m
     """orient_in_background is fire-and-forget: the brief must arrive via the
     render callback, and a failure inside it must never escape to startup."""
     monkeypatch.setenv("GROQ_API_KEY", "test-key")
-    from pyrrhon.repl import build_agent, orient_in_background
+    from pyrrhon.bootstrap import build_agent, orient_in_background
     from tests.helpers import FakeLLM
 
     (tmp_path / "a.py").write_text("def f():\n    pass\n", encoding="utf-8")
@@ -77,7 +77,7 @@ async def test_the_channel_helper_renders_the_brief_without_blocking(tmp_path, m
 
 async def test_a_failing_brief_never_breaks_startup(tmp_path, monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY", "test-key")
-    from pyrrhon.repl import build_agent, orient_in_background
+    from pyrrhon.bootstrap import build_agent, orient_in_background
     from tests.helpers import FakeLLM
 
     agent = build_agent(tmp_path, llm=FakeLLM([]), deep_llm=FakeLLM([]), home=tmp_path)

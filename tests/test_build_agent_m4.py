@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pyrrhon.repl import build_agent
+from pyrrhon.bootstrap import build_agent
 from tests.helpers import FakeLLM
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_repo"

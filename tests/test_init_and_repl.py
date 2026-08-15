@@ -1,9 +1,9 @@
 from pathlib import Path
 
+from pyrrhon.bootstrap import build_agent
 from pyrrhon.commands.init_cmd import init_pyrrhon_dir
 from pyrrhon.core.grounding.gate import GroundingGate
 from pyrrhon.core.providers.llm import LLMReply
-from pyrrhon.repl import build_agent
 from tests.helpers import FakeLLM
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_repo"

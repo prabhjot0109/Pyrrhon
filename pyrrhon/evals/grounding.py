@@ -251,8 +251,8 @@ def main(argv: list[str] | None = None) -> int:
 
     # Imported here, not at module top: only the CLI needs a real,
     # API-key-backed agent — unit tests inject FakeLLM-backed factories.
+    from pyrrhon.bootstrap import build_agent
     from pyrrhon.config.credentials import load_credentials
-    from pyrrhon.repl import build_agent
 
     # `pyrrhon --setup` writes keys to ~/.pyrrhon/credentials.toml and only the
     # wizard ever read them back, so the eval command CLAUDE.md documents failed

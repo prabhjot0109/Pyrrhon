@@ -1,8 +1,8 @@
 import logging
 from pathlib import Path
 
+from pyrrhon.bootstrap import build_agent
 from pyrrhon.commands.registry import CommandContext, command, dispatch
-from pyrrhon.repl import build_agent
 from tests.helpers import FakeLLM
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_repo"

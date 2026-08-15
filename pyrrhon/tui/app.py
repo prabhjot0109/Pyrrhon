@@ -18,6 +18,13 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal
 from textual.widgets import Input, RichLog
 
+from pyrrhon.bootstrap import (
+    build_agent,
+    load_channel_plugins,
+    orient_in_background,
+    warm_index_in_background,
+    warm_llm_connection_in_background,
+)
 from pyrrhon.commands import (  # noqa: F401 — registers commands
     builtin,
     debug_cmd,
@@ -152,12 +159,6 @@ class PyrrhonApp(App):
         # Build the symbol index and open the provider connection now, so the
         # first turn pays neither the cold walk nor the TLS handshake. Held on
         # self so the tasks aren't GC'd mid-flight.
-        from pyrrhon.repl import (
-            orient_in_background,
-            warm_index_in_background,
-            warm_llm_connection_in_background,
-        )
-
         self._warm_task = warm_index_in_background(self.agent)
         self._warm_conn_task = warm_llm_connection_in_background(self.agent)
         self._orient_task = orient_in_background(self.agent, self._render_event)
@@ -269,9 +270,6 @@ def run_tui(repo: str, voice: bool = False, trust_repo: bool = False) -> None:
     from pyrrhon.config.wizard import ensure_configured
 
     ensure_configured()  # stored keys → env; first run offers the wizard
-    # Imported here, not at module top: repl.py is the single agent factory
-    # and importing it lazily keeps tui importable without the REPL's deps.
-    from pyrrhon.repl import load_channel_plugins
 
     def _ask(question: str) -> bool:
         # Textual has not taken over the terminal yet — plain input works.
@@ -291,8 +289,6 @@ def run_tui(repo: str, voice: bool = False, trust_repo: bool = False) -> None:
 
 
 async def _tui_main(repo_root: Path, voice: bool, plugins, settings) -> None:
-    from pyrrhon.repl import build_agent
-
     manager = MCPManager(settings.mcp_servers)
     mcp_tools = await manager.start()  # never raises; dead servers log one warning
     try:

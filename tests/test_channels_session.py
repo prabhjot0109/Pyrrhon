@@ -3,10 +3,11 @@ from pathlib import Path
 
 from rich.console import Console
 
+from pyrrhon.bootstrap import build_agent
 from pyrrhon.commands.debug_cmd import format_history
 from pyrrhon.core.providers.llm import LLMReply
 from pyrrhon.core.session import Session
-from pyrrhon.repl import ConsoleUI, _turn, build_agent
+from pyrrhon.repl import ConsoleUI, _turn
 from tests.helpers import FakeLLM
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_repo"

@@ -2,8 +2,8 @@ from pathlib import Path
 
 from textual.widgets import Input, RichLog
 
+from pyrrhon.bootstrap import build_agent
 from pyrrhon.core.events import Citation
-from pyrrhon.repl import build_agent
 from pyrrhon.tui.app import PyrrhonApp
 from pyrrhon.tui.widgets import CodeViewer, StatusBar
 from tests.helpers import FakeLLM

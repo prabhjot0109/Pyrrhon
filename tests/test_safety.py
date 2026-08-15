@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pytest
 
+from pyrrhon.bootstrap import build_agent
 from pyrrhon.core.tools.git import GitBlameTool, GitLogTool, GitShowTool
 from pyrrhon.core.tools.spec_writer import SPEC_FILENAMES, WriteSpecTool
-from pyrrhon.repl import build_agent
 from tests.helpers import FakeLLM  # scripted-replies double, defined in tests/helpers.py
 
 EXPECTED_BELT = {

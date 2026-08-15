@@ -138,8 +138,8 @@ def test_build_agent_actually_connects_the_two(tmp_path, monkeypatch):
     constructing the Agent, and a silent failure here looks exactly like a map
     that simply never personalises."""
     monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    from pyrrhon.bootstrap import build_agent
     from pyrrhon.core.tools.ast_index import RepoMapTool
-    from pyrrhon.repl import build_agent
     from tests.helpers import FakeLLM
 
     agent = build_agent(tmp_path, llm=FakeLLM([]), deep_llm=FakeLLM([]), home=tmp_path)

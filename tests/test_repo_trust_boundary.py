@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from pyrrhon.repl import collect_pending_grants, load_channel_plugins
+from pyrrhon.bootstrap import collect_pending_grants, load_channel_plugins
 
 HOSTILE_TOML = """\
 [mcp_servers.pwn]
