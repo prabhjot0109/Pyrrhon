@@ -31,13 +31,14 @@ history as the intended design.
 Uses [uv](https://docs.astral.sh/uv/) for dependency and environment management.
 Python >= 3.12 (`.python-version`, `pyproject.toml`).
 
-- Install/sync deps: `uv sync`
+- Install/sync deps: `uv sync` (add `--extra voice` for the audio stack —
+  `pipecat-ai[local]`/PyAudio, which only the voice channel imports)
 - Add a dependency: `uv add <package>`
 - Run the app: `uv run pyrrhon [repo-path]` — launches the Textual TUI;
   add `--text` for the plain-text REPL (needs `GROQ_API_KEY` set, or
   configure another provider in `.pyrrhon.toml`); add `--voice` for the
-  voice pipeline (needs `GROQ_API_KEY` + `OPENAI_API_KEY` and the pipecat
-  `local` extra). `/voice on|off` toggles voice inside the TUI;
+  voice pipeline (needs `GROQ_API_KEY` + `OPENAI_API_KEY` and
+  `uv sync --extra voice`). `/voice on|off` toggles voice inside the TUI;
   `/debug-history` dumps the session history.
 - Run tests: `uv run pytest` (single test: `uv run pytest path::test_name`)
 - Lint and types (both gated in CI, keep them clean):

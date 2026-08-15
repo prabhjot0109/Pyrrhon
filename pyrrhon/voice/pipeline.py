@@ -82,7 +82,7 @@ async def run_voice(
     except ImportError as exc:
         raise VoiceUnavailableError(
             f"Voice dependencies missing ({exc}). "
-            'Run: uv add "pipecat-ai[local,silero,groq,openai]" — staying in text mode.'
+            "Run: uv sync --extra voice — staying in text mode."
         ) from exc
 
     transport = LocalAudioTransport(

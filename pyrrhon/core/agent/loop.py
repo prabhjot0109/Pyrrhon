@@ -42,7 +42,7 @@ from pyrrhon.core.events import (
     ToolCallStarted,
 )
 from pyrrhon.core.grounding.citations import extract_citations
-from pyrrhon.core.grounding.gate import GroundingGate
+from pyrrhon.core.grounding.gate import HEDGE, LINE_HEDGE, GroundingGate
 from pyrrhon.core.providers.llm import (
     ContextLengthExceededError,
     InvalidToolCallError,
@@ -649,6 +649,7 @@ class Agent:
         buffer = ""
         spoken: list[str] = []
         slot: dict | None = None
+        hedged: set[str] = set()  # hedges already spoken this turn
         # Gating is awaited inline, deliberately. The M10 plan proposed running
         # it as a task per chunk so the stream could keep draining during
         # verification; that was measured and reverted. A gate check costs
@@ -671,6 +672,17 @@ class Agent:
                 chunks, buffer = ([buffer] if buffer.strip() else []), ""
             for chunk in chunks:
                 speech, citations = await self._gate_sentence(chunk, round_trace)
+                # Each sentence is gated independently, so a turn with several
+                # bad citations repeats one apology. Say it once: the FIRST
+                # sentence carrying it keeps it, later ones are trimmed. The
+                # information is identical; the repetition is just noise, and
+                # aloud it sounds broken.
+                for hedge in (HEDGE, LINE_HEDGE):
+                    if hedge in speech:
+                        if hedge in hedged:
+                            speech = speech.replace(hedge, "").strip()
+                        else:
+                            hedged.add(hedge)
                 if speech.strip():
                     spoken.append(speech)
                     if slot is None:

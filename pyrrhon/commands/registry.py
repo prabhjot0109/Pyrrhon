@@ -9,6 +9,7 @@ into the same table. Handlers return response strings (errors prefixed
 from __future__ import annotations
 
 import inspect
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -45,11 +46,22 @@ class Command:
 
 _COMMANDS: dict[str, Command] = {}
 
+log = logging.getLogger("pyrrhon.commands")
+
 
 def command(name: str, help_text: str):
     """Register a slash command. Handler: (args, ctx) -> response string."""
 
     def register(fn: Callable[[str, CommandContext], str]):
+        if name in _COMMANDS:
+            # Last registration still wins — a plugin overriding a builtin is a
+            # legitimate use. But it must not be silent: tools already warn on
+            # collision (repl.py:166) and commands are the more surprising case,
+            # since /settings and /help are how the user recovers from trouble.
+            log.warning(
+                "command /%s re-registered; %s replaces %s",
+                name, getattr(fn, "__qualname__", fn), _COMMANDS[name].handler,
+            )
         _COMMANDS[name] = Command(name=name, help_text=help_text, handler=fn)
         return fn
 
