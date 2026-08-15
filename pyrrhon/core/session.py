@@ -30,6 +30,11 @@ INTERRUPTED_MARKER = " …[interrupted]"
 VALID_MODES: frozenset[str] = frozenset({"understand", "design"})
 UNDERSTAND_MARKER = "Return to understand mode."
 
+# Tags the one system message that carries the current mode. A marker rather
+# than a remembered index: maybe_summarize splices history[1:split], so any
+# index we cached would be stale after the first compaction.
+MODE_PREFIX = "[mode]\n"
+
 _TURN_DONE = object()
 
 
@@ -59,12 +64,17 @@ class Session:
         self.last_turn_trace: TurnTrace | None = None
 
     def set_mode(self, mode: str) -> None:
-        """Switch understand <-> design by layering a system message.
+        """Switch understand <-> design by REWRITING one layered system message.
 
-        The base teaching prompt from turn one always stays underneath; the
-        injected message sits on top of the history. Design gets the full
-        skeptic policy; understand gets a one-line marker (the base prompt
-        already carries the teaching policy, so no re-injection is needed).
+        The base teaching prompt from turn one always stays underneath. Design
+        gets the full skeptic policy; understand gets a one-line marker (the
+        base prompt already carries the teaching policy, so no re-injection is
+        needed).
+
+        Exactly one mode message ever exists: appending per switch grew history
+        without bound, and system messages are deliberately preserved by
+        maybe_summarize (context.py:153), so nothing would ever have trimmed
+        them.
         """
         if mode not in VALID_MODES:
             raise ValueError(
@@ -82,7 +92,14 @@ class Session:
             )
         self.mode = mode
         self.agent.mode = mode
-        content = DESIGN_PROMPT if mode == "design" else UNDERSTAND_MARKER
+        body = DESIGN_PROMPT if mode == "design" else UNDERSTAND_MARKER
+        content = MODE_PREFIX + body
+        for message in self.history:
+            if message.get("role") == "system" and str(
+                message.get("content", "")
+            ).startswith(MODE_PREFIX):
+                message["content"] = content
+                return
         self.history.append({"role": "system", "content": content})
 
     async def run_turn(self, user_text: str) -> AsyncIterator[Event]:
