@@ -124,7 +124,12 @@ def _set_key(rest: list[str]) -> str:
     if len(rest) < 2:
         return "ERROR: usage: /settings key <ENV_VAR> <value>"
     env, value = rest[0].upper(), rest[1]
-    save_credentials({env: value})
+    try:
+        save_credentials({env: value})
+    except ValueError as exc:
+        # A name the store cannot write. Surfacing it beats crashing the
+        # channel — the user typed this, so they can retype it.
+        return f"ERROR: {exc}"
     os.environ[env] = value  # usable this session immediately
     note = "" if env in _KEY_ENVS else f"  (heads up: {env} isn't a key Pyrrhon uses)"
     return (
