@@ -11,8 +11,15 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tomllib
 from pathlib import Path
+
+# A bare TOML key, which is also exactly what a POSIX environment variable name
+# may be. Anything else produces a line `read_credentials` cannot parse, and a
+# single one of those makes the WHOLE store raise on the next read — silently
+# losing every key already in it.
+_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def credentials_path(home: Path | None = None) -> Path:
@@ -29,15 +36,32 @@ def read_credentials(home: Path | None = None) -> dict[str, str]:
 
 
 def save_credentials(updates: dict[str, str], home: Path | None = None) -> Path:
+    """Merge `updates` into the store, writing owner-only from the first byte.
+
+    os.open with 0o600 rather than write_text-then-chmod: the old order left a
+    window where a freshly created key file carried the process umask.
+
+    Names are validated before anything is touched, so a rejected write leaves
+    the existing store intact rather than half-rewritten.
+    """
+    for name in updates:
+        if not _ENV_NAME_RE.match(name):
+            raise ValueError(
+                f"'{name}' is not a valid environment variable name; "
+                "nothing was written."
+            )
     path = credentials_path(home)
     merged = {**read_credentials(home), **updates}
     path.parent.mkdir(parents=True, exist_ok=True)
     # json.dumps produces a valid TOML basic string (quotes + escapes handled).
     lines = ["# Pyrrhon API keys — managed by `pyrrhon --setup`. Env vars win.", "[keys]"]
     lines += [f"{name} = {json.dumps(value)}" for name, value in sorted(merged.items())]
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    body = "\n".join(lines) + "\n"
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(body)
     try:
-        path.chmod(0o600)
+        path.chmod(0o600)  # tighten an already-existing file O_CREAT left alone
     except OSError:
         pass  # Windows: chmod is limited; the profile dir is already per-user
     return path

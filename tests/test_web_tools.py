@@ -1,7 +1,15 @@
+import socket
+
 import httpx
+import pytest
 import respx
 
-from pyrrhon.core.tools.web import MAX_FETCH_CHARS, WebFetchTool, WebSearchTool
+from pyrrhon.core.tools.web import (
+    MAX_FETCH_CHARS,
+    WebFetchTool,
+    WebSearchTool,
+    is_public_host,
+)
 
 
 class FakeDDGS:
@@ -97,3 +105,61 @@ async def test_fetch_rejects_non_http_urls():
     tool = WebFetchTool()
     assert (await tool.run(url="file:///etc/passwd")).startswith("ERROR:")
     assert (await tool.run(url="ftp://example.com/x")).startswith("ERROR:")
+
+
+# --- SSRF guard ------------------------------------------------------------
+#
+# is_public_host resolves for real, so the fetch tests below would otherwise
+# depend on live DNS for example.com. Pin it to a public address instead: the
+# guard's actual logic (classifying the resolved IP) still runs untouched, and
+# literal-IP cases resolve offline anyway.
+@pytest.fixture(autouse=True)
+def _deterministic_dns(monkeypatch):
+    real_getaddrinfo = socket.getaddrinfo
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        if host == "example.com":
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+        return real_getaddrinfo(host, port, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["localhost", "127.0.0.1", "169.254.169.254", "10.0.0.1", "192.168.1.1", "::1"],
+)
+def test_internal_hosts_are_not_public(host):
+    assert is_public_host(host) is False
+
+
+async def test_fetching_the_cloud_metadata_endpoint_is_refused():
+    result = await WebFetchTool().run(url="http://169.254.169.254/latest/meta-data/")
+    assert "ERROR" in result
+    assert "internal" in result.lower()
+
+
+async def test_fetching_localhost_is_refused():
+    result = await WebFetchTool().run(url="http://localhost:8080/admin")
+    assert "ERROR" in result
+
+
+@respx.mock
+async def test_a_redirect_into_the_internal_network_is_refused():
+    respx.get("https://example.com/start").mock(
+        return_value=httpx.Response(302, headers={"location": "http://169.254.169.254/"})
+    )
+    result = await WebFetchTool().run(url="https://example.com/start")
+    assert "ERROR" in result
+
+
+@respx.mock
+async def test_an_oversized_body_is_truncated_not_loaded_whole():
+    respx.get("https://example.com/big").mock(
+        return_value=httpx.Response(
+            200, text="x" * 5_000_000, headers={"content-type": "text/plain"}
+        )
+    )
+    result = await WebFetchTool().run(url="https://example.com/big")
+    assert result.endswith("(truncated)")
+    assert len(result) < 20_000

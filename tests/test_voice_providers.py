@@ -5,13 +5,19 @@ providers and missing keys fail BEFORE any pipecat import happens, which is
 exactly the property the tests pin down.
 """
 
+import asyncio
 import sys
 import types
 
 import pytest
 
 from pyrrhon.config.settings import VoiceSettings
-from pyrrhon.voice.providers import VoiceUnavailableError, create_stt, create_tts
+from pyrrhon.voice.providers import (
+    VoiceUnavailableError,
+    close_voice_service,
+    create_stt,
+    create_tts,
+)
 
 
 def _fake_service(captured: dict):
@@ -213,3 +219,35 @@ def test_piper_uses_http_service_when_tts_url_is_set(monkeypatch):
     monkeypatch.setitem(sys.modules, "aiohttp", aiohttp_mod)
     create_tts(VoiceSettings(tts_provider="piper", tts_url="http://localhost:5000"))
     assert captured["base_url"] == "http://localhost:5000"
+
+
+def test_piper_http_session_is_attached_and_closable(monkeypatch):
+    closed: list[bool] = []
+
+    class FakeSession:
+        async def close(self):
+            closed.append(True)
+
+    class FakePiperHttp:
+        def __init__(self, base_url, aiohttp_session):
+            self.base_url = base_url
+            self.session = aiohttp_session
+
+    module = types.ModuleType("pipecat.services.piper.tts")
+    module.PiperHttpTTSService = FakePiperHttp
+    monkeypatch.setitem(sys.modules, "pipecat.services.piper.tts", module)
+    fake_aiohttp = types.ModuleType("aiohttp")
+    fake_aiohttp.ClientSession = FakeSession
+    monkeypatch.setitem(sys.modules, "aiohttp", fake_aiohttp)
+
+    service = create_tts(
+        VoiceSettings(tts_provider="piper", tts_url="http://localhost:5000")
+    )
+    assert getattr(service, "_pyrrhon_session", None) is not None
+
+    asyncio.run(close_voice_service(service))
+    assert closed == [True]
+
+
+def test_closing_a_service_with_no_session_is_a_noop():
+    asyncio.run(close_voice_service(object()))  # must not raise

@@ -259,3 +259,11 @@ async def test_tool_schemas_are_rebuilt_only_when_the_belt_changes():
     rebuilt = agent._tool_schemas()
     assert rebuilt is not first
     assert {s["function"]["name"] for s in rebuilt} == set(agent.tools)
+
+
+def test_the_trace_does_not_publish_a_metric_nothing_records():
+    """compaction_ms was structurally always 0.0: compaction moved to
+    Session._compact in M10 and never called time_compaction, so the latency
+    harness recorded a fake zero into every baseline."""
+    assert "compaction_ms" not in TurnTrace().as_dict()
+    assert not hasattr(TurnTrace, "time_compaction")

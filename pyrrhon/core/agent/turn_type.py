@@ -23,6 +23,30 @@ import re
 SOCIAL = "social"
 AMBIGUOUS_FOLLOWUP = "ambiguous_followup"
 REPO_QUESTION = "repo_question"
+RESUME = "resume"
+
+# An affirmative answer to a question WE asked. Anchored at the start so
+# "yes, but what about the gate?" still reads as affirmative; the word after
+# it does not have to be understood, because the belt is the safe outcome.
+_AFFIRMATIVE_RE = re.compile(
+    r"^(yes|yeah|yep|yup|ya|sure|ok|okay|k|please|go on|go ahead|carry on|"
+    r"continue|do it|do that|explain|tell me|show me|sounds good|why not|"
+    r"absolutely|definitely|of course|alright|let's)\b",
+    re.IGNORECASE,
+)
+
+# Declining or closing. Checked FIRST, because "no thanks" starts with a word
+# that is not in the affirmative list but must never fall through to it.
+_DECLINING_RE = re.compile(
+    r"^(no|nope|nah|not now|not really|later|maybe later|thanks|thank you|"
+    r"ta|cheers|stop|that's all|thats all|nevermind|never mind)\b",
+    re.IGNORECASE,
+)
+
+# An affirmative longer than this is carrying its own question ("yes but how
+# does the gate handle a missing file") and is classified as a repo question
+# on its own merits, which also gets the belt.
+MAX_RESUME_WORDS = 8
 
 # Anchored and exact — the whole string must be one of these, optionally with
 # trailing punctuation. "hi" matches; "hi, where is the auth middleware" does
@@ -62,16 +86,25 @@ MAX_FOLLOWUP_WORDS = 6
 
 
 def classify(user_text: str, history: list[dict] | None = None) -> str:
-    """Return SOCIAL, AMBIGUOUS_FOLLOWUP, or REPO_QUESTION.
+    """Return SOCIAL, RESUME, AMBIGUOUS_FOLLOWUP, or REPO_QUESTION.
 
-    `history` is read only to see whether Pyrrhon's own last message ended in
-    a question — a bare "yes" answering an offer is exactly the case where
-    launching a search is the wrong move.
+    A reply to Pyrrhon's OWN question is classified first, because that is the
+    case the rest of the rules get wrong. VOICE_STYLE tells the model to offer
+    the next thread and explain it when the user agrees; withholding the belt
+    on "yes please" makes that instruction impossible to follow, and an answer
+    given without repo access is exactly the ungrounded failure the gate cannot
+    catch (it verifies citations that appear, not claims that cite nothing).
     """
     text = (user_text or "").strip()
     if not text:
         return SOCIAL
     words = text.split()
+
+    if _last_assistant_asked(history):
+        if _DECLINING_RE.match(text):
+            return SOCIAL
+        if len(words) <= MAX_RESUME_WORDS and _AFFIRMATIVE_RE.match(text):
+            return RESUME
 
     if len(words) <= MAX_SOCIAL_WORDS and _SOCIAL_RE.match(text):
         return SOCIAL
@@ -87,7 +120,7 @@ def classify(user_text: str, history: list[dict] | None = None) -> str:
 
 
 def needs_tools(turn_type: str) -> bool:
-    return turn_type == REPO_QUESTION
+    return turn_type in (REPO_QUESTION, RESUME)
 
 
 def _last_assistant_asked(history: list[dict] | None) -> bool:

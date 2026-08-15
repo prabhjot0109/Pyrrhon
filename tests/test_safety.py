@@ -129,3 +129,16 @@ async def test_grep_pattern_starting_with_a_dash_is_searched_not_parsed(tmp_path
     (tmp_path / "flags.txt").write_text("run with --color=never here\n", encoding="utf-8")
     result = await GrepTool(tmp_path).run(pattern="--color=never")
     assert "flags.txt:1:" in result
+
+
+async def test_web_fetch_refuses_internal_addresses():
+    """A model that reads an untrusted repo picks the URL. The metadata
+    endpoint must never be reachable through a Pyrrhon tool."""
+    from pyrrhon.core.tools.web import WebFetchTool
+
+    for evil in (
+        "http://169.254.169.254/latest/meta-data/",
+        "http://127.0.0.1:8080/",
+        "http://[::1]/",
+    ):
+        assert "ERROR" in await WebFetchTool().run(url=evil)

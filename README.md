@@ -33,13 +33,18 @@ Requires Python ≥ 3.12 and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 git clone https://github.com/prabhjot0109/Pyrrhon && cd Pyrrhon
-uv sync
+uv sync                              # text + TUI
+uv sync --extra voice                # ...plus the audio stack, for --voice
 
 uv run pyrrhon --setup               # pick providers, paste keys (stored owner-only)
 uv run pyrrhon /path/to/some/repo    # Textual TUI (default channel)
 uv run pyrrhon --text .              # plain-text REPL
 uv run pyrrhon --voice .             # TUI with the voice pipeline on
 ```
+
+The audio stack (PyAudio and friends) is an optional extra: the text and TUI
+channels never import it, so a plain `uv sync` is a smaller install. Run
+`--voice` without it and Pyrrhon says what to install and stays in text mode.
 
 The first launch without any configuration offers the same wizard
 automatically. Prefer to skip it? Export a key yourself — Text/TUI needs one

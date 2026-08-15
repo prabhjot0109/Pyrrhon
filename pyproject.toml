@@ -16,7 +16,7 @@ dependencies = [
     "huggingface-hub>=1.22.0",
     "mcp>=1.10,<2",
     "openai>=2.44.0",
-    "pipecat-ai[groq,local,openai,silero]>=1.5.0",
+    "pipecat-ai[groq,openai,silero]>=1.5.0",
     "pydantic>=2.12.5",
     "pyyaml>=6.0.3",
     "rich>=14.3.1",
@@ -30,6 +30,12 @@ dependencies = [
     "tree-sitter>=0.25.2,<0.26",
     "tree-sitter-language-pack>=1.12.2",
 ]
+
+[project.optional-dependencies]
+# The audio stack (PyAudio et al). Text and TUI channels never import it, and
+# voice/providers.py degrades with an actionable message when it is missing —
+# a path that could not be reached while this was a hard dependency.
+voice = ["pipecat-ai[local]>=1.5.0"]
 
 [project.scripts]
 pyrrhon = "pyrrhon.cli:main"

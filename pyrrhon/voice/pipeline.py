@@ -24,7 +24,12 @@ from pyrrhon.core.events import Event
 from pyrrhon.core.session import Session
 from pyrrhon.voice.bridge import PlaybackObserver, PyrrhonBridgeProcessor
 from pyrrhon.voice.playback import PlaybackTracker
-from pyrrhon.voice.providers import VoiceUnavailableError, create_stt, create_tts
+from pyrrhon.voice.providers import (
+    VoiceUnavailableError,
+    close_voice_service,
+    create_stt,
+    create_tts,
+)
 
 
 @contextlib.contextmanager
@@ -77,7 +82,7 @@ async def run_voice(
     except ImportError as exc:
         raise VoiceUnavailableError(
             f"Voice dependencies missing ({exc}). "
-            'Run: uv add "pipecat-ai[local,silero,groq,openai]" — staying in text mode.'
+            "Run: uv sync --extra voice — staying in text mode."
         ) from exc
 
     transport = LocalAudioTransport(
@@ -113,3 +118,8 @@ async def run_voice(
             raise VoiceUnavailableError(
                 f"Voice pipeline failed ({exc}) — staying in text mode."
             ) from exc
+        finally:
+            # Runs on /voice off (CancelledError) too — that is the path that
+            # was leaking, since toggling voice is normal and repeated.
+            await close_voice_service(tts)
+            await close_voice_service(stt)

@@ -2171,7 +2171,7 @@ dependencies = [
     { name = "huggingface-hub" },
     { name = "mcp" },
     { name = "openai" },
-    { name = "pipecat-ai", extra = ["groq", "local"] },
+    { name = "pipecat-ai", extra = ["groq"] },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "rich" },
@@ -2180,6 +2180,11 @@ dependencies = [
     { name = "tomli-w" },
     { name = "tree-sitter" },
     { name = "tree-sitter-language-pack" },
+]
+
+[package.optional-dependencies]
+voice = [
+    { name = "pipecat-ai", extra = ["local"] },
 ]
 
 [package.dev-dependencies]
@@ -2200,7 +2205,8 @@ requires-dist = [
     { name = "huggingface-hub", specifier = ">=1.22.0" },
     { name = "mcp", specifier = ">=1.10,<2" },
     { name = "openai", specifier = ">=2.44.0" },
-    { name = "pipecat-ai", extras = ["groq", "local", "openai", "silero"], specifier = ">=1.5.0" },
+    { name = "pipecat-ai", extras = ["groq", "openai", "silero"], specifier = ">=1.5.0" },
+    { name = "pipecat-ai", extras = ["local"], marker = "extra == 'voice'", specifier = ">=1.5.0" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "rich", specifier = ">=14.3.1" },
@@ -2210,6 +2216,7 @@ requires-dist = [
     { name = "tree-sitter", specifier = ">=0.25.2,<0.26" },
     { name = "tree-sitter-language-pack", specifier = ">=1.12.2" },
 ]
+provides-extras = ["voice"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -30,6 +30,11 @@ INTERRUPTED_MARKER = " …[interrupted]"
 VALID_MODES: frozenset[str] = frozenset({"understand", "design"})
 UNDERSTAND_MARKER = "Return to understand mode."
 
+# Tags the one system message that carries the current mode. A marker rather
+# than a remembered index: maybe_summarize splices history[1:split], so any
+# index we cached would be stale after the first compaction.
+MODE_PREFIX = "[mode]\n"
+
 _TURN_DONE = object()
 
 
@@ -57,14 +62,24 @@ class Session:
         # The same turn broken down into its parts (preamble / per-round LLM /
         # tools / gate / retry). None until the first turn completes.
         self.last_turn_trace: TurnTrace | None = None
+        # Duration of the last background compaction. Lives here, not on
+        # TurnTrace: compaction runs AFTER the turn whose trace was already
+        # finished and published, so recording it there produced a metric that
+        # was structurally always zero.
+        self.last_compaction_ms: float | None = None
 
     def set_mode(self, mode: str) -> None:
-        """Switch understand <-> design by layering a system message.
+        """Switch understand <-> design by REWRITING one layered system message.
 
-        The base teaching prompt from turn one always stays underneath; the
-        injected message sits on top of the history. Design gets the full
-        skeptic policy; understand gets a one-line marker (the base prompt
-        already carries the teaching policy, so no re-injection is needed).
+        The base teaching prompt from turn one always stays underneath. Design
+        gets the full skeptic policy; understand gets a one-line marker (the
+        base prompt already carries the teaching policy, so no re-injection is
+        needed).
+
+        Exactly one mode message ever exists: appending per switch grew history
+        without bound, and system messages are deliberately preserved by
+        maybe_summarize (context.py:153), so nothing would ever have trimmed
+        them.
         """
         if mode not in VALID_MODES:
             raise ValueError(
@@ -82,7 +97,14 @@ class Session:
             )
         self.mode = mode
         self.agent.mode = mode
-        content = DESIGN_PROMPT if mode == "design" else UNDERSTAND_MARKER
+        body = DESIGN_PROMPT if mode == "design" else UNDERSTAND_MARKER
+        content = MODE_PREFIX + body
+        for message in self.history:
+            if message.get("role") == "system" and str(
+                message.get("content", "")
+            ).startswith(MODE_PREFIX):
+                message["content"] = content
+                return
         self.history.append({"role": "system", "content": content})
 
     async def run_turn(self, user_text: str) -> AsyncIterator[Event]:
@@ -167,6 +189,7 @@ class Session:
             self._compaction = None
 
     async def _compact(self, budget: int) -> None:
+        started = time.perf_counter()
         try:
             await maybe_summarize(
                 self.history,
@@ -178,6 +201,8 @@ class Session:
             raise
         except Exception:  # never let an optimization kill the session
             logger.debug("background compaction failed", exc_info=True)
+        finally:
+            self.last_compaction_ms = (time.perf_counter() - started) * 1000.0
 
     def _cancel_compaction(self) -> None:
         """Cancel an in-flight background compaction.

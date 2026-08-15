@@ -8,6 +8,9 @@ offloaded the same way. The httpx GET is natively async.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+import socket
+from urllib.parse import urljoin, urlparse
 
 import html2text
 import httpx
@@ -18,6 +21,41 @@ from pyrrhon.core.tools.base import Tool
 MAX_FETCH_CHARS = 8000
 MAX_SEARCH_RESULTS = 10
 FETCH_TIMEOUT_SECONDS = 15.0
+MAX_FETCH_BYTES = 2_000_000  # hard stop before decoding — an OOM guard
+MAX_REDIRECTS = 3
+INTERNAL_REFUSAL = (
+    "ERROR: refusing to fetch an internal address. web_fetch reaches the public "
+    "web only — loopback, private, link-local and reserved ranges are blocked."
+)
+
+
+def is_public_host(host: str) -> bool:
+    """True only if every address `host` resolves to is publicly routable.
+
+    Every address, not the first: a hostname an attacker controls can resolve
+    to one public and one internal address, and picking either at connect time
+    would be a coin flip. DNS is a blocking call, so callers run this in a
+    worker thread.
+    """
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except (socket.gaierror, UnicodeError):
+        return False
+    for *_unused, sockaddr in infos:
+        try:
+            ip = ipaddress.ip_address(sockaddr[0])
+        except ValueError:
+            return False
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            return False
+    return bool(infos)
 
 
 class WebSearchTool(Tool):
@@ -74,24 +112,51 @@ class WebFetchTool(Tool):
     }
 
     async def run(self, url: str) -> str:
-        if not url.startswith(("http://", "https://")):
-            return f"ERROR: only http(s) URLs are supported, got '{url}'."
-        try:
-            async with httpx.AsyncClient(
-                follow_redirects=True, timeout=FETCH_TIMEOUT_SECONDS
-            ) as client:
-                response = await client.get(url)
-        except httpx.HTTPError as exc:
-            return f"ERROR: fetch failed: {exc}"
-        if response.status_code >= 400:
-            return f"ERROR: HTTP {response.status_code} for {url}"
-        text = response.text
-        if "html" in response.headers.get("content-type", ""):
-            text = await asyncio.to_thread(_strip_html, text)
-        text = text.strip()
-        if len(text) > MAX_FETCH_CHARS:
-            text = text[:MAX_FETCH_CHARS] + "\n(truncated)"
-        return text or "(empty page)"
+        # The URL is chosen by a model that reads repo content, and a cloned
+        # repo is untrusted input (M11) — so this tool must not be a way to
+        # reach the cloud metadata endpoint or anything else behind the
+        # network boundary.
+        #
+        # Redirects are followed BY HAND: httpx's follow_redirects would chase
+        # a 302 into the internal network after the first host passed the check.
+        for _hop in range(MAX_REDIRECTS + 1):
+            if not url.startswith(("http://", "https://")):
+                return f"ERROR: only http(s) URLs are supported, got '{url}'."
+            host = urlparse(url).hostname or ""
+            if not await asyncio.to_thread(is_public_host, host):
+                return INTERNAL_REFUSAL
+            try:
+                async with httpx.AsyncClient(
+                    follow_redirects=False, timeout=FETCH_TIMEOUT_SECONDS
+                ) as client:
+                    async with client.stream("GET", url) as response:
+                        if response.is_redirect:
+                            location = response.headers.get("location")
+                            if not location:
+                                return f"ERROR: HTTP {response.status_code} for {url}"
+                            url = urljoin(url, location)
+                            continue
+                        if response.status_code >= 400:
+                            return f"ERROR: HTTP {response.status_code} for {url}"
+                        # Streamed and capped: response.text materialised the
+                        # whole body before MAX_FETCH_CHARS trimmed it, so a
+                        # large response was an OOM rather than a truncation.
+                        body = bytearray()
+                        async for chunk in response.aiter_bytes():
+                            body.extend(chunk)
+                            if len(body) >= MAX_FETCH_BYTES:
+                                break
+                        content_type = response.headers.get("content-type", "")
+            except httpx.HTTPError as exc:
+                return f"ERROR: fetch failed: {exc}"
+            text = body.decode("utf-8", errors="replace")
+            if "html" in content_type:
+                text = await asyncio.to_thread(_strip_html, text)
+            text = text.strip()
+            if len(text) > MAX_FETCH_CHARS:
+                text = text[:MAX_FETCH_CHARS] + "\n(truncated)"
+            return text or "(empty page)"
+        return f"ERROR: too many redirects (>{MAX_REDIRECTS}) for {url}"
 
 
 def _strip_html(html: str) -> str:

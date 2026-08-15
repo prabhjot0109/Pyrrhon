@@ -2,6 +2,9 @@
 
 import os
 import stat
+import sys
+
+import pytest
 
 from pyrrhon.config.credentials import (
     credentials_path,
@@ -47,3 +50,18 @@ def test_file_is_owner_only_on_posix(tmp_path):
         return  # chmod is best-effort on Windows; nothing to assert
     mode = stat.S_IMODE(credentials_path(home=tmp_path).stat().st_mode)
     assert mode == 0o600
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX mode bits")
+def test_the_file_is_never_world_readable_even_for_an_instant(tmp_path):
+    save_credentials({"GROQ_API_KEY": "sk-test"}, home=tmp_path)
+    mode = os.stat(credentials_path(tmp_path)).st_mode & 0o777
+    assert mode == 0o600
+
+
+def test_a_key_name_that_would_corrupt_the_file_is_rejected(tmp_path):
+    save_credentials({"GROQ_API_KEY": "sk-good"}, home=tmp_path)
+    with pytest.raises(ValueError, match="not a valid environment variable name"):
+        save_credentials({"bad name = x": "sk-evil"}, home=tmp_path)
+    # The good key survives — a rejected write must not damage the store.
+    assert read_credentials(tmp_path) == {"GROQ_API_KEY": "sk-good"}

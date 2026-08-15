@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 from pyrrhon.core.agent.loop import Agent, _pop_sentences
 from pyrrhon.core.events import SpeechChunk, ToolCallFinished
+from pyrrhon.core.grounding.gate import HEDGE, GroundingGate
 from pyrrhon.core.providers.llm import LLMReply, ToolCall
 from pyrrhon.core.tools.base import Tool
 from tests.helpers import FakeLLM, StreamingFakeLLM
@@ -159,3 +160,28 @@ async def test_non_streaming_provider_in_voice_uses_whole_reply():
     events = [e async for e in agent.run_turn([], "q")]
     speech = [e.text for e in events if isinstance(e, SpeechChunk)]
     assert speech == ["One shot. Two shot."]  # single chunk, not per-sentence
+
+
+class ThreeBadCitations:
+    async def stream(self, messages, tools=None):
+        yield ("text", "It starts at ghost/one.py:1. ")
+        yield ("text", "Then ghost/two.py:2. ")
+        yield ("text", "Finally ghost/three.py:3. ")
+        yield ("reply", LLMReply(text="…"))
+
+
+async def test_the_hedge_is_spoken_once_per_turn_not_once_per_sentence(tmp_path):
+    agent = Agent(
+        llm=ThreeBadCitations(),
+        tools=[],
+        system_prompt="s",
+        repo_root=tmp_path,
+        grounding_gate=GroundingGate(tmp_path),
+        voice_active=True,
+    )
+    chunks = [
+        e.text
+        async for e in agent.run_turn([], "where?")
+        if isinstance(e, SpeechChunk)
+    ]
+    assert " ".join(chunks).count(HEDGE) == 1

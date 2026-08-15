@@ -13,9 +13,18 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from pyrrhon.core.agent.loop import Agent, _pop_blocks
+from pyrrhon.core.agent.loop import (
+    CONTEXT_FULL_MESSAGE,
+    CUT_OFF_MARKER,
+    Agent,
+    _pop_blocks,
+)
 from pyrrhon.core.events import SpeechChunk
-from pyrrhon.core.providers.llm import LLMReply, ToolCall
+from pyrrhon.core.providers.llm import (
+    ContextLengthExceededError,
+    LLMReply,
+    ToolCall,
+)
 from pyrrhon.core.tools.base import Tool
 from tests.helpers import FakeLLM, StreamingFakeLLM
 
@@ -181,3 +190,54 @@ async def test_non_streaming_turns_still_retry():
     agent = make_agent(llm, gate=CountingGate(), allow_retry=True)
     [e async for e in agent.run_turn([], "q")]
     assert len(llm.calls) == 2  # original + one correction
+
+
+class StreamThatDiesMidAnswer:
+    """Streams two blocks, then the provider rejects the round."""
+
+    async def stream(self, messages, tools=None):
+        yield ("text", "Here is the first paragraph.\n\n")
+        yield ("text", "And a second one.\n\n")
+        raise ContextLengthExceededError("prompt too long")
+
+    async def chat(self, messages, tools=None):
+        return LLMReply(text="unused")
+
+
+async def test_a_dead_stream_leaves_exactly_one_assistant_message(tmp_path):
+    agent = Agent(
+        llm=StreamThatDiesMidAnswer(), tools=[], system_prompt="s", repo_root=tmp_path
+    )
+    history: list[dict] = []
+    async for _event in agent.run_turn(history, "explain the loop"):
+        pass
+
+    assistants = [m for m in history if m["role"] == "assistant"]
+    assert len(assistants) == 1, f"expected one assistant turn, got {len(assistants)}"
+    # What the user actually heard is preserved, and marked as incomplete.
+    assert assistants[0]["content"].startswith("Here is the first paragraph.")
+    assert assistants[0]["content"].endswith(CUT_OFF_MARKER)
+
+
+async def test_no_two_assistant_messages_are_ever_adjacent(tmp_path):
+    agent = Agent(
+        llm=StreamThatDiesMidAnswer(), tools=[], system_prompt="s", repo_root=tmp_path
+    )
+    history: list[dict] = []
+    async for _event in agent.run_turn(history, "explain the loop"):
+        pass
+    roles = [m["role"] for m in history]
+    # Pairwise, so the tail is deliberately ragged: strict= would be wrong here.
+    assert not any(a == b == "assistant" for a, b in zip(roles, roles[1:], strict=False))
+
+
+async def test_the_user_still_hears_the_error(tmp_path):
+    agent = Agent(
+        llm=StreamThatDiesMidAnswer(), tools=[], system_prompt="s", repo_root=tmp_path
+    )
+    spoken = [
+        event.text
+        async for event in agent.run_turn([], "explain the loop")
+        if isinstance(event, SpeechChunk)
+    ]
+    assert CONTEXT_FULL_MESSAGE in spoken

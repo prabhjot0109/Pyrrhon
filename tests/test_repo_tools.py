@@ -1,6 +1,7 @@
+import asyncio
 from pathlib import Path
 
-from pyrrhon.core.tools.repo import GlobTool, GrepTool, ReadFileTool
+from pyrrhon.core.tools.repo import GlobTool, GrepTool, ReadFileTool, _ripgrep
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_repo"
 
@@ -147,3 +148,53 @@ async def test_grep_reports_a_bad_regex_rather_than_raising(grep_repo: Path):
     # The wording comes from whichever engine ran; the contract is the prefix.
     assert with_rg.startswith("ERROR: bad regex")
     assert without_rg.startswith("ERROR: bad regex")
+
+
+@pytest.mark.skipif(_ripgrep() is None, reason="ripgrep not installed")
+async def test_repeated_greps_never_report_a_spurious_failure(tmp_path):
+    """The returncode race is timing-dependent: run it enough times that a
+    kill-before-reap would show up at least once."""
+    (tmp_path / "a.py").write_text("needle = 1\n", encoding="utf-8")
+    tool = GrepTool(tmp_path)
+    for _ in range(25):
+        result = await tool.run(pattern="needle")
+        assert "ERROR" not in result, result
+        assert "a.py:1:" in result
+
+
+@pytest.mark.skipif(_ripgrep() is None, reason="ripgrep not installed")
+async def test_a_genuinely_bad_regex_still_reports_an_error(tmp_path):
+    result = await GrepTool(tmp_path).run(pattern="(unclosed")
+    assert "ERROR" in result
+
+
+@pytest.mark.skipif(_ripgrep() is None, reason="ripgrep not installed")
+async def test_a_search_that_finished_on_its_own_is_never_killed(tmp_path, monkeypatch):
+    """The deterministic half of the returncode race.
+
+    `returncode` stays None until the child is waited on, so a clean stdout EOF
+    looks identical to "still running" — and the old `finally` killed on both.
+    The corruption that follows (a kill signal read as a failed search) is
+    timing-dependent and will not reproduce on demand, but the kill itself
+    fired on every successful grep. That is what this pins.
+    """
+    (tmp_path / "a.py").write_text("needle = 1\n", encoding="utf-8")
+    killed: list[str] = []
+    real_exec = asyncio.create_subprocess_exec
+
+    async def spy_exec(*args, **kwargs):
+        proc = await real_exec(*args, **kwargs)
+        real_kill = proc.kill
+
+        def recording_kill():
+            killed.append("kill")
+            real_kill()
+
+        monkeypatch.setattr(proc, "kill", recording_kill)
+        return proc
+
+    monkeypatch.setattr(repo_module.asyncio, "create_subprocess_exec", spy_exec)
+    result = await GrepTool(tmp_path).run(pattern="needle")
+
+    assert "a.py:1:" in result
+    assert killed == [], "a search that reached EOF on its own must not be killed"
