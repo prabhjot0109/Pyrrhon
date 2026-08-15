@@ -4,9 +4,9 @@ from pyrrhon.core.tools.ast_index import (
     DependenciesTool,
     SymbolIndex,
     _module_name,
-    _modules_from_import,
     _package_of,
 )
+from pyrrhon.core.tools.languages import _parse_python_imports as _modules_from_import
 
 
 def test_module_and_package_names():

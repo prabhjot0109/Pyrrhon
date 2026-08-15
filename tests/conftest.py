@@ -18,6 +18,7 @@ import pytest
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SAMPLE_REPO = FIXTURES / "sample_repo"
+POLYGLOT_REPO = FIXTURES / "polyglot_repo"
 
 
 @pytest.fixture
@@ -31,6 +32,19 @@ def sample_repo(tmp_path: Path) -> Path:
     """
     dest = tmp_path / "repo"
     shutil.copytree(SAMPLE_REPO, dest)
+    return dest
+
+
+@pytest.fixture
+def polyglot_repo(tmp_path: Path) -> Path:
+    """A disposable copy of the TS/JS/Go fixture repo — safe to index.
+
+    Same rule as `sample_repo`: the checked-in tree must never be indexed in
+    place, because that writes <repo>/.pyrrhon/cache.db into it and the fence
+    below fails the offending test.
+    """
+    dest = tmp_path / "polyglot"
+    shutil.copytree(POLYGLOT_REPO, dest)
     return dest
 
 

@@ -19,40 +19,21 @@ import threading
 import time
 from pathlib import Path
 
-from tree_sitter import Parser, Query, QueryCursor
-from tree_sitter_language_pack import get_language
+from tree_sitter import Parser, QueryCursor
 
 from pyrrhon.core.tools.base import Tool
+from pyrrhon.core.tools.languages import LanguageSpec, compiled, spec_for_extension
 from pyrrhon.core.tools.repo import SKIP_DIRS
 
-_PY_LANGUAGE = get_language("python")
-
-_DEF_QUERY = Query(
-    _PY_LANGUAGE,
-    """
-    (function_definition name: (identifier) @def.function)
-    (class_definition name: (identifier) @def.class)
-    """,
-)
-
-# "References" in M4 = call sites: plain calls and method calls.
-_REF_QUERY = Query(
-    _PY_LANGUAGE,
-    """
-    (call function: (identifier) @ref)
-    (call function: (attribute attribute: (identifier) @ref))
-    """,
-)
-
-# Whole import statements — their text is parsed in Python, which is robust
-# across grammar details.
-_IMPORT_QUERY = Query(
-    _PY_LANGUAGE,
-    """
-    (import_statement) @import
-    (import_from_statement) @import
-    """,
-)
+# Transitional: the grammar and queries now live in the language table, but
+# this module still parses Python only. Task 2 makes the walk table-driven and
+# these module-level handles go away.
+_PY_SPEC: LanguageSpec = spec_for_extension(".py")  # type: ignore[assignment]
+_PY_COMPILED = compiled(_PY_SPEC)
+_PY_LANGUAGE = _PY_COMPILED.language
+_DEF_QUERY = _PY_COMPILED.defs
+_REF_QUERY = _PY_COMPILED.refs
+_IMPORT_QUERY = _PY_COMPILED.imports
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY, mtime REAL);
@@ -86,49 +67,6 @@ def _package_of(rel: str) -> str:
     if parts:
         parts.pop()  # __init__ or the module file — either way, drop it
     return ".".join(parts)
-
-
-def _modules_from_import(stmt_text: str, package: str) -> list[str]:
-    """Module names referenced by one import statement.
-
-    from-imports also record `module.name` for each imported name: the name
-    may be a submodule (`from pkg import api`) or an attribute — a false
-    attribute edge is harmless, a missed submodule edge is not.
-    """
-    text = " ".join(stmt_text.split())
-    if text.startswith("from "):
-        module_part, _, names_part = text[len("from "):].partition(" import ")
-        module = _resolve_relative(module_part.strip(), package)
-        if not module:
-            return []
-        if names_part.strip() == "*":
-            return [module]
-        modules = [module]
-        for name in names_part.replace("(", "").replace(")", "").split(","):
-            name = name.strip().split(" as ")[0].strip()
-            if name:
-                modules.append(f"{module}.{name}")
-        return modules
-    modules = []
-    for part in text[len("import "):].split(","):
-        module = part.strip().split(" as ")[0].strip()
-        if module:
-            modules.append(module)
-    return modules
-
-
-def _resolve_relative(module: str, package: str) -> str:
-    if not module.startswith("."):
-        return module
-    dots = len(module) - len(module.lstrip("."))
-    remainder = module.lstrip(".")
-    parts = package.split(".") if package else []
-    if dots - 1:
-        parts = parts[: -(dots - 1)] if len(parts) >= dots - 1 else []
-    base = ".".join(parts)
-    if remainder and base:
-        return f"{base}.{remainder}"
-    return remainder or base
 
 
 # Within one model turn the index tools (repo_map, find_symbol,
@@ -281,7 +219,7 @@ class SymbolIndex:
             (rel, module)
             for nodes in QueryCursor(_IMPORT_QUERY).captures(tree.root_node).values()
             for node in nodes
-            for module in _modules_from_import(_node_text(node), package)
+            for module in _PY_SPEC.parse_imports(_node_text(node), package)
         ]
         if imports:
             conn.executemany("INSERT INTO imports (file, module) VALUES (?, ?)", imports)
