@@ -2,6 +2,22 @@
 
 import type React from "react"
 
+// This card is about barge-in, so the panel shows the interrupt path rather
+// than the template's generic toast-styling snippet (which also carried the
+// only literal greens left in the project).
+const SNIPPET = [
+  "async def on_speech_started(self):",
+  "",
+  "    # The user started talking. Stop, now —",
+  "    # not at the end of the current sentence.",
+  "",
+  "    await self.tts.cancel()",
+  "    self.audio_out.flush()",
+  "",
+  "    self.turn.interrupt()",
+  "    self.history.mark_truncated(self.spoken_so_far)",
+]
+
 const RealtimeCodingPreviews: React.FC = () => {
   const themeVars = {
     "--realtime-primary-color": "hsl(var(--primary))",
@@ -78,38 +94,11 @@ const RealtimeCodingPreviews: React.FC = () => {
               justifyContent: "center",
             }}
           >
-            <p style={{ margin: 0, whiteSpace: "pre-wrap", fontWeight: 400, display: "block" }}>switch (type) {"{"}</p>
-            <p style={{ margin: 0, whiteSpace: "pre-wrap", fontWeight: 400, display: "block" }}> case 'success':</p>
-            <p style={{ margin: 0, whiteSpace: "pre-wrap", fontWeight: 400, display: "block" }}> return {"{"}</p>
-            <p style={{ margin: 0, whiteSpace: "pre-wrap", fontWeight: 400, display: "block" }}>
-              {" "}
-              border: theme === 'dark' ? 'border-[rgba(34,197,94,0.4)]' : 'border-green-200',
-            </p>
-            <p style={{ margin: 0, whiteSpace: "pre-wrap", fontWeight: 400, display: "block" }}> icon: (</p>
-            <p style={{ margin: 0, whiteSpace: "pre-wrap", fontWeight: 400, display: "block" }}>
-              {" "}
-              &lt;svg className={"{baseIconClasses}"} fill="none" viewBox="0 0 14 14"&gt;
-            </p>
-            <p style={{ margin: 0, whiteSpace: "pre-wrap", fontWeight: 400, display: "block" }}> &lt;path</p>
-            <p style={{ margin: 0, whiteSpace: "pre-wrap", fontWeight: 400, display: "block" }}>
-              {" "}
-              d="M3.85156 7.875L6.47656 10.5L10.8516 3.5"
-            </p>
-            <p style={{ margin: 0, whiteSpace: "pre-wrap", fontWeight: 400, display: "block" }}>
-              {" "}
-              stroke="var(--realtime-primary-color)"
-            </p>
-            <p style={{ margin: 0, whiteSpace: "pre-wrap", fontWeight: 400, display: "block" }}>
-              {" "}
-              strokeLinecap="round"
-            </p>
-            <p style={{ margin: 0, whiteSpace: "pre-wrap", fontWeight: 400, display: "block" }}>
-              {" "}
-              strokeLinejoin="round"
-            </p>
-            <p style={{ margin: 0, whiteSpace: "pre-wrap", fontWeight: 400, display: "block" }}> strokeWidth="1.5"</p>
-            <p style={{ margin: 0, whiteSpace: "pre-wrap", fontWeight: 400, display: "block" }}> /&gt;</p>
-            <p style={{ margin: 0, whiteSpace: "pre-wrap", fontWeight: 400, display: "block" }}> &lt;/svg&gt;</p>
+            {SNIPPET.map((line, i) => (
+              <p key={i} style={{ margin: 0, whiteSpace: "pre-wrap", fontWeight: 400, display: "block" }}>
+                {line || " "}
+              </p>
+            ))}
           </div>
         </div>
       </div>

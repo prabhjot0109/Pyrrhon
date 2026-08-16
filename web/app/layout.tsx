@@ -60,8 +60,13 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" className="dark">
       <body className="font-sans antialiased">
+        {/*
+          The dithered canvas used to live here, spanning the document. It now
+          belongs to the hero wrapper in app/page.tsx, which is the only place
+          it should ever be visible.
+        */}
         {children}
         {process.env.NODE_ENV === 'production' && <Analytics />}
       </body>
