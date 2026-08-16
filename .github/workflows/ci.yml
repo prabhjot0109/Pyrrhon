@@ -1,9 +1,14 @@
 name: ci
 
+# web/ is the marketing site (Next.js), deployed by Vercel from its own
+# subdirectory. It shares no code with the package, so a copy change should not
+# spend a runner on ruff, mypy and 650-odd Python tests.
 on:
   push:
     branches: ["**"]
+    paths-ignore: ["web/**"]
   pull_request:
+    paths-ignore: ["web/**"]
 
 jobs:
   check:

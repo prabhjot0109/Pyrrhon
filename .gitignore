@@ -13,14 +13,20 @@ __pycache__/
 /docs
 
 # Distribution / packaging
+# build/, dist/ and lib/ are anchored with a leading slash on purpose. A
+# gitignore pattern without one matches at every depth, so a bare `lib/`
+# also swallowed web/lib/utils.ts -- the shadcn `cn()` helper that most of
+# the site's components import. That builds fine locally, where the file is
+# on disk, and fails the deploy with "Can't resolve '@/lib/utils'". These
+# are Python build artifacts, and they only ever appear at the repo root.
 .Python
-build/
+/build/
 develop-eggs/
-dist/
+/dist/
 downloads/
 eggs/
 .eggs/
-lib/
+/lib/
 lib64/
 parts/
 sdist/

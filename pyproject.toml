@@ -47,6 +47,11 @@ testpaths = ["tests"]
 [tool.hatch.build.targets.wheel]
 packages = ["pyrrhon"]
 
+# The wheel is allowlisted above, but the sdist defaults to everything git
+# tracks — which would ship the Next.js marketing site inside a source tarball.
+[tool.hatch.build.targets.sdist]
+exclude = ["web", "evals", ".github", ".pyrrhon", ".claude"]
+
 [dependency-groups]
 dev = [
     "mypy>=2.3.0",
