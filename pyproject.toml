@@ -48,6 +48,12 @@ pyrrhon = "pyrrhon.cli:main"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "live: hits real provider APIs; needs keys. Excluded from CI. Run with -m live",
+]
+# Tier 3 is opt-in: `uv run pytest` must never reach the network or spend a
+# provider quota. `-m live` overrides this on purpose.
+addopts = "-m 'not live'"
 
 [tool.hatch.build.targets.wheel]
 packages = ["pyrrhon"]

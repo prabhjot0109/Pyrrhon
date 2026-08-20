@@ -114,8 +114,10 @@ VOICE_PROVIDERS: tuple[VoiceProvider, ...] = (
         key_env=None, extra="piper", default_voice="en_US-lessac-medium",
         voice_kwarg="voice_id",
         # Piper downloads its voice model on first use; give it a stable home
-        # instead of the process working directory.
-        extra_kwargs={"download_dir": str(Path.home() / ".pyrrhon" / "piper")},
+        # instead of the process working directory. A Path, NOT a str: piper's
+        # download_voices does `download_dir / name` internally, and a str
+        # raises TypeError there. Tier 3 is what caught this.
+        extra_kwargs={"download_dir": Path.home() / ".pyrrhon" / "piper"},
         note="free, on-device, no key and no server",
     ),
     VoiceProvider(

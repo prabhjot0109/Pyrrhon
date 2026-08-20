@@ -1,5 +1,6 @@
 """The factory: key checks before imports, correct kwarg names, clean degradation."""
 
+import pathlib
 import sys
 import types
 
@@ -101,7 +102,9 @@ def test_piper_gets_a_stable_download_dir(monkeypatch):
     _install_fake(monkeypatch, "pipecat.services.piper.tts", "PiperTTSService", captured)
     create_tts(VoiceSettings(tts_provider="piper"))
     assert captured["voice_id"] == "en_US-lessac-medium"
-    assert captured["download_dir"].endswith("piper")
+    # A Path, not a str: piper does `download_dir / name` internally.
+    assert isinstance(captured["download_dir"], pathlib.Path)
+    assert captured["download_dir"].name == "piper"
     assert "api_key" not in captured  # keyless
 
 

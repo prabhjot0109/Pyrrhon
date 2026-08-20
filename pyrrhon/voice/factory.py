@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import importlib
 import os
+from pathlib import Path
 
 from pyrrhon.config.settings import VoiceSettings
 from pyrrhon.voice.registry import (
@@ -85,6 +86,13 @@ def _build(provider: VoiceProvider, model: str | None, voice: str | None):
         )
 
     kwargs: dict = dict(provider.extra_kwargs)
+    # A directory we hand a provider has to exist first: piper downloads its
+    # voice model straight into download_dir and does not create it, so on a
+    # fresh machine construction died with FileNotFoundError. The table names
+    # the path; making it real is the factory's job.
+    download_dir = kwargs.get("download_dir")
+    if download_dir is not None:
+        Path(download_dir).mkdir(parents=True, exist_ok=True)
     key = _api_key(provider)
     if key is not None:
         kwargs["api_key"] = key
