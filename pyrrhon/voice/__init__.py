@@ -9,10 +9,10 @@ from pyrrhon.config.settings import Settings
 from pyrrhon.core.events import Event
 from pyrrhon.core.session import Session
 
-# VoiceUnavailableError lives in providers, which imports no pipecat — so the
+# VoiceUnavailableError lives in the factory, which imports no pipecat — so the
 # controller (and thus the TUI) imports cleanly without the audio stack. The
 # pipeline (and pipecat) is imported lazily in start(), on the first /voice on.
-from pyrrhon.voice.providers import VoiceUnavailableError
+from pyrrhon.voice.factory import VoiceUnavailableError
 
 __all__ = ["VoiceController", "VoiceUnavailableError"]
 

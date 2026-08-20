@@ -23,13 +23,13 @@ from pyrrhon.config.settings import Settings, VoiceSettings
 from pyrrhon.core.events import Event
 from pyrrhon.core.session import Session
 from pyrrhon.voice.bridge import PlaybackObserver, PyrrhonBridgeProcessor
-from pyrrhon.voice.playback import PlaybackTracker
-from pyrrhon.voice.providers import (
+from pyrrhon.voice.factory import (
     VoiceUnavailableError,
     close_voice_service,
     create_stt,
     create_tts,
 )
+from pyrrhon.voice.playback import PlaybackTracker
 
 
 @contextlib.contextmanager
