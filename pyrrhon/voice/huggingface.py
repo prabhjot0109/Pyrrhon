@@ -50,9 +50,14 @@ class HuggingFaceTTSService(TTSService):
     The pickable thing for HF TTS is the *model* (set via [voice] tts_model),
     not a voice — most HF TTS models take no voice argument. Latency is one
     full API round-trip; fine for Pyrrhon's sentence-chunked speech.
+
+    `model` is REQUIRED and has no default. The old default was
+    hexgrad/Kokoro-82M, which pipecat's native KokoroTTSService serves better
+    (on-device ONNX, no round-trip) — so shipping it here pointed users at the
+    slower of two paths for the one model they were most likely to get.
     """
 
-    def __init__(self, *, api_key: str, model: str = "hexgrad/Kokoro-82M", **kwargs):
+    def __init__(self, *, api_key: str, model: str, **kwargs):
         super().__init__(push_start_frame=True, push_stop_frames=True, **kwargs)
         self._hf = AsyncInferenceClient(token=api_key)
         self._model = model

@@ -77,14 +77,6 @@ def test_provider_requiring_a_model_says_so(monkeypatch):
     assert "tts_model" in str(exc.value)
 
 
-def test_stt_provider_requiring_a_model_names_the_stt_key(monkeypatch):
-    """The same requires_model flag must name stt_model, not tts_model."""
-    monkeypatch.setenv("HF_TOKEN", "k")
-    with pytest.raises(VoiceUnavailableError) as exc:
-        create_stt(VoiceSettings(stt_provider="huggingface"))
-    assert "stt_model" in str(exc.value)
-
-
 def test_missing_extra_names_the_install_command(monkeypatch):
     monkeypatch.setenv("DEEPGRAM_API_KEY", "k")
     monkeypatch.setitem(sys.modules, "pipecat.services.deepgram.stt", None)

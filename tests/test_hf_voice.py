@@ -62,3 +62,10 @@ async def test_tts_calls_model_and_yields_wav(fake_hf, monkeypatch):
     chunks = [c async for c in service._synthesize("hello")]
     assert chunks[0].startswith(b"RIFF")
     assert fake_hf.text_to_speech.call_args.kwargs["model"] == "hexgrad/Kokoro-82M"
+
+
+def test_hf_tts_requires_an_explicit_model(fake_hf):
+    from pyrrhon.voice.huggingface import HuggingFaceTTSService
+
+    with pytest.raises(TypeError):
+        HuggingFaceTTSService(api_key="k")  # model is now required

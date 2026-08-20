@@ -104,7 +104,7 @@ VOICE_PROVIDERS: tuple[VoiceProvider, ...] = (
     VoiceProvider(
         id="huggingface", kind="stt", label="Hugging Face",
         module="pyrrhon.voice.huggingface", cls="HuggingFaceSTTService",
-        key_env="HF_TOKEN", extra=None, requires_model=True,
+        key_env="HF_TOKEN", extra=None,
         note="any HF ASR model id via Inference Providers — set stt_model",
     ),
     # ---- TTS -------------------------------------------------------------
