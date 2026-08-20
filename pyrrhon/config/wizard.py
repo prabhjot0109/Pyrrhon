@@ -19,7 +19,12 @@ from pathlib import Path
 import tomli_w
 from rich.console import Console
 
-from pyrrhon.config.catalog import LLM_CHOICES, STT_CHOICES, TTS_CHOICES, ProviderChoice
+from pyrrhon.config.catalog import (
+    LLM_CHOICES,
+    ProviderChoice,
+    stt_choices,
+    tts_choices,
+)
 from pyrrhon.config.credentials import read_credentials, save_credentials
 
 
@@ -111,11 +116,11 @@ def run_wizard(home: Path | None = None, console: Console | None = None,
             state.pop("tts", None)
             return
         stt = _choose(console, ask, "Speech-to-text (your voice -> text):",
-                      STT_CHOICES, stored, allow_back=True)
+                      stt_choices(), stored, allow_back=True)
         state["stt"] = stt
         _collect_key(console, secret, stt, state["keys"], stored)
         tts = _choose(console, ask, "Text-to-speech (Pyrrhon's voice):",
-                      TTS_CHOICES, stored, allow_back=True)
+                      tts_choices(), stored, allow_back=True)
         state["tts"] = tts
         _collect_key(console, secret, tts, state["keys"], stored)
 

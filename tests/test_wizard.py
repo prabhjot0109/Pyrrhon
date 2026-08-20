@@ -2,6 +2,7 @@
 
 import tomllib
 
+from pyrrhon.config.catalog import stt_choices, tts_choices
 from pyrrhon.config.credentials import read_credentials
 from pyrrhon.config.wizard import needs_setup, run_wizard
 
@@ -9,6 +10,16 @@ from pyrrhon.config.wizard import needs_setup, run_wizard
 def scripted(*answers):
     it = iter(answers)
     return lambda prompt="": next(it)
+
+
+def pick(choices, provider_id: str) -> str:
+    """The menu answer that selects `provider_id`.
+
+    The wizard picks by number and the voice menus are DERIVED from the
+    provider table now, so a hard-coded index would break every time a row is
+    added — which is a property of the table, not a regression.
+    """
+    return str(next(i for i, c in enumerate(choices, 1) if c.id == provider_id))
 
 
 class QuietConsole:
@@ -25,8 +36,13 @@ def test_full_run_writes_config_and_credentials(tmp_path):
         home=tmp_path,
         console=console,
         # LLM: pick 3 (gemini), accept default model, then voice: yes,
-        # STT: pick 3 (gemini), TTS: pick 3 (gemini), confirm summary.
-        input_fn=scripted("3", "", "y", "3", "3", "y"),
+        # STT: gemini, TTS: gemini, confirm summary.
+        input_fn=scripted(
+            "3", "", "y",
+            pick(stt_choices(), "gemini"),
+            pick(tts_choices(), "gemini"),
+            "y",
+        ),
         getpass_fn=scripted("AIza-secret"),
     )
     config = tomllib.loads((tmp_path / ".pyrrhon" / "config.toml").read_text())

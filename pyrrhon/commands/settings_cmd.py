@@ -11,14 +11,33 @@ from __future__ import annotations
 import os
 
 from pyrrhon.commands.registry import CommandContext, command
-from pyrrhon.config.catalog import LLM_CHOICES, STT_CHOICES, TTS_CHOICES
+from pyrrhon.config.catalog import (
+    LLM_CHOICES,
+    availability,
+    stt_choices,
+    tts_choices,
+)
 from pyrrhon.config.credentials import read_credentials, save_credentials
 from pyrrhon.config.settings import ModelSlot, load_settings, patch_config
 from pyrrhon.core.providers.llm import MissingAPIKeyError, create_llm
+from pyrrhon.voice.registry import find
 
 _KEY_ENVS = sorted(
-    {c.key_env for c in (*LLM_CHOICES, *STT_CHOICES, *TTS_CHOICES) if c.key_env}
+    {c.key_env for c in (*LLM_CHOICES, *stt_choices(), *tts_choices()) if c.key_env}
 )
+
+
+def _state_suffix(kind: str, provider_id: str) -> str:
+    """What the user must do before this provider works, or nothing.
+
+    Silent when the answer is 'ready': a [ready] badge on every line is noise,
+    and the only reason to render state at all is to name an action.
+    """
+    provider = find(kind, provider_id)
+    if provider is None:
+        return "  [unknown provider]"
+    state = availability(provider)
+    return "" if state == "ready" else f"  [{state}]"
 
 
 def _mask(value: str) -> str:
@@ -43,9 +62,11 @@ def _show(ctx: CommandContext) -> str:
         f"deep:  {deep.provider}/{deep.model}"
         + ("" if settings.deep else "  (= fast; set with /settings llm deep …)"),
         f"stt:   {settings.voice.stt_provider}"
-        + (f" ({settings.voice.stt_model})" if settings.voice.stt_model else ""),
+        + (f" ({settings.voice.stt_model})" if settings.voice.stt_model else "")
+        + _state_suffix("stt", settings.voice.stt_provider),
         f"tts:   {settings.voice.tts_provider}"
-        + (f" ({settings.voice.tts_voice})" if settings.voice.tts_voice else ""),
+        + (f" ({settings.voice.tts_voice})" if settings.voice.tts_voice else "")
+        + _state_suffix("tts", settings.voice.tts_provider),
         "keys:",
     ]
     lines += [_key_line(env, stored) for env in _KEY_ENVS]
@@ -91,13 +112,18 @@ def _set_llm(ctx: CommandContext, rest: list[str]) -> str:
 
 
 def _set_voice(ctx: CommandContext, kind: str, rest: list[str]) -> str:
-    choices = STT_CHOICES if kind == "stt" else TTS_CHOICES
+    choices = stt_choices() if kind == "stt" else tts_choices()
     valid = {c.id for c in choices}
     if not rest or rest[0] not in valid:
+        # Every provider, each with what it would take to run — offering one
+        # Pyrrhon cannot start without saying so is the failure this replaces.
+        listed = "\n".join(
+            f"  {c.id:<14} [{availability(find(kind, c.id))}]  {c.note}"
+            for c in choices
+        )
         return (
             f"ERROR: usage: /settings {kind} <provider> "
-            f"[{'model' if kind == 'stt' else 'voice'}]  "
-            f"(providers: {', '.join(sorted(valid))})"
+            f"[{'model' if kind == 'stt' else 'voice'}]\n{listed}"
         )
     provider = rest[0]
     choice = next(c for c in choices if c.id == provider)

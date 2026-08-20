@@ -1,13 +1,19 @@
 """Every provider a user can pick, as data — the wizard and /settings render this.
 
-Sync rule (pinned by tests/test_catalog.py): LLM ids mirror
-BUILTIN_PROVIDERS; STT/TTS ids mirror the voice registry tuples. For TTS
-choices, default_model carries the default VOICE (the registry's own
-per-provider fallback), since a voice is the thing users actually pick.
+Sync rule (pinned by tests/test_catalog.py): LLM ids mirror BUILTIN_PROVIDERS.
+The voice menus are no longer hand-maintained at all — stt_choices() and
+tts_choices() are DERIVED from pyrrhon/voice/registry.py, so a provider cannot
+be offered here and missing there. For TTS choices, default_model carries the
+default VOICE, since a voice is the thing users actually pick.
+
+availability() is the honesty rule: Pyrrhon may offer a provider it cannot
+currently run, but it may never imply that it can.
 """
 
 from __future__ import annotations
 
+import importlib.util
+import os
 from dataclasses import dataclass
 
 
@@ -42,36 +48,52 @@ LLM_CHOICES: tuple[ProviderChoice, ...] = (
                    "uses whatever model LM Studio has loaded"),
 )
 
-STT_CHOICES: tuple[ProviderChoice, ...] = (
-    ProviderChoice("groq", "Groq Whisper", "GROQ_API_KEY", "whisper-large-v3-turbo",
-                   "fast hosted Whisper"),
-    ProviderChoice("openai", "OpenAI", "OPENAI_API_KEY", None,
-                   "hosted transcription"),
-    ProviderChoice("gemini", "Google Gemini", "GEMINI_API_KEY", "gemini-2.5-flash",
-                   "transcription via the Gemini API"),
-    ProviderChoice("huggingface", "Hugging Face", "HF_TOKEN", "openai/whisper-large-v3",
-                   "ASR via HF Inference Providers (any ASR model id)"),
-    ProviderChoice("deepgram", "Deepgram", "DEEPGRAM_API_KEY", None,
-                   "streaming STT"),
-    ProviderChoice("whisper-local", "Whisper (local)", None, None,
-                   "on-device: tiny|base|small|medium|large-v3 or an HF id"),
-)
+def _providers(kind: str):
+    """The voice table, imported INSIDE the function by design.
 
-TTS_CHOICES: tuple[ProviderChoice, ...] = (
-    ProviderChoice("openai", "OpenAI", "OPENAI_API_KEY", "nova",
-                   "no extra key if you already use OpenAI"),
-    ProviderChoice("groq", "Groq (Orpheus)", "GROQ_API_KEY", "autumn",
-                   "hosted TTS on your Groq key; voices: autumn, ..."),
-    ProviderChoice("gemini", "Google Gemini", "GEMINI_API_KEY", "Kore",
-                   "Gemini TTS voices: Kore, Puck, Charon, ..."),
-    ProviderChoice("huggingface", "Hugging Face", "HF_TOKEN", None,
-                   "TTS via HF Inference Providers (pick a model with tts_model)"),
-    ProviderChoice("cartesia", "Cartesia", "CARTESIA_API_KEY", None,
-                   "lowest latency; needs a voice id from your account"),
-    ProviderChoice("elevenlabs", "ElevenLabs", "ELEVENLABS_API_KEY", None,
-                   "needs a voice id from your account"),
-    ProviderChoice("deepgram", "Deepgram Aura", "DEEPGRAM_API_KEY",
-                   "aura-2-thalia-en", "low-latency hosted voices"),
-    ProviderChoice("piper", "Piper (local)", None, "en_US-lessac-medium",
-                   "free, on-device, no key and no server"),
-)
+    pyrrhon/config/ must not depend on pyrrhon/voice/ at import time — that is
+    the layering rule in CLAUDE.md, and its purpose is that config/ stays
+    importable without the audio stack. A function-local import satisfies it:
+    registry.py is pure stdlib data that names pipecat classes as strings and
+    imports no pipecat itself, and nothing here runs until a menu is rendered.
+    """
+    from pyrrhon.voice.registry import stt_providers, tts_providers
+
+    return stt_providers() if kind == "stt" else tts_providers()
+
+
+def _installed(module: str) -> bool:
+    """True if the module can be located on disk. Does not import it."""
+    try:
+        return importlib.util.find_spec(module) is not None
+    except ModuleNotFoundError:
+        return False
+
+
+def availability(provider) -> str:
+    """One of: 'ready', 'needs <ENV>', or 'install: <command>'."""
+    if not _installed(provider.module):
+        if provider.extra:
+            return f'install: uv add "pipecat-ai[{provider.extra}]"'
+        return "install: unavailable"
+    if provider.key_env and not os.environ.get(provider.key_env):
+        return f"needs {provider.key_env}"
+    return "ready"
+
+
+def _to_choice(provider) -> ProviderChoice:
+    return ProviderChoice(
+        id=provider.id,
+        label=provider.label,
+        key_env=provider.key_env,
+        default_model=provider.default_voice,
+        note=provider.note,
+    )
+
+
+def stt_choices() -> tuple[ProviderChoice, ...]:
+    return tuple(_to_choice(p) for p in _providers("stt"))
+
+
+def tts_choices() -> tuple[ProviderChoice, ...]:
+    return tuple(_to_choice(p) for p in _providers("tts"))

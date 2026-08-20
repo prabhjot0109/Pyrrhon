@@ -70,7 +70,7 @@ class VoiceSettings(BaseModel):
     stt_provider: groq | openai | gemini | deepgram | whisper-local
     tts_provider: openai | gemini | cartesia | elevenlabs | deepgram | piper
     stt_model / tts_voice are provider-specific; when unset each provider
-    applies its own sensible default (see pyrrhon/voice/providers.py).
+    applies its own sensible default (see pyrrhon/voice/registry.py).
     Cartesia and ElevenLabs have no meaningful default voice — they require
     an explicit tts_voice (a voice id from your account).
     """
@@ -176,7 +176,7 @@ def _read_toml(path: Path) -> dict:
 # Repo-supplied keys that RUN something, REDIRECT where prompts and keys go, or
 # WRITE the system prompt. Quarantined until granted. `voice.tts_url` is here
 # despite the rest of [voice] being harmless: Piper HTTP mode POSTs the text
-# Pyrrhon is about to speak to that URL (voice/providers.py), so a repo that
+# Pyrrhon is about to speak to that URL (voice/factory.py), so a repo that
 # sets it exfiltrates the conversation. The partition is therefore keyed on
 # dotted paths, not on top-level table names — privilege does not line up with
 # TOML's table boundaries and pretending it does is how tts_url got missed.
