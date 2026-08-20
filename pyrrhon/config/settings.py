@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tomllib
 from pathlib import Path
+from typing import Literal
 
 import tomli_w
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -82,6 +83,14 @@ class VoiceSettings(BaseModel):
     tts_voice: str | None = None               # provider default when unset
     tts_url: str | None = None                 # local TTS server (piper HTTP mode)
     chars_per_sec: float = 15.0                # played-text estimator rate
+    # "smart": LocalSmartTurnAnalyzerV3 decides end-of-turn semantically.
+    # "vad":   the old fixed-silence threshold. Kept as the documented
+    #          fallback for constrained machines; never delete it.
+    turn_detection: Literal["smart", "vad"] = "smart"
+    # 0 disables. When set, the agent re-engages after this much user silence.
+    idle_timeout_sec: float = 0.0
+    noise_filter: bool = True                  # RNNoise on the mic
+    metrics: bool = True                       # pipecat per-service latency observers
 
 
 class ModelSettings(BaseModel):

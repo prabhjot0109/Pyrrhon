@@ -1,17 +1,22 @@
 """run_voice: the Pipecat pipeline over the headless core.
 
-local mic → Silero VAD → STT ([voice] stt_provider) → PyrrhonBridgeProcessor
-→ TTS ([voice] tts_provider) → PlaybackObserver → local speakers
+local mic → RNNoise → Silero VAD → UserTurnProcessor → STT ([voice]
+stt_provider) → PyrrhonBridgeProcessor → TTS ([voice] tts_provider) →
+PlaybackObserver → local speakers
 
 Error policy (spec): voice failures — no mic, missing key, missing audio
 stack — degrade to text mode with a clear message via VoiceUnavailableError.
 They never crash the app; the text channels keep working.
 
-Pipecat 1.5.0 notes (verified against the installed sources): VAD is an
+Pipecat 1.7.0 notes (verified against the installed sources): VAD is an
 explicit VADProcessor stage (transport params no longer take a
 vad_analyzer); the Groq segmented STT slices audio on the VAD frames that
 stage broadcasts; interruptions are frames the bridge broadcasts itself,
 not a PipelineParams switch.
+
+Assembly only. Which provider to build is registry.py's answer and how to
+build it is factory.py's; this module decides what goes in the pipeline and
+in what order.
 """
 
 from __future__ import annotations
@@ -50,6 +55,71 @@ def speech_path(session: Session):
     finally:
         session.agent.allow_retry = previous_retry
         session.agent.voice_active = previous_voice
+
+
+def _user_turn_processor_cls():
+    """Indirection so tests can substitute a fake without the audio stack."""
+    from pipecat.turns.user_turn_processor import UserTurnProcessor
+
+    return UserTurnProcessor
+
+
+def _smart_turn_stop():
+    """The semantic end-of-turn strategy, or None if its extra is absent.
+
+    local-smart-turn pulls torch and ships in the `voice` extra, which CI does
+    not install. Absence degrades to the timeout strategy rather than refusing
+    to start — the same error policy as every other optional piece here.
+    """
+    try:
+        from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import (
+            LocalSmartTurnAnalyzerV3,
+        )
+        from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import (
+            TurnAnalyzerUserTurnStopStrategy,
+        )
+    except ImportError:
+        return None
+    return TurnAnalyzerUserTurnStopStrategy(turn_analyzer=LocalSmartTurnAnalyzerV3())
+
+
+def _turn_strategies(voice: VoiceSettings):
+    """The stop strategy for the configured mode — always named explicitly.
+
+    UserTurnStrategies defaults `stop` to the smart-turn analyzer when it is
+    left None, so passing None in "vad" mode would silently turn the fallback
+    back into the thing it is a fallback FROM. Both branches say what they mean.
+    """
+    from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
+        SpeechTimeoutUserTurnStopStrategy,
+    )
+    from pipecat.turns.user_turn_strategies import UserTurnStrategies
+
+    stop = _smart_turn_stop() if voice.turn_detection == "smart" else None
+    return UserTurnStrategies(stop=[stop or SpeechTimeoutUserTurnStopStrategy()])
+
+
+def _build_turn_processor(voice: VoiceSettings):
+    """The smart-turn stage, or None when there is nothing for it to do.
+
+    UserTurnProcessor is standalone: unlike the documented
+    LLMContextAggregatorPair wiring, it needs no Pipecat LLM aggregators —
+    which this pipeline deliberately does not have. It also carries the idle
+    timer, so one processor covers both semantic end-of-turn and
+    user-has-gone-quiet.
+
+    Barge-in is NOT affected: this broadcasts UserStartedSpeakingFrame, while
+    bridge.py keys off VADUserStartedSpeakingFrame, which fires earlier by
+    design. Interruption latency is the product; do not unify the two.
+    """
+    if voice.turn_detection != "smart" and not voice.idle_timeout_sec:
+        return None
+
+    cls = _user_turn_processor_cls()
+    return cls(
+        user_turn_strategies=_turn_strategies(voice),
+        user_idle_timeout=voice.idle_timeout_sec,
+    )
 
 
 async def run_voice(
@@ -94,17 +164,15 @@ async def run_voice(
     tracker = PlaybackTracker(chars_per_sec=chars_per_sec)
     bridge = PyrrhonBridgeProcessor(session, on_event=on_event, tracker=tracker)
 
-    pipeline = Pipeline(
-        [
-            transport.input(),
-            vad,
-            stt,
-            bridge,
-            tts,
-            PlaybackObserver(tracker),
-            transport.output(),
-        ]
-    )
+    # Smart turn sits after VAD and before STT: it decides end-of-turn from
+    # the speech VAD has already bracketed.
+    turn = _build_turn_processor(voice)
+    stages = [transport.input(), vad]
+    if turn is not None:
+        stages.append(turn)
+    stages += [stt, bridge, tts, PlaybackObserver(tracker), transport.output()]
+
+    pipeline = Pipeline(stages)
     task = PipelineTask(pipeline)
     # handle_sigint=False: required on Windows, and Pyrrhon owns its lifecycle
     # via /voice off, not Ctrl-C inside the pipeline.

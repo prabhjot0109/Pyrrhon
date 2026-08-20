@@ -1,4 +1,5 @@
 import asyncio
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -90,3 +91,97 @@ async def test_controller_reports_unavailable_voice_instead_of_crashing(monkeypa
         await asyncio.sleep(0)
     assert controller.running is False
     assert notices and "GROQ_API_KEY" in notices[0]
+
+
+# -- M15a: smart turn detection ---------------------------------------------
+
+
+def _voice(**kwargs):
+    from pyrrhon.config.settings import VoiceSettings
+
+    return VoiceSettings(**kwargs)
+
+
+def test_smart_turn_is_the_default():
+    assert _voice().turn_detection == "smart"
+
+
+def test_pipeline_places_a_user_turn_processor_after_vad(monkeypatch):
+    """Smart turn runs in UserTurnProcessor, which needs no LLM aggregators."""
+    from pyrrhon.voice.pipeline import _build_turn_processor
+
+    built = {}
+
+    class FakeTurnProcessor:
+        def __init__(self, **kwargs):
+            built.update(kwargs)
+
+    monkeypatch.setattr(
+        "pyrrhon.voice.pipeline._user_turn_processor_cls", lambda: FakeTurnProcessor
+    )
+    # Faked too: building the real strategies loads LocalSmartTurnAnalyzerV3,
+    # which needs torch from the `voice` extra that CI does not install.
+    monkeypatch.setattr(
+        "pyrrhon.voice.pipeline._turn_strategies", lambda voice: "strategies"
+    )
+    processor = _build_turn_processor(
+        _voice(turn_detection="smart", idle_timeout_sec=12.0)
+    )
+
+    assert isinstance(processor, FakeTurnProcessor)
+    assert built["user_idle_timeout"] == 12.0
+    assert built["user_turn_strategies"] is not None
+
+
+def test_vad_mode_builds_no_turn_analyzer():
+    from pyrrhon.voice.pipeline import _build_turn_processor
+
+    assert _build_turn_processor(_voice(turn_detection="vad", idle_timeout_sec=0.0)) is None
+
+
+def test_vad_mode_with_an_idle_timer_does_not_smuggle_smart_turn_back(monkeypatch):
+    """UserTurnStrategies DEFAULTS to smart turn when stop=None.
+
+    So "vad" plus an idle timeout must name its stop strategy explicitly, or
+    the fallback silently becomes the thing it is a fallback from.
+    """
+    from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
+        SpeechTimeoutUserTurnStopStrategy,
+    )
+
+    from pyrrhon.voice.pipeline import _build_turn_processor
+
+    built = {}
+
+    class FakeTurnProcessor:
+        def __init__(self, **kwargs):
+            built.update(kwargs)
+
+    monkeypatch.setattr(
+        "pyrrhon.voice.pipeline._user_turn_processor_cls", lambda: FakeTurnProcessor
+    )
+    _build_turn_processor(_voice(turn_detection="vad", idle_timeout_sec=30.0))
+
+    stop = built["user_turn_strategies"].stop
+    assert len(stop) == 1
+    assert isinstance(stop[0], SpeechTimeoutUserTurnStopStrategy)
+
+
+def test_smart_turn_degrades_to_the_timeout_strategy_without_its_extra(monkeypatch):
+    """local-smart-turn pulls torch and is not installed in CI.
+
+    Its absence must degrade, not crash: the same error policy that keeps a
+    missing audio stack out of the text channels.
+    """
+    from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
+        SpeechTimeoutUserTurnStopStrategy,
+    )
+
+    from pyrrhon.voice.pipeline import _turn_strategies
+
+    monkeypatch.setitem(
+        sys.modules, "pipecat.audio.turn.smart_turn.local_smart_turn_v3", None
+    )
+    stop = _turn_strategies(_voice(turn_detection="smart")).stop
+    assert len(stop) == 1
+    assert isinstance(stop[0], SpeechTimeoutUserTurnStopStrategy)
