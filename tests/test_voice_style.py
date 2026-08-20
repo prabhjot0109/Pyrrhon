@@ -1,10 +1,12 @@
 """Voice vs. text delivery style: run_turn appends the right style block and a
 live /voice toggle (agent.voice_active) refreshes it mid-session."""
 
+import re
 from pathlib import Path
 
 from pyrrhon.core.agent.loop import Agent
 from pyrrhon.core.agent.prompts import SYSTEM_PROMPT, TEXT_STYLE, VOICE_STYLE
+from pyrrhon.core.grounding.gate import GroundingGate
 from pyrrhon.core.providers.llm import LLMReply
 from tests.helpers import FakeLLM
 
@@ -73,3 +75,12 @@ def test_voice_style_forbids_spoken_coordinates():
     """The prompt is the mechanism; the gate is the safety net behind it."""
     assert "Never say a file path or line number out loud" in VOICE_STYLE
     assert "path:line" in TEXT_STYLE  # text mode keeps citing
+
+
+async def test_no_path_line_survives_into_speech(tmp_path):
+    """The end-to-end guarantee, independent of how many refs a turn carries."""
+    (tmp_path / "app.py").write_text("\n".join(f"line {i}" for i in range(1, 21)))
+    gate = GroundingGate(tmp_path)
+    result = await gate.check("Look at app.py:3 and app.py:9 for the retry.")
+    assert not re.search(r"\S+\.py:\d+", result.speech_text)
+    assert len(result.citations) == 2
