@@ -122,6 +122,32 @@ def _build_turn_processor(voice: VoiceSettings):
     )
 
 
+def _build_observers(voice: VoiceSettings) -> list:
+    """Pipecat's per-service latency observers.
+
+    Complementary to core/telemetry.py, not a replacement: ours measures the
+    agent loop, which Pipecat cannot see; these measure per-service TTFB/TTFA,
+    which our single scalar cannot isolate.
+    """
+    if not voice.metrics:
+        return []
+    from pipecat.observers.turn_tracking_observer import TurnTrackingObserver
+    from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
+
+    return [UserBotLatencyObserver(), TurnTrackingObserver()]
+
+
+def _build_input_filter(voice: VoiceSettings):
+    """RNNoise on the mic. Note the capitalization: RNNoiseFilter."""
+    if not voice.noise_filter:
+        return None
+    try:
+        from pipecat.audio.filters.rnnoise_filter import RNNoiseFilter
+    except ImportError:
+        return None  # extra absent: run without it rather than refusing to start
+    return RNNoiseFilter()
+
+
 async def run_voice(
     session: Session,
     settings: Settings,
@@ -156,7 +182,14 @@ async def run_voice(
         ) from exc
 
     transport = LocalAudioTransport(
-        LocalAudioTransportParams(audio_in_enabled=True, audio_out_enabled=True)
+        LocalAudioTransportParams(
+            audio_in_enabled=True,
+            audio_out_enabled=True,
+            # Denoising the mic before VAD and STT see it: fewer false starts
+            # on keyboard noise, which on this pipeline means fewer spurious
+            # barge-ins.
+            audio_in_filter=_build_input_filter(voice),
+        )
     )
     vad = VADProcessor(
         vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2))
@@ -173,7 +206,7 @@ async def run_voice(
     stages += [stt, bridge, tts, PlaybackObserver(tracker), transport.output()]
 
     pipeline = Pipeline(stages)
-    task = PipelineTask(pipeline)
+    task = PipelineTask(pipeline, observers=_build_observers(voice))
     # handle_sigint=False: required on Windows, and Pyrrhon owns its lifecycle
     # via /voice off, not Ctrl-C inside the pipeline.
     runner = PipelineRunner(handle_sigint=False)

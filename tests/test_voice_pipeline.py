@@ -185,3 +185,27 @@ def test_smart_turn_degrades_to_the_timeout_strategy_without_its_extra(monkeypat
     stop = _turn_strategies(_voice(turn_detection="smart")).stop
     assert len(stop) == 1
     assert isinstance(stop[0], SpeechTimeoutUserTurnStopStrategy)
+
+
+# -- M15a: noise filter and per-service latency observers --------------------
+
+
+def test_observers_are_built_when_metrics_enabled():
+    from pyrrhon.voice.pipeline import _build_observers
+
+    assert len(_build_observers(_voice(metrics=True))) == 2
+    assert _build_observers(_voice(metrics=False)) == []
+
+
+def test_noise_filter_is_skipped_when_disabled():
+    from pyrrhon.voice.pipeline import _build_input_filter
+
+    assert _build_input_filter(_voice(noise_filter=False)) is None
+
+
+def test_noise_filter_degrades_when_its_extra_is_absent(monkeypatch):
+    """rnnoise ships in the `voice` extra; run without it rather than refuse."""
+    from pyrrhon.voice.pipeline import _build_input_filter
+
+    monkeypatch.setitem(sys.modules, "pipecat.audio.filters.rnnoise_filter", None)
+    assert _build_input_filter(_voice(noise_filter=True)) is None
