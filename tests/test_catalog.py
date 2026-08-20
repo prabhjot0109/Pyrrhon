@@ -50,3 +50,23 @@ def test_installed_but_keyless_provider_reports_the_missing_key(monkeypatch):
     monkeypatch.setattr("pyrrhon.config.catalog._installed", lambda module: True)
     monkeypatch.delenv("CARTESIA_API_KEY", raising=False)
     assert availability(cartesia) == "needs CARTESIA_API_KEY"
+
+
+def test_a_present_module_with_an_unsatisfied_extra_is_not_ready(monkeypatch):
+    """pipecat ships every service module in the base wheel.
+
+    So find_spec succeeds for a provider whose third-party dependencies are
+    absent, and reporting that as 'ready' is precisely the lie availability()
+    exists to prevent.
+    """
+    kokoro = find("tts", "kokoro")
+    monkeypatch.setattr("pyrrhon.config.catalog._installed", lambda module: True)
+    monkeypatch.setattr("pyrrhon.config.catalog._extra_satisfied", lambda extra: False)
+    assert availability(kokoro) == 'install: uv add "pipecat-ai[kokoro]"'
+
+
+def test_extra_satisfaction_is_read_from_pipecats_metadata():
+    from pyrrhon.config.catalog import _extra_satisfied
+
+    # piper is in our `voice` extra and installed in this environment.
+    assert _extra_satisfied("piper") is True

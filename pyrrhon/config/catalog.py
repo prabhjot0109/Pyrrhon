@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 from dataclasses import dataclass
+from importlib import metadata
 
 
 @dataclass(frozen=True)
@@ -62,6 +64,40 @@ def _providers(kind: str):
     return stt_providers() if kind == "stt" else tts_providers()
 
 
+def _extra_satisfied(extra: str) -> bool:
+    """True if every distribution `pipecat-ai[extra]` pulls in is installed.
+
+    Locating the module is NOT enough, and getting this wrong is the whole
+    failure this function exists to prevent: pipecat ships every service
+    module in the base wheel, so find_spec succeeds for providers whose
+    third-party dependencies are absent — the module imports onnxruntime (or
+    whatever) at import time and blows up. Asking pipecat's own metadata which
+    distributions the extra requires answers "can this actually run" exactly,
+    with no imports and no second list for someone to forget to update.
+    """
+    try:
+        requirements = metadata.requires("pipecat-ai") or []
+    except metadata.PackageNotFoundError:
+        return False
+    marker = f'extra == "{extra}"'
+    names = [
+        _requirement_name(req) for req in requirements
+        if marker in req and not req.startswith("pipecat-ai[")
+    ]
+    for name in names:
+        try:
+            metadata.version(name)
+        except metadata.PackageNotFoundError:
+            return False
+    return True
+
+
+def _requirement_name(requirement: str) -> str:
+    """'kokoro-onnx<1,>=0.5.0; extra == "kokoro"' -> 'kokoro-onnx'."""
+    head = requirement.split(";", 1)[0].strip()
+    return re.split(r"[<>=!~\[\s(]", head, maxsplit=1)[0]
+
+
 def _installed(module: str) -> bool:
     """True if the module can be located on disk. Does not import it."""
     try:
@@ -72,7 +108,10 @@ def _installed(module: str) -> bool:
 
 def availability(provider) -> str:
     """One of: 'ready', 'needs <ENV>', or 'install: <command>'."""
-    if not _installed(provider.module):
+    runnable = _installed(provider.module) and (
+        provider.extra is None or _extra_satisfied(provider.extra)
+    )
+    if not runnable:
         if provider.extra:
             return f'install: uv add "pipecat-ai[{provider.extra}]"'
         return "install: unavailable"

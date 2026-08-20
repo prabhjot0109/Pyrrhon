@@ -111,3 +111,20 @@ def test_tier2_optional_providers_name_an_extra_users_can_install():
             f"{provider.kind}/{provider.id} names no extra, so the catalog "
             "cannot tell the user how to install it"
         )
+
+
+def test_tier2_every_named_extra_is_one_pipecat_actually_declares():
+    """A typo'd extra would render an install command that cannot work.
+
+    It is also what makes _extra_satisfied safe: an unknown extra matches no
+    requirement and would therefore look vacuously satisfied.
+    """
+    from importlib import metadata
+
+    declared = set(metadata.metadata("pipecat-ai").get_all("Provides-Extra") or [])
+    for provider in (*VOICE_PROVIDERS, PIPER_HTTP):
+        if provider.extra:
+            assert provider.extra in declared, (
+                f"{provider.kind}/{provider.id} names extra '{provider.extra}', "
+                "which pipecat-ai does not declare"
+            )
