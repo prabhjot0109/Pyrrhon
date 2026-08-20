@@ -13,11 +13,12 @@ from pyrrhon.core.grounding.gate import (
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_repo"
 
 
-async def test_verified_citation_passes_through_untouched():
+async def test_verified_citation_survives_as_a_citation_not_as_speech():
     gate = GroundingGate(FIXTURE)
     out = await gate.check("greet lives at utils/helpers.py:1.")
     assert isinstance(out, GroundedText)
-    assert out.speech_text == "greet lives at utils/helpers.py:1."
+    # M15a: the reference verified, so it moves to the screen and leaves speech.
+    assert out.speech_text == "greet lives at ."
     assert out.citations == (Citation(file="utils/helpers.py", line=1),)
     assert out.unverified == ()
 
@@ -60,7 +61,9 @@ async def test_mixed_refs_keep_verified_and_hedge_once():
     out = await GroundingGate(FIXTURE).check(text)
     assert out.citations == (Citation(file="utils/helpers.py", line=1),)
     assert out.unverified == ("bogus.py:3", "fake/x.py:9")
-    assert "utils/helpers.py:1" in out.speech_text
+    # M15a: verified goes to `citations`, not to speech — but one hedge still
+    # covers the two that failed, which is the invariant this test guards.
+    assert "utils/helpers.py" not in out.speech_text
     assert out.speech_text.count("I couldn't verify that location.") == 1
 
 
@@ -147,7 +150,8 @@ async def test_an_observed_line_is_cited_normally(tmp_path: Path):
     ledger = EvidenceLedger()
     ledger.record_range("app.py", 1, 40)
     result = await gate.check("The handler is at app.py:12.", ledger)
-    assert result.speech_text == "The handler is at app.py:12."
+    # M15a: observed => citation, and citations are screen-only.
+    assert result.speech_text == "The handler is at ."
     assert [(c.file, c.line) for c in result.citations] == [("app.py", 12)]
     assert result.unseen == ()
 
@@ -194,7 +198,7 @@ async def test_an_out_of_range_line_outranks_an_unopened_one(tmp_path: Path):
 async def test_provenance_off_preserves_todays_behaviour_exactly(tmp_path: Path):
     gate = GroundingGate(_repo(tmp_path), require_provenance=False)
     result = await gate.check("The handler is at app.py:12.", EvidenceLedger())
-    assert result.speech_text == "The handler is at app.py:12."
+    assert result.speech_text == "The handler is at ."
     assert [(c.file, c.line) for c in result.citations] == [("app.py", 12)]
     assert result.unseen == ()
 
@@ -204,7 +208,8 @@ async def test_no_ledger_at_all_behaves_as_if_provenance_were_off(tmp_path: Path
     hedging just because they pass nothing."""
     gate = GroundingGate(_repo(tmp_path), require_provenance=True)
     result = await gate.check("The handler is at app.py:12.")
-    assert result.speech_text == "The handler is at app.py:12."
+    assert result.speech_text == "The handler is at ."
+    assert [(c.file, c.line) for c in result.citations] == [("app.py", 12)]
 
 
 async def test_one_hedge_even_when_several_lines_are_unopened(tmp_path: Path):
@@ -222,5 +227,28 @@ async def test_a_partially_observed_file_downgrades_only_the_unseen_line(tmp_pat
     result = await gate.check("See app.py:12 and app.py:44.", ledger)
     assert [(c.file, c.line) for c in result.citations] == [("app.py", 12)]
     assert result.unseen == ("app.py:44",)
-    assert "app.py:12" in result.speech_text
+    # M15a: 12 became a citation (screen-only); 44 was downgraded to the bare
+    # path plus a hedge. Neither coordinate is spoken.
+    assert "app.py:12" not in result.speech_text
     assert "app.py:44" not in result.speech_text
+
+
+async def test_verified_citations_are_stripped_from_speech(tmp_path):
+    """Verify is not verbalize: the screen shows path:line, the voice never says it.
+
+    Spoken coordinates are unusable — a listener cannot act on "app dot py
+    colon twelve" — so a VERIFIED reference leaves speech_text and survives in
+    citations. Nothing about the gate itself relaxes: this reference passed
+    every existence and containment check.
+    """
+    (tmp_path / "app.py").write_text("\n".join(f"line {i}" for i in range(1, 51)))
+    gate = GroundingGate(tmp_path)
+
+    result = await gate.check("The retry lives in app.py:12 and it backs off.")
+
+    assert "app.py:12" not in result.speech_text
+    assert "app.py" not in result.speech_text
+    assert result.citations == (Citation(file="app.py", line=12),)
+    # A citation merely moved to the screen must NOT trigger the hedge.
+    assert "I couldn't verify" not in result.speech_text
+    assert result.speech_text == "The retry lives in and it backs off."

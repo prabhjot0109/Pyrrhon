@@ -30,7 +30,7 @@ async def collect(agent: Agent, history: list[dict], text: str) -> list:
 async def test_verified_reply_passes_gate_without_retry():
     agent, fake = make_agent([LLMReply(text="greet is at utils/helpers.py:1.")])
     events = await collect(agent, [], "where is greet?")
-    assert SpeechChunk(text="greet is at utils/helpers.py:1.") in events
+    assert SpeechChunk(text="greet is at .") in events  # coordinate stripped
     assert Citation(file="utils/helpers.py", line=1) in events
     assert len(fake.calls) == 1  # verified — no retry round-trip
 
@@ -56,13 +56,15 @@ async def test_unverified_reply_triggers_exactly_one_retry():
     assert "bogus/nowhere.py:7" in retry_messages[-1]["content"]
     assert fake.calls[1]["tools"] is None  # single round-trip, no new tool loop
 
-    assert SpeechChunk(text="Correction: greet is at utils/helpers.py:1.") in events
+    assert SpeechChunk(text="Correction: greet is at .") in events
     assert Citation(file="utils/helpers.py", line=1) in events
     # The draft and correction never entered the caller's history:
     assert [m["role"] for m in history] == ["system", "user", "assistant"]
+    # M15a: history records what was DELIVERED, and the delivered prose no
+    # longer carries the coordinate — it ships as the Citation event above.
     assert history[-1] == {
         "role": "assistant",
-        "content": "Correction: greet is at utils/helpers.py:1.",
+        "content": "Correction: greet is at .",
     }
 
 
@@ -127,6 +129,16 @@ async def _spoken(agent: Agent, history: list[dict], text: str) -> str:
     return " ".join(chunks)
 
 
+async def _cited(agent: Agent, history: list[dict], text: str) -> list[tuple[str, int]]:
+    """M15a: a verified reference proves itself as a Citation event, not as
+    speech — the coordinate is stripped from prose and rendered separately."""
+    return [
+        (event.file, event.line)
+        async for event in agent.run_turn(history, text)
+        if isinstance(event, Citation)
+    ]
+
+
 async def test_a_line_the_model_read_is_cited(tmp_path: Path):
     agent = _provenance_agent(
         _repo(tmp_path),
@@ -135,7 +147,7 @@ async def test_a_line_the_model_read_is_cited(tmp_path: Path):
             LLMReply(text="The handler is at app.py:12."),
         ],
     )
-    assert "app.py:12" in await _spoken(agent, [], "where is it?")
+    assert await _cited(agent, [], "where is it?") == [("app.py", 12)]
 
 
 async def test_a_line_the_model_never_read_is_downgraded(tmp_path: Path):
@@ -183,7 +195,9 @@ async def test_a_line_outside_the_window_the_model_read_is_downgraded(tmp_path: 
         ],
     )
     spoken = await _spoken(agent, [], "where is it?")
-    assert "app.py:12" in spoken
+    # 12 verified (a Citation event); 44 was downgraded and hedged. Neither
+    # coordinate is spoken.
+    assert "app.py:12" not in spoken
     assert "app.py:44" not in spoken
     assert LINE_UNSEEN_HEDGE in spoken
 
@@ -218,4 +232,4 @@ async def test_provenance_defaults_off_so_an_unread_line_still_cites(tmp_path: P
         repo_root=repo,
         grounding_gate=GroundingGate(repo),
     )
-    assert "app.py:12" in await _spoken(agent, [], "where is it?")
+    assert await _cited(agent, [], "where is it?") == [("app.py", 12)]

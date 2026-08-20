@@ -29,7 +29,8 @@ async def test_build_agent_wires_tools_and_answers(tmp_path: Path):
 
     events = [event async for event in agent.run_turn([], "hi")]
     texts = [e.text for e in events if hasattr(e, "text")]
-    assert "app.py:1 imports greet." in texts
+    # M15a: the verified coordinate leaves the prose and ships as a Citation.
+    assert "imports greet." in texts
 
 
 def test_build_agent_wires_grounding_gate():

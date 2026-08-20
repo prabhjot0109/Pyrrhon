@@ -67,3 +67,9 @@ def test_base_prompt_carries_the_tool_decision_and_memory_policy():
     assert "Deciding when to open the repo" in SYSTEM_PROMPT
     assert "Do NOT call any tool" in SYSTEM_PROMPT
     assert "remember tool" in SYSTEM_PROMPT
+
+
+def test_voice_style_forbids_spoken_coordinates():
+    """The prompt is the mechanism; the gate is the safety net behind it."""
+    assert "Never say a file path or line number out loud" in VOICE_STYLE
+    assert "path:line" in TEXT_STYLE  # text mode keeps citing

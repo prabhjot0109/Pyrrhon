@@ -163,9 +163,12 @@ class GroundingGate:
                     replacement[ref] = rel if count is not None else ""
 
         speech = text
-        failing = [*unverified, *unseen]
-        if failing:
-            for ref in failing:
+        # Verified refs are removed from SPEECH but kept in `citations`: the
+        # screen shows path:line, the voice never says it. Spoken coordinates
+        # are unusable — a listener cannot act on "app dot py colon twelve".
+        rewrites = {**replacement, **{f"{c.file}:{c.line}": "" for c in verified}}
+        if rewrites:
+            for ref, target in rewrites.items():
                 rel, _, line_str = ref.rpartition(":")
                 # Match both the normalized (/) and original (\) spellings;
                 # \b after the line number keeps app.py:5 from eating app.py:55.
@@ -174,8 +177,11 @@ class GroundingGate:
                 )
                 # A function replacement, not a string: a Windows path in the
                 # replacement would otherwise be read as regex escapes.
-                speech = pattern.sub(_literal(replacement[ref]), speech)
+                speech = pattern.sub(_literal(target), speech)
             speech = re.sub(r"[ \t]{2,}", " ", speech).strip()
+        # The hedge is for UNVERIFIED claims only. A verified citation that was
+        # merely moved to the screen must never make the agent sound unsure.
+        if unverified or unseen:
             hedge = _hedge_for(unverified, replacement)
             speech = f"{speech} {hedge}" if speech else hedge
 

@@ -39,7 +39,7 @@ async def test_turn_streams_speech_citation_and_code_jump(sample_repo: Path):
         await submit(app, pilot, "where is greet defined?")
         assert app.history[-1] == {
             "role": "assistant",
-            "content": "greet is defined at utils/helpers.py:1.",
+            "content": "greet is defined at .",
         }
         assert app.last_citation == Citation(file="utils/helpers.py", line=1)
         assert app.query_one(CodeViewer).current_line == 1

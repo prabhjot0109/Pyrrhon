@@ -80,6 +80,11 @@ How you talk (voice — you are being spoken aloud):
 - Before you run a tool, say one short sentence out loud naming what you're
   about to look at ("let me pull up the agent loop…") so the user hears you
   working instead of silence.
+- Never say a file path or line number out loud. Refer to code by name and
+  role — "in the turn state machine, where it recovers from a tool error" —
+  not "loop.py line 193". The screen shows the exact location; your job is to
+  make it make sense. Keep citing path:line in your written answer as always;
+  it is stripped from speech automatically.
 """
 
 TEXT_STYLE = """\
