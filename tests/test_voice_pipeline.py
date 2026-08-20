@@ -209,3 +209,28 @@ def test_noise_filter_degrades_when_its_extra_is_absent(monkeypatch):
 
     monkeypatch.setitem(sys.modules, "pipecat.audio.filters.rnnoise_filter", None)
     assert _build_input_filter(_voice(noise_filter=True)) is None
+
+
+def test_tracing_is_off_unless_explicitly_enabled(monkeypatch):
+    """Opt-in: the default config must not reach for an exporter at all."""
+    from pyrrhon.config.settings import TelemetrySettings
+    from pyrrhon.voice.pipeline import _setup_tracing
+
+    called = []
+    monkeypatch.setitem(sys.modules, "pipecat.utils.tracing.setup", None)
+    _setup_tracing(SimpleNamespace(telemetry=TelemetrySettings()))
+    _setup_tracing(SimpleNamespace())  # a Settings that predates the section
+    assert called == []
+
+
+def test_tracing_degrades_when_the_otel_packages_are_absent(monkeypatch):
+    from pyrrhon.config.settings import TelemetrySettings
+    from pyrrhon.voice.pipeline import _setup_tracing
+
+    monkeypatch.setitem(
+        sys.modules, "opentelemetry.exporter.otlp.proto.http.trace_exporter", None
+    )
+    settings = SimpleNamespace(
+        telemetry=TelemetrySettings(otel_enabled=True, otlp_endpoint="http://x/v1")
+    )
+    _setup_tracing(settings)  # must not raise

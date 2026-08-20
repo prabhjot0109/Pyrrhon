@@ -137,6 +137,28 @@ def _build_observers(voice: VoiceSettings) -> list:
     return [UserBotLatencyObserver(), TurnTrackingObserver()]
 
 
+def _setup_tracing(settings: Settings) -> None:
+    """Opt-in OTel export. Endpoint is privileged config (see settings.py)."""
+    telemetry = getattr(settings, "telemetry", None)
+    if telemetry is None or not telemetry.otel_enabled:
+        return
+    try:
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from pipecat.utils.tracing.setup import setup_tracing
+    except ImportError:
+        return  # tracing extra absent: run without traces rather than refusing
+    exporter = (
+        OTLPSpanExporter(endpoint=telemetry.otlp_endpoint)
+        if telemetry.otlp_endpoint
+        else None
+    )
+    setup_tracing(
+        service_name=telemetry.service_name,
+        exporter=exporter,
+        console_export=exporter is None,
+    )
+
+
 def _build_input_filter(voice: VoiceSettings):
     """RNNoise on the mic. Note the capitalization: RNNoiseFilter."""
     if not voice.noise_filter:
@@ -158,6 +180,7 @@ async def run_voice(
     # Provider factories run first: key checks fail with an actionable
     # message before any audio-stack import is attempted.
     voice = getattr(settings, "voice", None) or VoiceSettings()
+    _setup_tracing(settings)
     stt = create_stt(voice)
     tts = create_tts(voice)
     chars_per_sec = voice.chars_per_sec

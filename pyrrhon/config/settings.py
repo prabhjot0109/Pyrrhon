@@ -139,6 +139,19 @@ class GroundingSettings(BaseModel):
     require_provenance: bool = False
 
 
+class TelemetrySettings(BaseModel):
+    """OpenTelemetry export (TOML section [telemetry]).
+
+    otlp_endpoint is PRIVILEGED: it names where traces — which carry
+    transcripts, prompts, and tool output — are sent. A repo that could set it
+    would have an exfiltration channel, exactly like voice.tts_url.
+    """
+
+    otel_enabled: bool = False
+    otlp_endpoint: str | None = None
+    service_name: str = "pyrrhon"
+
+
 class Settings(BaseModel):
     fast: ModelSlot = ModelSlot(provider="groq", model="llama-3.3-70b-versatile")
     deep: ModelSlot | None = None
@@ -147,6 +160,7 @@ class Settings(BaseModel):
     model: ModelSettings = ModelSettings()
     context: ContextSettings = ContextSettings()
     grounding: GroundingSettings = GroundingSettings()
+    telemetry: TelemetrySettings = TelemetrySettings()
     mcp_servers: dict[str, MCPServerConfig] = {}
     # Slot name ("fast"/"deep") -> providers tried IN ORDER after the slot's
     # primary. Entry format: "provider" or "provider/model" (first '/' splits).
@@ -190,6 +204,10 @@ def _read_toml(path: Path) -> dict:
 # dotted paths, not on top-level table names — privilege does not line up with
 # TOML's table boundaries and pretending it does is how tts_url got missed.
 #
+# `telemetry.otlp_endpoint` is here for the same reason as tts_url and needs
+# no separate argument: OTel spans carry transcripts, prompts, and tool output,
+# so a repo that names the collector reads the whole session.
+#
 # `grounding.require_provenance` is here for a fourth reason: it does not run,
 # redirect, or write anything — it WEAKENS a safety control. While the default
 # is off a repo could only tighten it, but the moment M13's measurement flips
@@ -202,6 +220,7 @@ PRIVILEGED_PATHS: tuple[str, ...] = (
     "providers",
     "voice.tts_url",
     "grounding.require_provenance",
+    "telemetry.otlp_endpoint",
 )
 
 # Safe unless they point at a provider the REPO defined — a repo may suggest
@@ -212,6 +231,7 @@ _EFFECTS = {
     "mcp_servers": "run a program",
     "providers": "send prompts and your API key to",
     "voice.tts_url": "send everything Pyrrhon says to",
+    "telemetry.otlp_endpoint": "send traces — transcripts, prompts, tool output — to",
     "grounding.require_provenance": "relax or tighten citation checking",
     "fast": "choose the model for",
     "deep": "choose the model for",
@@ -294,35 +314,28 @@ def partition_repo_config(
             else:
                 pending.append(grant)
 
-    voice = dict(repo_data.get("voice") or {})
-    if "tts_url" in voice:
-        url = voice.pop("tts_url")
-        grant = Grant(
-            "config", "voice.tts_url", digest_value(url),
-            _describe("voice.tts_url", "tts_url", url),
-        )
-        if granted.has(grant):
-            voice["tts_url"] = url
-        else:
-            pending.append(grant)
-    if "voice" in repo_data:
-        allowed["voice"] = voice
-
-    # Same shape as tts_url, different reason: this one weakens the grounding
-    # gate rather than redirecting anything. See PRIVILEGED_PATHS.
-    grounding = dict(repo_data.get("grounding") or {})
-    if "require_provenance" in grounding:
-        strict = grounding.pop("require_provenance")
-        grant = Grant(
-            "config", "grounding.require_provenance", digest_value(strict),
-            _describe("grounding.require_provenance", "require_provenance", strict),
-        )
-        if granted.has(grant):
-            grounding["require_provenance"] = strict
-        else:
-            pending.append(grant)
-    if "grounding" in repo_data:
-        allowed["grounding"] = grounding
+    # Dotted leaves — voice.tts_url, grounding.require_provenance,
+    # telemetry.otlp_endpoint. Each holds ONE key back and lets the rest of its
+    # table through. Driven by PRIVILEGED_PATHS rather than hand-written once
+    # per key: a privileged leaf someone forgets to add a block for is exactly
+    # how tts_url was missed the first time, and the reasons differ per key
+    # while the mechanism does not.
+    for path in PRIVILEGED_PATHS:
+        table_name, _, key = path.partition(".")
+        if not key:
+            continue  # whole-table paths are handled above
+        table = dict(repo_data.get(table_name) or {})
+        if key in table:
+            value = table.pop(key)
+            grant = Grant(
+                "config", path, digest_value(value), _describe(path, key, value),
+            )
+            if granted.has(grant):
+                table[key] = value
+            else:
+                pending.append(grant)
+        if table_name in repo_data:
+            allowed[table_name] = table
 
     # A slot may only name a provider that is builtin, global, or already
     # granted above — otherwise the repo controls where the key goes.
