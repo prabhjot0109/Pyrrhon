@@ -10,7 +10,7 @@ import tomli_w
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from pyrrhon.config.trust import Grant, TrustFile, digest_value, read_trust_file
-from pyrrhon.core.providers.registry import LLM_PROVIDERS
+from pyrrhon.core.providers.registry import LLM_PROVIDERS, find_llm
 
 
 class ModelSlot(BaseModel):
@@ -141,6 +141,7 @@ class TelemetrySettings(BaseModel):
 class Settings(BaseModel):
     fast: ModelSlot = ModelSlot(provider="groq", model="llama-3.3-70b-versatile")
     deep: ModelSlot | None = None
+    vision: ModelSlot | None = None
     providers: dict[str, ProviderConfig] = {}
     voice: VoiceSettings = VoiceSettings()
     model: ModelSettings = ModelSettings()
@@ -163,6 +164,21 @@ class Settings(BaseModel):
     def deep_slot(self) -> ModelSlot:
         # Spec rule: the deep slot falls back to the fast slot when unset.
         return self.deep or self.fast
+
+    def vision_slot(self) -> ModelSlot | None:
+        """Which model answers questions about images, or None if none can.
+
+        Explicit [vision] wins — whoever wrote it knows what their model can
+        do. Otherwise the fast slot, but only if the table says that provider
+        accepts image content: sending an image to a text-only endpoint
+        produces a confusing 400 instead of a useful error, and a provider the
+        table has never heard of (a user-declared [providers.x]) carries no
+        claim either way, so it declines too.
+        """
+        if self.vision is not None:
+            return self.vision
+        provider = find_llm(self.fast.provider)
+        return self.fast if provider is not None and provider.vision else None
 
     def provider_for(self, slot: ModelSlot) -> ProviderConfig:
         if slot.provider in self.providers:
@@ -210,8 +226,10 @@ PRIVILEGED_PATHS: tuple[str, ...] = (
 )
 
 # Safe unless they point at a provider the REPO defined — a repo may suggest
-# `groq/llama-3.3`, but may not aim a slot at its own base_url.
-CONDITIONAL_PATHS: tuple[str, ...] = ("fast", "deep", "fallbacks")
+# `groq/llama-3.3`, but may not aim a slot at its own base_url. `vision` is
+# here for the same reason as fast/deep and needs no separate argument: it is a
+# model slot, and read_image posts an image from the repo to whatever it names.
+CONDITIONAL_PATHS: tuple[str, ...] = ("fast", "deep", "vision", "fallbacks")
 
 _EFFECTS = {
     "mcp_servers": "run a program",
@@ -221,6 +239,7 @@ _EFFECTS = {
     "grounding.require_provenance": "relax or tighten citation checking",
     "fast": "choose the model for",
     "deep": "choose the model for",
+    "vision": "choose the model that reads images for",
     "fallbacks": "choose the fallback models for",
 }
 

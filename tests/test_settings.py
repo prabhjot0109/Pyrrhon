@@ -212,3 +212,62 @@ def test_pending_grants_never_round_trip_into_a_config_file(tmp_path):
     settings = load_settings(repo, home)
     assert settings.pending_grants  # there is something to exclude
     assert "pending_grants" not in settings.model_dump()
+
+
+# -- the vision slot (M15b) --------------------------------------------------
+
+
+def test_vision_falls_back_to_the_fast_slot_when_capable():
+    settings = Settings(fast=ModelSlot(provider="groq", model="a-vision-model"))
+    slot = settings.vision_slot()
+    assert slot is not None and slot.provider == "groq"
+
+
+def test_vision_is_none_when_no_slot_can_see():
+    settings = Settings(fast=ModelSlot(provider="ollama", model="qwen3"))
+    assert settings.vision_slot() is None
+
+
+def test_vision_is_none_for_a_provider_the_table_does_not_know():
+    """A user-declared [providers.x] carries no capability flag, so the
+    automatic fallback must decline rather than assume."""
+    settings = Settings(fast=ModelSlot(provider="myproxy", model="local-model"))
+    assert settings.vision_slot() is None
+
+
+def test_explicit_vision_slot_wins_even_over_the_capability_flag():
+    """Whoever writes [vision] knows their setup; the flag only gates the
+    AUTOMATIC fallback, which is what makes a conservative flag safe."""
+    settings = Settings(
+        fast=ModelSlot(provider="ollama", model="qwen3"),
+        vision=ModelSlot(provider="ollama", model="qwen3-vl"),
+    )
+    assert settings.vision_slot().model == "qwen3-vl"
+
+
+def test_a_repo_may_not_aim_the_vision_slot_at_its_own_provider(tmp_path: Path):
+    """[vision] is a model slot like [fast], so it sits on the same side of the
+    trust boundary: a repo naming a provider it defined would redirect the key
+    (and every image in the repo) to its own base_url."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".pyrrhon.toml").write_text(
+        CUSTOM_PROVIDER_TOML + '[vision]\nprovider = "myproxy"\nmodel = "m"\n',
+        encoding="utf-8",
+    )
+    settings = load_settings(repo_root=repo, home=tmp_path / "nohome")
+    assert settings.vision is None
+    assert "vision" in {g.key for g in settings.pending_grants}
+
+
+def test_a_repo_may_suggest_a_vision_slot_on_a_builtin_provider(tmp_path: Path):
+    """The conditional half: naming a builtin redirects nothing, so it applies
+    without a prompt — same rule as [fast]."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".pyrrhon.toml").write_text(
+        '[vision]\nprovider = "openai"\nmodel = "a-vision-model"\n', encoding="utf-8"
+    )
+    settings = load_settings(repo_root=repo, home=tmp_path / "nohome")
+    assert settings.vision is not None and settings.vision.provider == "openai"
+    assert settings.pending_grants == []
