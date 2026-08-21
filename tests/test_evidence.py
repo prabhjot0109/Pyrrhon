@@ -121,3 +121,41 @@ def test_ranges_accumulate_across_tool_calls():
     assert ledger.observed("a.py", 5)
     assert ledger.observed("a.py", 95)
     assert not ledger.observed("a.py", 50)
+
+
+# -- read_image: a file observation with no lines in it ----------------------
+
+
+def test_read_image_records_the_path_as_a_whole_file_observation():
+    ledger = EvidenceLedger()
+    ledger.record_tool_result(
+        "read_image",
+        {"path": "docs/architecture.png", "question": "what is this?"},
+        "docs/architecture.png:\nA box labelled 'agent loop'.",
+    )
+    # An image has no lines, so no specific line is observed...
+    assert not ledger.observed("docs/architecture.png", 1)
+    # ...but the file itself is on record.
+    assert "docs/architecture.png" in ledger.files
+
+
+def test_a_path_line_the_vision_model_wrote_is_not_evidence():
+    """The vision model's prose is a DESCRIPTION, not a tool result that showed
+    source. Letting extract_references mine it would license the main model to
+    cite a location nobody ever opened — the exact gap the ledger exists for."""
+    ledger = EvidenceLedger()
+    ledger.record_tool_result(
+        "read_image",
+        {"path": "docs/architecture.png"},
+        "docs/architecture.png:\nThe diagram labels a box 'loop.py:193'.",
+    )
+    assert not ledger.observed("loop.py", 193)
+    assert "loop.py" not in ledger.files
+
+
+def test_a_failed_read_image_records_nothing():
+    ledger = EvidenceLedger()
+    ledger.record_tool_result(
+        "read_image", {"path": "docs/gone.png"}, "ERROR: 'docs/gone.png' does not exist."
+    )
+    assert ledger.files == set()

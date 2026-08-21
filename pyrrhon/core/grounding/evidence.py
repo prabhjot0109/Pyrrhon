@@ -102,6 +102,21 @@ class EvidenceLedger:
         args = args if isinstance(args, dict) else {}
         path = args.get("path")
 
+        if name == "read_image":
+            # An image has no line numbers. Recording the FILE means a claim
+            # citing the bare path is verifiable, while any path:line the model
+            # invents about an image still fails the gate — which is correct.
+            #
+            # It returns here rather than falling through on purpose: the rest
+            # of this method mines the OUTPUT, and read_image's output is a
+            # vision model's prose. A "loop.py:193" appearing inside a
+            # description of a diagram was never displayed to anyone, so
+            # treating it as evidence would license exactly the invented
+            # citation this ledger exists to catch.
+            if isinstance(path, str) and path:
+                self.record_file(path)
+            return
+
         if name in _FILE_ONLY:
             for match in _PATH_TOKEN.finditer(result):
                 self.record_file(match.group(1))
