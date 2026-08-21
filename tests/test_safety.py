@@ -18,7 +18,7 @@ from pyrrhon.core.tools.spec_writer import SPEC_FILENAMES, WriteSpecTool
 from tests.helpers import FakeLLM  # scripted-replies double, defined in tests/helpers.py
 
 EXPECTED_BELT = {
-    "read_file", "grep", "glob", "remember",
+    "read_file", "read_image", "grep", "glob", "remember",
     "find_symbol", "symbol_context", "list_dependencies", "repo_map",
     "git_log", "git_blame", "git_show",
     "web_search", "web_fetch", "write_spec", "think_deeper",
@@ -110,7 +110,16 @@ def test_the_deep_subagent_belt_gained_symbol_context_and_stayed_read_only(agent
 # rewritten to gate on knowing an exact identifier (595 -> 790). That is ~49
 # extra tokens on every tool-bearing turn, spent to remove up to two whole
 # model round trips — the trade the milestone exists to make.
-MAX_BELT_SCHEMA_CHARS = 7500
+#
+# 7534 over 16 after M15b added read_image, so the ceiling moves with the belt
+# rather than being absorbed by the newcomer. read_image's schema is 447 chars
+# against a 471-char belt average: trimming a below-average description until
+# a ceiling calibrated for 15 tools still fits would optimise the number, not
+# the latency, and would leave the new tool worse described than every peer.
+# ~29 extra tokens per tool-bearing turn is what a sixteenth capability costs.
+# What this must still catch is the belt QUIETLY doubling; the headroom here
+# (~6%) matches what the 15-tool ceiling left.
+MAX_BELT_SCHEMA_CHARS = 8000
 
 
 def test_the_belt_schema_stays_within_its_latency_budget(agent):

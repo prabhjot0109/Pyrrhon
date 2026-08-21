@@ -36,7 +36,11 @@ from pyrrhon.core.agent.soul import build_system_prompt, pending_soul_grants
 from pyrrhon.core.events import ScreenArtifact
 from pyrrhon.core.grounding.gate import GroundingGate
 from pyrrhon.core.mcp import MCPManager
-from pyrrhon.core.providers.llm import MissingAPIKeyError, create_llm_with_fallbacks
+from pyrrhon.core.providers.llm import (
+    MissingAPIKeyError,
+    create_llm,
+    create_llm_with_fallbacks,
+)
 from pyrrhon.core.tools.ast_index import (
     DependenciesTool,
     FindSymbolTool,
@@ -45,6 +49,7 @@ from pyrrhon.core.tools.ast_index import (
 )
 from pyrrhon.core.tools.base import Tool
 from pyrrhon.core.tools.git import GitBlameTool, GitLogTool, GitShowTool
+from pyrrhon.core.tools.images import ReadImageTool
 from pyrrhon.core.tools.memory import RememberTool
 from pyrrhon.core.tools.orientation import build_orientation
 from pyrrhon.core.tools.repo import GlobTool, GrepTool, ReadFileTool
@@ -165,6 +170,23 @@ def warm_llm_connection_in_background(agent: Agent) -> asyncio.Task | None:
     return asyncio.create_task(_warm())
 
 
+def _build_vision_llm(settings: Settings):
+    """The LLM read_image asks, or None when nothing is configured to see.
+
+    No fallback chain: a chain exists so a spoken turn survives a provider
+    outage, and a tool call that returns "ERROR: ..." already degrades
+    gracefully. A missing key is the same — the tool says so in words.
+    """
+    slot = settings.vision_slot()
+    if slot is None:
+        return None
+    try:
+        return create_llm(slot, settings)
+    except (KeyError, MissingAPIKeyError) as exc:
+        log.info("vision slot unavailable, read_image will say so: %s", exc)
+        return None
+
+
 def build_agent(
     repo_root: Path,
     llm=None,
@@ -191,6 +213,11 @@ def build_agent(
             deep_llm = create_llm_with_fallbacks("deep", settings)
         except MissingAPIKeyError:
             deep_llm = None  # no key for the deep slot -> think_deeper not registered
+    # The vision slot is optional, and read_image is registered either way:
+    # with none configured it returns an actionable ERROR telling the user how
+    # to enable it. Registering it conditionally would make the belt vary by
+    # config, which tests/test_safety.py deliberately forbids.
+    vision_llm = _build_vision_llm(settings)
     index = SymbolIndex(repo_root)
     # The reviewed, in-tree belt. Kept as its own list because the deep
     # subagent's belt is derived from it below — MCP adapters and plugin tools
@@ -198,6 +225,7 @@ def build_agent(
     # cost, and neither is covered by the safety review).
     builtin_tools = [
         ReadFileTool(repo_root),
+        ReadImageTool(repo_root, vision_llm),
         GrepTool(repo_root),
         GlobTool(repo_root),
         RememberTool(repo_root),

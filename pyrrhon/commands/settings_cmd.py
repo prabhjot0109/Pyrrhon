@@ -53,18 +53,29 @@ def _key_line(env: str, stored: dict[str, str]) -> str:
     return f"  {env}: missing"
 
 
+def _vision_line(settings) -> str:
+    """What read_image would use — including the case where nothing can see,
+    which is the one worth saying out loud."""
+    slot = settings.vision_slot()
+    if slot is None:
+        return "vision: none — read_image is off (/settings llm vision …)"
+    suffix = "" if settings.vision else "  (= fast)"
+    return f"vision: {slot.provider}/{slot.model}{suffix}"
+
+
 def _show(ctx: CommandContext) -> str:
     settings = load_settings(ctx.repo_root)
     stored = read_credentials()
     deep = settings.deep_slot
     lines = [
-        f"fast:  {settings.fast.provider}/{settings.fast.model}",
-        f"deep:  {deep.provider}/{deep.model}"
+        f"fast:   {settings.fast.provider}/{settings.fast.model}",
+        f"deep:   {deep.provider}/{deep.model}"
         + ("" if settings.deep else "  (= fast; set with /settings llm deep …)"),
-        f"stt:   {settings.voice.stt_provider}"
+        _vision_line(settings),
+        f"stt:    {settings.voice.stt_provider}"
         + (f" ({settings.voice.stt_model})" if settings.voice.stt_model else "")
         + _state_suffix("stt", settings.voice.stt_provider),
-        f"tts:   {settings.voice.tts_provider}"
+        f"tts:    {settings.voice.tts_provider}"
         + (f" ({settings.voice.tts_voice})" if settings.voice.tts_voice else "")
         + _state_suffix("tts", settings.voice.tts_provider),
         "keys:",
@@ -72,7 +83,7 @@ def _show(ctx: CommandContext) -> str:
     lines += [_key_line(env, stored) for env in _KEY_ENVS]
     lines += [
         "change it live:",
-        "  /settings llm <fast|deep> <provider>/<model>",
+        "  /settings llm <fast|deep|vision> <provider>/<model>",
         "  /settings stt <provider> [model]",
         "  /settings tts <provider> [voice]",
         "  /settings key <ENV_VAR> <value>   (stored owner-only; value hidden)",
@@ -81,9 +92,12 @@ def _show(ctx: CommandContext) -> str:
     return "\n".join(lines)
 
 
+_LLM_SLOTS = ("fast", "deep", "vision")
+
+
 def _set_llm(ctx: CommandContext, rest: list[str]) -> str:
-    usage = "ERROR: usage: /settings llm <fast|deep> <provider>/<model>"
-    if len(rest) != 2 or rest[0] not in ("fast", "deep") or "/" not in rest[1]:
+    usage = "ERROR: usage: /settings llm <fast|deep|vision> <provider>/<model>"
+    if len(rest) != 2 or rest[0] not in _LLM_SLOTS or "/" not in rest[1]:
         return usage
     slot_name = rest[0]
     provider, _, model = rest[1].partition("/")  # model ids can contain '/'
@@ -106,9 +120,21 @@ def _set_llm(ctx: CommandContext, rest: list[str]) -> str:
     if agent is not None:
         if slot_name == "fast":
             agent.llm = llm
-        else:
+        elif slot_name == "deep":
             agent.set_deep_llm(llm)
+        else:
+            # The vision LLM lives on the tool, not on the Agent — read_image
+            # makes its own call. Repointing it here is what makes the ERROR
+            # that tool returns ("set one with /settings llm vision …") true
+            # without a restart.
+            _repoint_read_image(agent, llm)
     return f"{slot_name} slot is now {provider}/{model} — saved and active."
+
+
+def _repoint_read_image(agent, llm) -> None:
+    tool = getattr(agent, "tools", {}).get("read_image")
+    if tool is not None:
+        tool.llm = llm
 
 
 def _set_voice(ctx: CommandContext, kind: str, rest: list[str]) -> str:

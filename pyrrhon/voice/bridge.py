@@ -87,6 +87,7 @@ FILLERS = (
 # path:line.
 TOOL_FILLERS = {
     "read_file": "Reading that file now…",
+    "read_image": "Taking a look at that image…",
     "grep": "Searching the repo for that…",
     "glob": "Looking for the right files…",
     "find_symbol": "Finding where that's defined…",

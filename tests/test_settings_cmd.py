@@ -81,3 +81,43 @@ def test_redact_secret_echo_masks_only_the_key():
     # Ordinary input is untouched.
     assert _redact_secret_echo("what does run_turn do?") == "what does run_turn do?"
     assert _redact_secret_echo("/settings tts gemini") == "/settings tts gemini"
+
+
+async def test_settings_llm_vision_saves_the_slot(ctx, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    saved: dict = {}
+    monkeypatch.setattr(
+        "pyrrhon.commands.settings_cmd.patch_config",
+        lambda updates, home=None: saved.update(updates),
+    )
+    out = await dispatch("/settings llm vision openai/a-vision-model", ctx)
+    assert saved == {"vision": {"provider": "openai", "model": "a-vision-model"}}
+    assert "vision" in out
+
+
+async def test_settings_llm_vision_repoints_the_live_read_image_tool(
+    tmp_path, monkeypatch
+):
+    """read_image's ERROR names this command, so it has to actually work."""
+    from pyrrhon.bootstrap import build_agent
+    from tests.helpers import FakeLLM
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(
+        "pyrrhon.commands.settings_cmd.patch_config", lambda updates, home=None: None
+    )
+    agent = build_agent(
+        tmp_path, llm=FakeLLM([]), deep_llm=FakeLLM([]), home=tmp_path
+    )
+    assert agent.tools["read_image"].llm is None  # default fast slot cannot see
+
+    ctx = CommandContext(repo_root=tmp_path, agent=agent, ui=DummyUI())
+    await dispatch("/settings llm vision openai/a-vision-model", ctx)
+
+    assert agent.tools["read_image"].llm is not None
+
+
+async def test_settings_shows_the_vision_slot(ctx, monkeypatch):
+    monkeypatch.setattr("pyrrhon.commands.settings_cmd.read_credentials", lambda: {})
+    out = await dispatch("/settings", ctx)
+    assert "vision:" in out

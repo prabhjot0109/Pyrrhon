@@ -50,21 +50,22 @@ _NO_VISION = (
 
 class ReadImageTool(Tool):
     name = "read_image"
+    # Terse on purpose: the belt's total schema size is capped
+    # (tests/test_safety.py) because it rides on every tool-bearing turn.
     description = (
-        "Look at an image in the repo (architecture diagram, screenshot, mockup) "
-        "and answer one question about it. For .png/.jpg/.gif/.webp only — use "
-        "read_file for text. Call again with a different question to look closer."
+        "Answer a question about an image in the repo — diagram, screenshot, "
+        "mockup. .png/.jpg/.gif/.webp only; use read_file for text."
     )
     parameters = {
         "type": "object",
         "properties": {
             "path": {
                 "type": "string",
-                "description": "Repo-relative path, e.g. docs/architecture.png",
+                "description": "Repo-relative path, e.g. docs/arch.png",
             },
             "question": {
                 "type": "string",
-                "description": "What you want to know about this image.",
+                "description": "What to find out about it.",
             },
         },
         "required": ["path", "question"],
