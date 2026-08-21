@@ -77,9 +77,42 @@ class ToolCall:
 
 
 @dataclass(frozen=True)
+class TokenUsage:
+    """Exact counts from the provider. None when the provider omits them.
+
+    Worth capturing because context.py budgets with len(text)//4 while the real
+    number arrives on every response. The estimate is not replaced by it —
+    prompt_tokens describes the request that was SENT, not the history that
+    exists now — it is CALIBRATED by it: see context.token_scale.
+    """
+
+    prompt: int
+    completion: int
+    total: int
+
+
+def _usage_from(response) -> TokenUsage | None:
+    """Read a usage block off a response or a streamed chunk.
+
+    getattr throughout: the SDK's model objects and a local server's looser
+    JSON both arrive here, and a missing field must degrade to "no usage"
+    rather than raise on the turn's critical path.
+    """
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return None
+    return TokenUsage(
+        prompt=getattr(usage, "prompt_tokens", 0) or 0,
+        completion=getattr(usage, "completion_tokens", 0) or 0,
+        total=getattr(usage, "total_tokens", 0) or 0,
+    )
+
+
+@dataclass(frozen=True)
 class LLMReply:
     text: str | None = None
     tool_calls: tuple[ToolCall, ...] = ()
+    usage: TokenUsage | None = None
 
 
 class OpenAICompatLLM:
@@ -137,7 +170,9 @@ class OpenAICompatLLM:
             )
             for tc in (message.tool_calls or ())
         )
-        return LLMReply(text=message.content, tool_calls=calls)
+        return LLMReply(
+            text=message.content, tool_calls=calls, usage=_usage_from(response)
+        )
 
     async def stream(self, messages: list[dict], tools: list[dict] | None = None):
         """Stream a reply as ('text', delta) events, then one ('reply', LLMReply)
@@ -151,6 +186,10 @@ class OpenAICompatLLM:
             "model": self.model,
             "messages": messages,
             "stream": True,
+            # Providers omit usage from a streamed response unless asked. Groq,
+            # OpenAI, OpenRouter and Anthropic's compat endpoint all honour
+            # this; ones that don't ignore an unknown field rather than 400.
+            "stream_options": {"include_usage": True},
             **self._generation_kwargs(),
         }
         if tools:
@@ -161,10 +200,15 @@ class OpenAICompatLLM:
             _raise_if_typed(exc)
             raise
         text_parts: list[str] = []
+        usage: TokenUsage | None = None
         # index -> {"id", "name", "args"} accumulated across delta chunks
         frags: dict[int, dict] = {}
         try:
             async for chunk in stream:
+                # The usage-bearing chunk carries an EMPTY choices list, so
+                # this has to run before the guard below or it is never seen.
+                if getattr(chunk, "usage", None) is not None:
+                    usage = _usage_from(chunk)
                 if not chunk.choices:
                     continue
                 delta = chunk.choices[0].delta
@@ -195,7 +239,12 @@ class OpenAICompatLLM:
             for index, slot in sorted(frags.items())
             if slot["name"]
         )
-        yield ("reply", LLMReply(text="".join(text_parts) or None, tool_calls=calls))
+        yield (
+            "reply",
+            LLMReply(
+                text="".join(text_parts) or None, tool_calls=calls, usage=usage
+            ),
+        )
 
 
 def create_llm(

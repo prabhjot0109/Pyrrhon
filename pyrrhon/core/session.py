@@ -181,7 +181,7 @@ class Session:
         budget = self.agent.context_budget_tokens
         # Cheap pure scan: don't spawn a task just to have maybe_summarize
         # decide there is nothing to do.
-        if not budget or history_tokens(self.history) <= budget:
+        if not budget or history_tokens(self.history, self.agent.token_scale) <= budget:
             return
         try:
             self._compaction = asyncio.create_task(self._compact(budget))
@@ -196,6 +196,7 @@ class Session:
                 self.agent.llm,
                 budget,
                 keep_last=self.agent.context_keep_last,
+                scale=self.agent.token_scale,
             )
         except asyncio.CancelledError:
             raise

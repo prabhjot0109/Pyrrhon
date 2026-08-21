@@ -32,7 +32,9 @@ from pyrrhon.core.agent.turn_type import classify, needs_tools
 from pyrrhon.core.context import (
     compact_tool_results,
     hard_compact_tool_results,
+    history_tokens,
     maybe_summarize,
+    token_scale,
 )
 from pyrrhon.core.events import (
     AskUser,
@@ -221,6 +223,11 @@ class Agent:
         self.mode = mode
         self.context_budget_tokens = context_budget_tokens
         self.context_keep_last = context_keep_last
+        # How wrong len//4 is for whatever model is in the fast slot, learned
+        # from the prompt_tokens each reply reports. 1.0 until the first reply
+        # comes back, which is the only moment the estimate stands alone.
+        # Read by Session when it decides whether to compact.
+        self.token_scale: float = 1.0
         # Diagnostics for the LAST turn only — not conversation state, so this
         # doesn't violate "Agent owns no conversation state" above. Session
         # copies it out into `last_turn_trace` once the turn ends.
@@ -286,6 +293,18 @@ class Agent:
         tool = self.tools.get("think_deeper")
         if isinstance(tool, ThinkDeeperTool):
             tool.deep_llm = llm
+
+    def _calibrate(self, reply, sent_estimate: int) -> None:
+        """Update token_scale from what the provider just charged for.
+
+        Silent when the provider reported nothing usable — a local server that
+        omits `usage` leaves the previous scale in place rather than resetting
+        it, because the last provider that DID answer is a better guide than
+        the len//4 assumption.
+        """
+        scale = token_scale(getattr(reply, "usage", None), sent_estimate)
+        if scale is not None:
+            self.token_scale = scale
 
     async def run_turn(
         self, history: list[dict], user_text: str
@@ -371,6 +390,11 @@ class Agent:
             # the case that never needed sealing.
             live: list[dict] = []
             round_trace = trace.begin_round()
+            # The unscaled estimate of exactly what this round sends, kept so
+            # the reply's prompt_tokens can be turned into a ratio. Taken
+            # before the call because the streaming path appends into
+            # `history` as it goes.
+            sent_estimate = history_tokens(history)
             try:
                 with round_trace.time_llm():
                     if streaming:
@@ -444,6 +468,7 @@ class Agent:
                 ):
                     yield event
                 return
+            self._calibrate(reply, sent_estimate)
             if not reply.tool_calls:
                 if streaming:
                     # Sentences were gated + spoken (and citations emitted, and

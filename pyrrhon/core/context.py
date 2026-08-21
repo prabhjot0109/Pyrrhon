@@ -4,6 +4,14 @@ Provider-agnostic by design: tokens are estimated as len(text)//4 — good
 enough for budgeting, and it avoids a tokenizer dependency that would have
 to match whichever provider the user configured.
 
+The estimate is CALIBRATED rather than replaced once a provider reports
+usage. prompt_tokens is exact, but it describes the request that was sent,
+not the history that exists now — substituting it would under-count
+everything appended since, and would go stale high the moment compaction
+shrinks the history. The ratio it implies (token_scale) does neither: it is
+this model tokenizer's real chars-per-token, and it stays right as the
+history grows and shrinks.
+
 Eviction never breaks grounding: the GroundingGate verifies citations
 against the repo itself (pyrrhon/core/grounding/), not against history, so
 eliding a stale grep dump costs nothing but a possible tool re-run.
@@ -16,6 +24,12 @@ import json
 TOOL_STUB_KEEP = 300  # chars of a tool result kept when elided
 TOOL_STUB_MIN = 600   # results at or below this size are never elided
 
+# len//4 is never off by 10x for text or code. A ratio outside this range means
+# the provider counted something other than what we measured, and trusting it
+# would either disable compaction entirely or run it on every turn.
+MIN_TOKEN_SCALE = 0.5
+MAX_TOKEN_SCALE = 2.0
+
 
 def estimate_tokens(text: str) -> int:
     if not text:
@@ -23,7 +37,21 @@ def estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
-def history_tokens(history: list[dict]) -> int:
+def token_scale(usage, estimated: int) -> float | None:
+    """This model's real chars-per-token, relative to the len//4 assumption.
+
+    `usage` is the TokenUsage from a reply and `estimated` is what
+    history_tokens() made of the very messages that reply answered. None when
+    there is nothing trustworthy to learn — no usage block, a zero count, or an
+    empty history — so the caller keeps whatever scale it already had.
+    """
+    if usage is None or not usage.prompt or estimated <= 0:
+        return None
+    return min(MAX_TOKEN_SCALE, max(MIN_TOKEN_SCALE, usage.prompt / estimated))
+
+
+def history_tokens(history: list[dict], scale: float = 1.0) -> int:
+    """Estimated tokens in `history`, optionally corrected by token_scale()."""
     total = 0
     for message in history:
         content = message.get("content")
@@ -31,7 +59,7 @@ def history_tokens(history: list[dict]) -> int:
             total += estimate_tokens(content)
         for call in message.get("tool_calls") or ():
             total += estimate_tokens(json.dumps(call, default=str))
-    return total
+    return round(total * scale)
 
 
 def compact_tool_results(history: list[dict]) -> int:
@@ -119,7 +147,11 @@ def _render(messages: list[dict]) -> str:
 
 
 async def maybe_summarize(
-    history: list[dict], llm, budget_tokens: int, keep_last: int = 8
+    history: list[dict],
+    llm,
+    budget_tokens: int,
+    keep_last: int = 8,
+    scale: float = 1.0,
 ) -> bool:
     """Compress old turns into one system summary when over budget.
 
@@ -130,7 +162,7 @@ async def maybe_summarize(
     leaves history untouched — compaction is an optimization, never a
     correctness requirement.
     """
-    if history_tokens(history) <= budget_tokens:
+    if history_tokens(history, scale) <= budget_tokens:
         return False
     split = max(len(history) - keep_last, 1)
     while split > 1 and history[split].get("role") == "tool":

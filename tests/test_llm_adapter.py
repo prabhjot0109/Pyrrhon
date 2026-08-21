@@ -115,3 +115,103 @@ def test_create_llm_plumbs_the_model_section(monkeypatch):
     llm = create_llm(ModelSlot(provider="groq", model="m"), settings)
     assert llm.max_tokens == 512
     assert llm.temperature == 0.5
+
+
+# -- token usage: capture it, never require it -------------------------------
+
+
+def _sse(*chunks: dict) -> str:
+    """An OpenAI-style streamed body. [DONE] terminates it, as the SDK expects."""
+    body = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks)
+    return body + "data: [DONE]\n\n"
+
+
+def _delta(**fields) -> dict:
+    return {
+        "id": "chatcmpl-1", "object": "chat.completion.chunk", "created": 0,
+        "model": "test-model", **fields,
+    }
+
+
+@respx.mock
+async def test_chat_captures_token_usage():
+    payload = _completion({"role": "assistant", "content": "hi"})
+    payload["usage"] = {
+        "prompt_tokens": 120, "completion_tokens": 7, "total_tokens": 127
+    }
+    respx.post(f"{BASE}/chat/completions").mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+    llm = OpenAICompatLLM(model="test-model", api_key="k", base_url=BASE)
+    reply = await llm.chat([{"role": "user", "content": "hey"}])
+
+    assert reply.usage is not None
+    assert (reply.usage.prompt, reply.usage.completion, reply.usage.total) == (
+        120, 7, 127
+    )
+
+
+@respx.mock
+async def test_missing_usage_block_is_not_an_error():
+    """Local servers often omit usage entirely; that must not break a turn."""
+    respx.post(f"{BASE}/chat/completions").mock(
+        return_value=httpx.Response(
+            200, json=_completion({"role": "assistant", "content": "hi"})
+        )
+    )
+    llm = OpenAICompatLLM(model="test-model", api_key="k", base_url=BASE)
+    reply = await llm.chat([{"role": "user", "content": "hey"}])
+
+    assert reply.usage is None
+
+
+@respx.mock
+async def test_stream_asks_for_usage_and_carries_it_on_the_final_reply():
+    """Providers omit usage from a stream unless stream_options asks for it.
+
+    The usage-bearing chunk carries an empty `choices` list, which the delta
+    loop skips — so the capture has to happen before that guard.
+    """
+    route = respx.post(f"{BASE}/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=_sse(
+                _delta(choices=[{"index": 0, "delta": {"content": "hi "}}]),
+                _delta(choices=[{"index": 0, "delta": {"content": "there"}}]),
+                _delta(choices=[], usage={
+                    "prompt_tokens": 40, "completion_tokens": 2, "total_tokens": 42
+                }),
+            ),
+        )
+    )
+    llm = OpenAICompatLLM(model="test-model", api_key="k", base_url=BASE)
+    events = [
+        event async for event in llm.stream([{"role": "user", "content": "hey"}])
+    ]
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["stream_options"] == {"include_usage": True}
+
+    kind, reply = events[-1]
+    assert kind == "reply"
+    assert reply.text == "hi there"
+    assert reply.usage is not None and reply.usage.prompt == 40
+
+
+@respx.mock
+async def test_stream_without_a_usage_chunk_still_yields_a_reply():
+    respx.post(f"{BASE}/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=_sse(_delta(choices=[{"index": 0, "delta": {"content": "hi"}}])),
+        )
+    )
+    llm = OpenAICompatLLM(model="test-model", api_key="k", base_url=BASE)
+    events = [
+        event async for event in llm.stream([{"role": "user", "content": "hey"}])
+    ]
+
+    kind, reply = events[-1]
+    assert kind == "reply" and reply.text == "hi" and reply.usage is None
