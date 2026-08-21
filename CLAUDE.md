@@ -31,6 +31,8 @@ that must stay true.
 | `pyrrhon/channels.py` | `EVENT_HOOKS` plus the `EventRenderer` base. One dispatch table for every channel. |
 | `pyrrhon/repl.py` | Text channel (rich). |
 | `pyrrhon/tui/` | Textual channel: transcript, code viewer, status bar. |
+| `pyrrhon/core/providers/registry.py` | The LLM provider table. Data only; `BUILTIN_PROVIDERS` and the wizard's menu derive from it. |
+| `pyrrhon/core/providers/adapters.py` | The one place `core/` may import pipecat, and only `pipecat.adapters`. Seam only so far. |
 | `pyrrhon/voice/registry.py` | The STT/TTS provider table. Data only; imports no Pipecat. |
 | `pyrrhon/voice/factory.py` | Generic construction from that table: key checks, lazy import, clean degradation. |
 | `pyrrhon/voice/` | Pipecat pipeline: mic, RNNoise, Silero VAD, smart turn, STT, bridge, TTS, barge-in. |
@@ -87,11 +89,18 @@ prefix errors with `ERROR:`, and never raise or print.
 
 ### How to add a provider
 
-Add an entry to `BUILTIN_PROVIDERS` in `pyrrhon/config/settings.py` with its
-`base_url` and `api_key_env`, then mirror it in `LLM_CHOICES` in
-`pyrrhon/config/catalog.py`, which is what the wizard and `/settings` render.
-`tests/test_catalog.py` pins the two together, so skipping the second step
-fails rather than producing a provider nobody can select.
+LLM providers are a row in `LLM_PROVIDERS` in
+`pyrrhon/core/providers/registry.py` — no code, and no catalog edit either,
+since `BUILTIN_PROVIDERS` and `llm_choices()` are both derived from that table.
+Record no default model: model ids rot faster than anything else here, so the
+user names the model (the wizard insists on one) and the provider supplies
+nothing. Two fields carry decisions rather than facts. `base_url = None` means
+"the openai SDK's default", i.e. api.openai.com, and is correct for exactly one
+row — a test pins that set to `{openai}`, because any other provider left there
+would post *its* key to OpenAI. `vision` gates only the automatic fallback in
+`Settings.vision_slot()`, never an explicit `[vision]`, which is why the local
+servers are marked `False`: they relay images fine, but whether the loaded
+model can see is unknowable from here.
 
 Voice providers are a row in `VOICE_PROVIDERS` in `pyrrhon/voice/registry.py`
 — no code, and no catalog edit either, since `stt_choices()`/`tts_choices()` are
@@ -199,8 +208,28 @@ loop is undeniable.
 
 ## Current state
 
-Everything through M15a is implemented and tested. The parts worth knowing about
-before you change them:
+Everything through M15b is implemented and tested, bar the one piece named
+under "Planned next". The parts worth knowing about before you change them:
+
+**LLM lane and vision (M15b).** LLM providers are rows in
+`core/providers/registry.py`; `BUILTIN_PROVIDERS` and the wizard's catalog are
+both derived from it, and no model ids are hardcoded anywhere. Token usage is
+captured from every response — `stream_options` asks for the usage chunk, which
+arrives with an empty `choices` list — and used to *calibrate* the `len//4`
+estimate rather than replace it: `prompt_tokens` describes the request that was
+sent, so substituting it would under-count everything appended since and go
+stale high after compaction, while the ratio it implies (`context.token_scale`,
+clamped to `[0.5, 2.0]`) stays right in both directions. `read_image` lets the
+agent read diagrams and screenshots: it makes its own vision call via the
+`[vision]` slot (falling back to `fast` when that provider can see) and returns
+prose, so `Tool.run() -> str` and the agent loop are unchanged. `[vision]` is a
+model slot, so it sits in `CONDITIONAL_PATHS` beside `fast`/`deep` — a repo may
+suggest a builtin, never aim it at a provider it declared. An image has no
+lines, so the evidence ledger records the path only, and deliberately does not
+mine read_image's output: a `path:line` inside a vision model's prose was never
+displayed to anyone. `core/providers/adapters.py` is the only place
+`pyrrhon/core/` may import pipecat, and only `pipecat.adapters`; it is a seam
+whose `chat`/`stream` still raise, and `create_llm` never returns one.
 
 **Voice integration (M15a).** The STT/TTS ladder is gone: providers are rows in
 `voice/registry.py` and built generically by `voice/factory.py`. Smart turn
@@ -260,11 +289,15 @@ later; it is M16 work, not a licence to weaken the gate now.
 
 **Planned next.** Spec:
 `docs/superpowers/specs/2026-08-19-pyrrhon-m15-pipecat-integration-design.md`.
-M15a is done on branch `m15`. What remains:
+M15a and M15b are both done on branch `m15`. What remains:
 
-1. **M15b — LLM lane and vision** (`plans/2026-08-19-pyrrhon-m15b-llm-lane-and-vision.md`,
-   branch `m15b-llm-lane`). LLM provider table, token-usage capture, the
-   `read_image` tool, and the Pipecat-adapter seam.
+1. **M15b — LLM lane and vision** — done on `m15` (tasks 1-8). What is
+   deliberately NOT done is the native-provider work behind the adapter seam:
+   translating Pyrrhon's `list[dict]` history into Pipecat's `LLMContext` needs
+   designing against the real adapter, and the plan's own check-in point parks
+   it. Until then `AdapterLLM.chat`/`stream` raise and Anthropic and Gemini are
+   reached through their OpenAI-compatible endpoints, which is why the
+   anthropic row's note says prompt caching is unavailable there.
 
 Then **M16 — the harness**: agent loop, aggressive compaction, long sessions,
 large-codebase tool strategy, system prompt. That is the moat and it gets its
