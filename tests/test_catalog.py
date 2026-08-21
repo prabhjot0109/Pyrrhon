@@ -1,12 +1,17 @@
 """The catalog is the wizard's menu — it must stay in sync with the registries."""
 
-from pyrrhon.config.catalog import LLM_CHOICES, availability, stt_choices, tts_choices
+from pyrrhon.config.catalog import availability, llm_choices, stt_choices, tts_choices
 from pyrrhon.config.settings import BUILTIN_PROVIDERS
 from pyrrhon.voice.registry import find, stt_providers, tts_providers
 
 
 def test_every_llm_choice_is_a_builtin_provider():
-    assert {c.id for c in LLM_CHOICES} == set(BUILTIN_PROVIDERS)
+    assert {c.id for c in llm_choices()} == set(BUILTIN_PROVIDERS)
+
+
+def test_no_llm_choice_pins_a_model():
+    """Both views come off one table, and that table records no model id."""
+    assert all(c.default_model is None for c in llm_choices())
 
 
 def test_voice_choices_are_derived_from_the_registry():
@@ -15,7 +20,7 @@ def test_voice_choices_are_derived_from_the_registry():
 
 
 def test_keyless_choices_are_marked_keyless():
-    keyless = {c.id for c in LLM_CHOICES if c.key_env is None}
+    keyless = {c.id for c in llm_choices() if c.key_env is None}
     assert keyless == {"ollama", "lmstudio"}
     assert {c.id for c in stt_choices() if c.key_env is None} == {
         "whisper-local",
@@ -25,7 +30,7 @@ def test_keyless_choices_are_marked_keyless():
 
 
 def test_every_choice_has_a_label_and_note():
-    for choice in (*LLM_CHOICES, *stt_choices(), *tts_choices()):
+    for choice in (*llm_choices(), *stt_choices(), *tts_choices()):
         assert choice.label
         assert choice.note
 

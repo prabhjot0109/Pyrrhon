@@ -1,10 +1,14 @@
 """Every provider a user can pick, as data — the wizard and /settings render this.
 
-Sync rule (pinned by tests/test_catalog.py): LLM ids mirror BUILTIN_PROVIDERS.
-The voice menus are no longer hand-maintained at all — stt_choices() and
-tts_choices() are DERIVED from pyrrhon/voice/registry.py, so a provider cannot
-be offered here and missing there. For TTS choices, default_model carries the
-default VOICE, since a voice is the thing users actually pick.
+Nothing here is hand-maintained. llm_choices() is derived from
+pyrrhon/core/providers/registry.py, stt_choices()/tts_choices() from
+pyrrhon/voice/registry.py, and BUILTIN_PROVIDERS from the same LLM table — so a
+provider cannot be offered in one view and missing from another.
+
+default_model means different things per kind, which is why it is a field
+rather than a rule: for TTS it carries the default VOICE (the thing users
+actually pick), for STT a model id where the provider has a sensible one, and
+for LLMs it is always None — see llm_choices().
 
 availability() is the honesty rule: Pyrrhon may offer a provider it cannot
 currently run, but it may never imply that it can.
@@ -24,31 +28,35 @@ class ProviderChoice:
     id: str
     label: str
     key_env: str | None          # None: keyless (local server / on-device model)
-    default_model: str | None    # LLM/STT: model id; TTS: default voice
+    default_model: str | None    # STT: model id; TTS: default voice; LLM: None
     note: str = ""
 
 
-LLM_CHOICES: tuple[ProviderChoice, ...] = (
-    ProviderChoice("groq", "Groq", "GROQ_API_KEY", "llama-3.3-70b-versatile",
-                   "fast open-weights inference; generous free tier"),
-    ProviderChoice("openai", "OpenAI", "OPENAI_API_KEY", "gpt-4o-mini",
-                   "GPT models"),
-    ProviderChoice("gemini", "Google Gemini", "GEMINI_API_KEY", "gemini-2.5-flash",
-                   "gemini-2.5-pro for the deep slot"),
-    ProviderChoice("deepseek", "DeepSeek", "DEEPSEEK_API_KEY", "deepseek-chat",
-                   "deepseek-reasoner for deep reasoning"),
-    ProviderChoice("cerebras", "Cerebras", "CEREBRAS_API_KEY", "llama-3.3-70b",
-                   "fastest tokens/sec around"),
-    ProviderChoice("openrouter", "OpenRouter", "OPENROUTER_API_KEY",
-                   "deepseek/deepseek-chat", "one key, many models"),
-    ProviderChoice("huggingface", "Hugging Face", "HF_TOKEN",
-                   "meta-llama/Llama-3.3-70B-Instruct",
-                   "HF Inference Providers router"),
-    ProviderChoice("ollama", "Ollama (local)", None, "llama3.2",
-                   "runs on your machine — `ollama pull <model>` first"),
-    ProviderChoice("lmstudio", "LM Studio (local)", None, "local-model",
-                   "uses whatever model LM Studio has loaded"),
-)
+def llm_choices() -> tuple[ProviderChoice, ...]:
+    """The LLM menu, DERIVED from the provider table.
+
+    default_model is deliberately None for every row: unlike a TTS voice,
+    a chat model id has no defensible default here — the previous hand-written
+    tuple still offered gpt-4o-mini and llama-3.3-70b-versatile in 2026. The
+    wizard therefore requires the user to name a model, which is also what
+    ModelSlot demands (`model: str`, no default).
+
+    Imported inside the function for the same reason the voice table is: this
+    keeps config/ importable without paying for anything it does not need.
+    """
+    from pyrrhon.core.providers.registry import LLM_PROVIDERS
+
+    return tuple(
+        ProviderChoice(
+            id=p.id,
+            label=p.label,
+            key_env=p.api_key_env or None,
+            default_model=None,
+            note=p.note,
+        )
+        for p in LLM_PROVIDERS
+    )
+
 
 def _providers(kind: str):
     """The voice table, imported INSIDE the function by design.

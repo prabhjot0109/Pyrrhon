@@ -20,8 +20,8 @@ import tomli_w
 from rich.console import Console
 
 from pyrrhon.config.catalog import (
-    LLM_CHOICES,
     ProviderChoice,
+    llm_choices,
     stt_choices,
     tts_choices,
 )
@@ -67,10 +67,27 @@ def _choose(console, ask, title: str, choices: tuple[ProviderChoice, ...],
         console.print("[yellow]Not an option — try again.[/yellow]")
 
 
-def _ask_model(ask, choice: ProviderChoice, what: str) -> str | None:
+def _ask_model(console, ask, choice: ProviderChoice, what: str) -> str:
+    """Ask for a model id, and insist on one.
+
+    The LLM catalog carries no default any more (catalog.llm_choices), and
+    ModelSlot.model is a required str — so an empty answer here would write
+    `model = None` into config.toml, which tomli_w refuses and Settings could
+    not validate anyway. Looping is the honest response: naming the model is
+    the one thing Pyrrhon genuinely cannot guess.
+    """
     default = choice.default_model
-    raw = ask(f"> {what} (Enter = {default or 'provider default'}): ").strip()
-    return raw or default
+    while True:
+        hint = f"Enter = {default}" if default else "required"
+        raw = ask(f"> {what} ({hint}): ").strip()
+        if raw:
+            return raw
+        if default:
+            return default
+        console.print(
+            f"[yellow]{choice.label} has no default model — name one, e.g. from "
+            "the provider's model list.[/yellow]"
+        )
 
 
 def _collect_key(console, secret, choice: ProviderChoice,
@@ -101,9 +118,9 @@ def run_wizard(home: Path | None = None, console: Console | None = None,
 
     def _llm_section() -> None:
         choice = _choose(console, ask, "Which model provider should Pyrrhon think with?",
-                         LLM_CHOICES, stored, allow_back=False)
+                         llm_choices(), stored, allow_back=False)
         state["llm"] = choice
-        state["llm_model"] = _ask_model(ask, choice, "model id")
+        state["llm_model"] = _ask_model(console, ask, choice, "model id")
         _collect_key(console, secret, choice, state["keys"], stored)
 
     def _voice_section() -> None:

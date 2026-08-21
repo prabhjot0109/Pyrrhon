@@ -12,8 +12,8 @@ import os
 
 from pyrrhon.commands.registry import CommandContext, command
 from pyrrhon.config.catalog import (
-    LLM_CHOICES,
     availability,
+    llm_choices,
     stt_choices,
     tts_choices,
 )
@@ -23,7 +23,7 @@ from pyrrhon.core.providers.llm import MissingAPIKeyError, create_llm
 from pyrrhon.voice.registry import find
 
 _KEY_ENVS = sorted(
-    {c.key_env for c in (*LLM_CHOICES, *stt_choices(), *tts_choices()) if c.key_env}
+    {c.key_env for c in (*llm_choices(), *stt_choices(), *tts_choices()) if c.key_env}
 )
 
 

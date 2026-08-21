@@ -2,7 +2,7 @@
 
 import tomllib
 
-from pyrrhon.config.catalog import stt_choices, tts_choices
+from pyrrhon.config.catalog import llm_choices, stt_choices, tts_choices
 from pyrrhon.config.credentials import read_credentials
 from pyrrhon.config.wizard import needs_setup, run_wizard
 
@@ -15,9 +15,9 @@ def scripted(*answers):
 def pick(choices, provider_id: str) -> str:
     """The menu answer that selects `provider_id`.
 
-    The wizard picks by number and the voice menus are DERIVED from the
-    provider table now, so a hard-coded index would break every time a row is
-    added — which is a property of the table, not a regression.
+    The wizard picks by number and every menu is DERIVED from a provider
+    table now, so a hard-coded index would break every time a row is added —
+    which is a property of the table, not a regression.
     """
     return str(next(i for i, c in enumerate(choices, 1) if c.id == provider_id))
 
@@ -35,10 +35,10 @@ def test_full_run_writes_config_and_credentials(tmp_path):
     run_wizard(
         home=tmp_path,
         console=console,
-        # LLM: pick 3 (gemini), accept default model, then voice: yes,
-        # STT: gemini, TTS: gemini, confirm summary.
+        # LLM: gemini + an explicit model id (there is no default), then
+        # voice: yes, STT: gemini, TTS: gemini, confirm summary.
         input_fn=scripted(
-            "3", "", "y",
+            pick(llm_choices(), "gemini"), "gemini-2.5-flash", "y",
             pick(stt_choices(), "gemini"),
             pick(tts_choices(), "gemini"),
             "y",
@@ -58,11 +58,12 @@ def test_skipping_voice_leaves_voice_section_alone(tmp_path):
     run_wizard(
         home=tmp_path,
         console=QuietConsole(),
-        input_fn=scripted("1", "", "n", "y"),   # groq, default model, no voice, confirm
+        # groq, model id, no voice, confirm
+        input_fn=scripted(pick(llm_choices(), "groq"), "moonshotai/kimi-k2", "n", "y"),
         getpass_fn=scripted("gsk-abc"),
     )
     config = tomllib.loads((tmp_path / ".pyrrhon" / "config.toml").read_text())
-    assert config["fast"]["provider"] == "groq"
+    assert config["fast"] == {"provider": "groq", "model": "moonshotai/kimi-k2"}
     assert "voice" not in config
 
 
@@ -75,7 +76,7 @@ def test_existing_sections_survive_a_rerun(tmp_path):
     run_wizard(
         home=tmp_path,
         console=QuietConsole(),
-        input_fn=scripted("1", "", "n", "y"),
+        input_fn=scripted(pick(llm_choices(), "groq"), "openai/gpt-oss-120b", "n", "y"),
         getpass_fn=scripted("gsk-abc"),
     )
     config = tomllib.loads((pyrrhon_dir / "config.toml").read_text())
@@ -87,10 +88,31 @@ def test_keyless_provider_asks_for_no_key(tmp_path):
     run_wizard(
         home=tmp_path,
         console=QuietConsole(),
-        input_fn=scripted("8", "", "n", "y"),   # ollama, default model, no voice, confirm
+        # ollama, model id, no voice, confirm
+        input_fn=scripted(pick(llm_choices(), "ollama"), "qwen3", "n", "y"),
         getpass_fn=scripted(),                  # would raise StopIteration if called
     )
     assert read_credentials(home=tmp_path) == {}
+
+
+def test_an_empty_llm_model_is_re_asked_rather_than_written(tmp_path):
+    """No catalog default means the user must name a model.
+
+    Accepting the empty answer would write `model = None`, which tomli_w
+    refuses and ModelSlot could not validate — so the wizard insists instead.
+    """
+    console = QuietConsole()
+    run_wizard(
+        home=tmp_path,
+        console=console,
+        input_fn=scripted(
+            pick(llm_choices(), "ollama"), "", "  ", "qwen3", "n", "y"
+        ),
+        getpass_fn=scripted(),
+    )
+    config = tomllib.loads((tmp_path / ".pyrrhon" / "config.toml").read_text())
+    assert config["fast"] == {"provider": "ollama", "model": "qwen3"}
+    assert sum("no default model" in line for line in console.lines) == 2
 
 
 def test_needs_setup(tmp_path, monkeypatch):

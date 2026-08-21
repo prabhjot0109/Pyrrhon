@@ -10,6 +10,7 @@ import tomli_w
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from pyrrhon.config.trust import Grant, TrustFile, digest_value, read_trust_file
+from pyrrhon.core.providers.registry import LLM_PROVIDERS
 
 
 class ModelSlot(BaseModel):
@@ -39,29 +40,14 @@ class MCPServerConfig(BaseModel):
         return self
 
 
+# Derived, not hand-listed: a provider cannot exist in the table and be missing
+# here. See pyrrhon/core/providers/registry.py — importing it is safe from
+# config/ because that module is pure stdlib data and imports nothing back.
 BUILTIN_PROVIDERS: dict[str, ProviderConfig] = {
-    "openai": ProviderConfig(base_url=None, api_key_env="OPENAI_API_KEY"),
-    "groq": ProviderConfig(
-        base_url="https://api.groq.com/openai/v1", api_key_env="GROQ_API_KEY"
-    ),
-    "openrouter": ProviderConfig(
-        base_url="https://openrouter.ai/api/v1", api_key_env="OPENROUTER_API_KEY"
-    ),
-    "cerebras": ProviderConfig(
-        base_url="https://api.cerebras.ai/v1", api_key_env="CEREBRAS_API_KEY"
-    ),
-    "gemini": ProviderConfig(
-        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-        api_key_env="GEMINI_API_KEY",
-    ),
-    "deepseek": ProviderConfig(
-        base_url="https://api.deepseek.com/v1", api_key_env="DEEPSEEK_API_KEY"
-    ),
-    "huggingface": ProviderConfig(
-        base_url="https://router.huggingface.co/v1", api_key_env="HF_TOKEN"
-    ),
-    "ollama": ProviderConfig(base_url="http://localhost:11434/v1", api_key_env=""),
-    "lmstudio": ProviderConfig(base_url="http://localhost:1234/v1", api_key_env=""),
+    provider.id: ProviderConfig(
+        base_url=provider.base_url, api_key_env=provider.api_key_env
+    )
+    for provider in LLM_PROVIDERS
 }
 
 
