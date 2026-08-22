@@ -7,12 +7,11 @@ reachable only from voice barge-in; the keyboard is simply its second caller.
 import asyncio
 from pathlib import Path
 
-from textual.widgets import Input
-
 from pyrrhon.bootstrap import build_agent
 from pyrrhon.core.providers.llm import LLMReply
 from pyrrhon.tui.app import PyrrhonApp
 from pyrrhon.tui.messages import WorkingRow
+from pyrrhon.tui.prompt import Prompt
 from tests.helpers import FakeLLM
 
 
@@ -34,7 +33,7 @@ def make_app(llm, repo_root: Path) -> PyrrhonApp:
 
 
 async def start_turn(app: PyrrhonApp, pilot, text: str) -> None:
-    app.query_one("#prompt", Input).value = text
+    app.query_one("#prompt", Prompt).value = text
     await pilot.press("enter")
     await pilot.pause()
 
@@ -54,7 +53,7 @@ async def test_esc_aborts_a_running_turn(sample_repo: Path):
     async with app.run_test(size=(120, 40)) as pilot:
         await start_turn(app, pilot, "take your time")
         await asyncio.wait_for(llm.started.wait(), timeout=5)
-        prompt = app.query_one("#prompt", Input)
+        prompt = app.query_one("#prompt", Prompt)
         assert prompt.disabled, "a turn is running"
 
         await pilot.press("escape")
@@ -87,7 +86,7 @@ async def test_esc_with_no_turn_running_clears_the_prompt(sample_repo: Path):
     """The key is never dead."""
     app = make_app(FakeLLM([]), sample_repo)
     async with app.run_test(size=(120, 40)) as pilot:
-        prompt = app.query_one("#prompt", Input)
+        prompt = app.query_one("#prompt", Prompt)
         prompt.value = "half-typed question"
         await pilot.press("escape")
         await pilot.pause()
@@ -126,4 +125,4 @@ async def test_no_working_row_survives_a_failed_turn(sample_repo: Path):
         await app.workers.wait_for_complete()
         await pilot.pause()
         assert not list(app.query(WorkingRow))
-        assert not app.query_one("#prompt", Input).disabled
+        assert not app.query_one("#prompt", Prompt).disabled

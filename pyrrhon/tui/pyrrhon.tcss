@@ -25,6 +25,9 @@ StatusBar {
 #prompt {
     border: tall $panel;
     background: $panel;
+    /* Grows with the text and stops; a prompt must never eat the transcript. */
+    height: auto;
+    max-height: 8;
 }
 
 #prompt:focus {

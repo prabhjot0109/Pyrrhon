@@ -89,9 +89,16 @@ async def dispatch(line: str, ctx: CommandContext) -> str | None:
     return result
 
 
+def all_commands() -> tuple[Command, ...]:
+    """Every registered command, by name. The one public read of the table.
+
+    Public because the TUI's command palette queries it at search time
+    rather than caching it: a plugin (M7) may register a command after
+    startup, and a second copy of the list is a second thing to drift.
+    """
+    return tuple(sorted(_COMMANDS.values(), key=lambda c: c.name))
+
+
 @command("help", "List available commands")
 def help_command(args: str, ctx: CommandContext) -> str:
-    return "\n".join(
-        f"/{cmd.name} — {cmd.help_text}"
-        for cmd in sorted(_COMMANDS.values(), key=lambda c: c.name)
-    )
+    return "\n".join(f"/{cmd.name} — {cmd.help_text}" for cmd in all_commands())

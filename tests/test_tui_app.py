@@ -1,12 +1,13 @@
 from pathlib import Path
 
 from textual.containers import VerticalScroll
-from textual.widgets import Input, Static
+from textual.widgets import Static
 
 from pyrrhon.bootstrap import build_agent
 from pyrrhon.core.events import Citation
 from pyrrhon.tui.app import PyrrhonApp
-from pyrrhon.tui.widgets import StatusBar
+from pyrrhon.tui.prompt import Prompt
+from pyrrhon.tui.status import StatusBar
 from tests.helpers import FakeLLM
 
 
@@ -26,8 +27,8 @@ async def test_layout_is_one_full_width_column(sample_repo: Path):
         # outer_size, not size: the content region is 118 because of the
         # one-column padding, and padding is not another pane.
         assert transcript.outer_size.width == 120
-        assert app.query_one("#prompt", Input).has_focus
-        assert "mode: understand" in app.query_one(StatusBar).status_text
+        assert app.query_one("#prompt", Prompt).has_focus
+        assert "understand" in app.query_one(StatusBar).status_text
 
 
 
@@ -51,7 +52,7 @@ async def test_ctrl_o_without_a_citation_does_not_kill_the_app(sample_repo: Path
         await pilot.press("ctrl+o")
         await pilot.pause()
         assert called == []                       # nothing to open, nothing run
-        assert app.query_one("#prompt", Input) is not None   # still alive
+        assert app.query_one("#prompt", Prompt) is not None   # still alive
 
 
 async def test_ctrl_o_surfaces_the_editors_complaint(sample_repo: Path):
@@ -62,7 +63,7 @@ async def test_ctrl_o_surfaces_the_editors_complaint(sample_repo: Path):
         app.record_citation(Citation(file="utils/helpers.py", line=1))
         await pilot.press("ctrl+o")
         await pilot.pause()
-        assert app.query_one("#prompt", Input) is not None
+        assert app.query_one("#prompt", Prompt) is not None
 
 
 # -- Phase 1: chrome -------------------------------------------------------
@@ -114,7 +115,7 @@ async def test_ctrl_l_clears_the_screen_not_the_session(sample_repo: Path):
         # what was there is gone.
         assert "something to wipe" not in _transcript_text(app)
         assert app.history == []          # nothing to lose here, but explicit
-        assert app.query_one("#prompt", Input) is not None   # session survives
+        assert app.query_one("#prompt", Prompt) is not None   # session survives
 
 
 async def test_the_splash_fits_a_narrow_terminal(sample_repo: Path):
@@ -149,7 +150,52 @@ async def test_the_first_turn_takes_the_screen_back(sample_repo: Path):
     app = make_app(sample_repo)
     async with app.run_test(size=(120, 40)) as pilot:
         assert app.query("#splash")
-        app.query_one("#prompt", Input).value = "/help"
+        app.query_one("#prompt", Prompt).value = "/help"
         await pilot.press("enter")
         await pilot.pause()
         assert not app.query("#splash")
+
+
+# -- Phase 4: the multiline prompt -----------------------------------------
+
+
+async def test_a_two_line_paste_submits_as_one_message(sample_repo: Path):
+    """Textual's Input is single-line by definition; a pasted snippet was
+    impossible to send."""
+    app = make_app(sample_repo)
+    async with app.run_test(size=(120, 40)) as pilot:
+        prompt = app.query_one("#prompt", Prompt)
+        prompt.text = "first line\nsecond line"
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        text = _transcript_text(app)
+        assert "first line" in text and "second line" in text
+        assert prompt.text == "", "the prompt clears on submit"
+
+
+async def test_shift_enter_inserts_a_newline_instead_of_submitting(sample_repo: Path):
+    app = make_app(sample_repo)
+    async with app.run_test(size=(120, 40)) as pilot:
+        prompt = app.query_one("#prompt", Prompt)
+        prompt.focus()
+        await pilot.press("a")
+        await pilot.press("ctrl+j")     # the reachable alias for shift+enter
+        await pilot.press("b")
+        await pilot.pause()
+        assert prompt.text == "a\nb"
+        assert app.history == [], "nothing was submitted"
+
+
+async def test_a_pasted_key_is_still_masked_in_the_echo(sample_repo: Path):
+    """The transcript persists, so the credential must never reach it."""
+    app = make_app(sample_repo)
+    async with app.run_test(size=(120, 40)) as pilot:
+        prompt = app.query_one("#prompt", Prompt)
+        prompt.text = "/settings key GROQ_API_KEY super-secret-value"
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        text = _transcript_text(app)
+        assert "super-secret-value" not in text
+        assert "****" in text
