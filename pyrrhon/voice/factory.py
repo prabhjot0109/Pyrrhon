@@ -2,7 +2,9 @@
 
 Order matters and is load-bearing: the key check runs BEFORE the pipecat
 import, so a missing key degrades to text mode with an actionable message
-instead of dragging in the audio stack first (M3 error policy).
+instead of dragging in the audio stack first (M3 error policy). The class is
+loaded after that check and before the settings delta is built, because the
+delta's type is the service's own `Cls.Settings`.
 
 Everything here is provider-agnostic. The one exception is Piper's HTTP mode,
 which is selected by [voice] tts_url and needs an aiohttp session whose
@@ -72,6 +74,31 @@ def _load(provider: VoiceProvider):
         ) from exc
 
 
+def _settings(cls, provider: VoiceProvider, model: str | None, voice: str | None):
+    """The `settings=` delta for `cls`, or None when nothing was configured.
+
+    Pipecat 1.7.0 deprecated the per-service `model=`/`voice_id=` kwargs in
+    favour of `settings=Cls.Settings(...)`, and in doing so made the field
+    names uniform: `model` everywhere, `voice` on every TTS service. That is
+    what let the table drop its `model_kwarg`/`voice_kwarg` columns — the
+    disagreement they encoded no longer exists upstream.
+
+    A Settings object passed to __init__ is a DELTA merged over the service's
+    own store (see pipecat's piper/tts.py), so leaving a field out still
+    inherits the provider's default. The "only send what was configured" rule
+    survives the migration unchanged; it is now expressed as a sparse delta
+    rather than an absent kwarg.
+    """
+    delta: dict = {}
+    if model:
+        delta["model"] = model
+    if provider.kind == "tts" and voice:
+        delta["voice"] = voice
+    if not delta:
+        return None
+    return cls.Settings(**delta)
+
+
 def _build(provider: VoiceProvider, model: str | None, voice: str | None):
     """Construct `provider`, sending only what was configured."""
     if provider.requires_voice and not voice:
@@ -93,19 +120,16 @@ def _build(provider: VoiceProvider, model: str | None, voice: str | None):
     download_dir = kwargs.get("download_dir")
     if download_dir is not None:
         Path(download_dir).mkdir(parents=True, exist_ok=True)
+    # Still before _load: a missing key must degrade to text mode without ever
+    # dragging in the audio stack (M3 error policy).
     key = _api_key(provider)
     if key is not None:
         kwargs["api_key"] = key
-    # Only send what was configured. Omitting the kwarg entirely inherits the
-    # provider's own default, which is the whole point: a default we do not
-    # set cannot go stale.
-    if model:
-        kwargs[provider.model_kwarg] = model
-    chosen_voice = voice or provider.default_voice
-    if chosen_voice and provider.voice_kwarg:
-        kwargs[provider.voice_kwarg] = chosen_voice
 
     cls = _load(provider)
+    settings = _settings(cls, provider, model, voice or provider.default_voice)
+    if settings is not None:
+        kwargs["settings"] = settings
     return cls(**kwargs)
 
 

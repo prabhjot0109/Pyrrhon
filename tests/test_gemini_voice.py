@@ -49,7 +49,9 @@ async def test_transcribe_sends_wav_and_returns_text(fake_genai):
     response = types.SimpleNamespace(text="  hello world  ")
     fake_genai.aio.models.generate_content = AsyncMock(return_value=response)
 
-    service = GeminiSTTService(api_key="k", model="gemini-2.5-flash")
+    service = GeminiSTTService(
+        api_key="k", settings=GeminiSTTService.Settings(model="gemini-2.5-flash")
+    )
     result = await service._transcribe(b"RIFF-fake-wav")
 
     assert result.text == "hello world"

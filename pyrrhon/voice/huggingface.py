@@ -21,8 +21,11 @@ import soundfile
 from huggingface_hub import AsyncInferenceClient
 from openai.types.audio import Transcription
 from pipecat.frames.frames import ErrorFrame, Frame
+from pipecat.services.settings import TTSSettings, is_given
 from pipecat.services.tts_service import TTSService
 from pipecat.services.whisper.base_stt import BaseWhisperSTTService
+
+_DEFAULT_STT_MODEL = "openai/whisper-large-v3"
 
 
 class HuggingFaceSTTService(BaseWhisperSTTService):
@@ -33,8 +36,10 @@ class HuggingFaceSTTService(BaseWhisperSTTService):
     never used (_transcribe is fully overridden).
     """
 
-    def __init__(self, *, api_key: str, model: str = "openai/whisper-large-v3", **kwargs):
-        super().__init__(model=model, api_key="unused", **kwargs)
+    def __init__(self, *, api_key: str, settings=None, **kwargs):
+        model = settings.model if settings and is_given(settings.model) else None
+        model = model or _DEFAULT_STT_MODEL
+        super().__init__(settings=self.Settings(model=model), api_key="unused", **kwargs)
         self._hf = AsyncInferenceClient(token=api_key)
         self._hf_model = model
 
@@ -57,10 +62,31 @@ class HuggingFaceTTSService(TTSService):
     slower of two paths for the one model they were most likely to get.
     """
 
-    def __init__(self, *, api_key: str, model: str, **kwargs):
-        super().__init__(push_start_frame=True, push_stop_frames=True, **kwargs)
+    # Pipecat's TTSService declares no Settings class of its own; naming the
+    # base one here is what puts this shim on the same construction path as
+    # every pipecat row, so voice/factory.py needs no special case for it.
+    Settings = TTSSettings
+
+    def __init__(self, *, api_key: str, settings=None, **kwargs):
+        # A store, not a delta: the model is required (requires_model on the
+        # table), and voice/language are None because HF TTS picks by model id
+        # rather than by voice. validate_complete() rejects NOT_GIVEN here.
+        store = self.Settings(model=None, voice=None, language=None)
+        if settings is not None:
+            store.apply_update(settings)
+        if not store.model:
+            # requires_model on the table already stops this at the factory.
+            # Repeated here because the check has to survive direct
+            # construction: without a model id every synthesis call fails with
+            # an opaque HF error instead of one actionable line.
+            raise ValueError(
+                "Hugging Face TTS needs [voice] tts_model set to an HF model id."
+            )
+        super().__init__(
+            push_start_frame=True, push_stop_frames=True, settings=store, **kwargs
+        )
         self._hf = AsyncInferenceClient(token=api_key)
-        self._model = model
+        self._model = store.model
 
     async def _synthesize(self, text: str) -> AsyncGenerator[bytes, None]:
         """One WAV chunk per call — split out so tests can drive it directly."""

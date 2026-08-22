@@ -29,7 +29,10 @@ async def test_transcribe_returns_stripped_text(fake_hf):
     fake_hf.automatic_speech_recognition = AsyncMock(
         return_value=types.SimpleNamespace(text="  hi there  ")
     )
-    service = HuggingFaceSTTService(api_key="k", model="openai/whisper-large-v3")
+    service = HuggingFaceSTTService(
+        api_key="k",
+        settings=HuggingFaceSTTService.Settings(model="openai/whisper-large-v3"),
+    )
     result = await service._transcribe(b"wav-bytes")
 
     assert result.text == "hi there"
@@ -67,5 +70,6 @@ async def test_tts_calls_model_and_yields_wav(fake_hf, monkeypatch):
 def test_hf_tts_requires_an_explicit_model(fake_hf):
     from pyrrhon.voice.huggingface import HuggingFaceTTSService
 
-    with pytest.raises(TypeError):
-        HuggingFaceTTSService(api_key="k")  # model is now required
+    with pytest.raises(ValueError) as exc:
+        HuggingFaceTTSService(api_key="k")  # no model, and there is no default
+    assert "tts_model" in str(exc.value)

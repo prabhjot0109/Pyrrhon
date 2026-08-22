@@ -13,6 +13,13 @@ and `pyrrhon/voice/gemini.py`).
 No default MODEL is recorded here. Where pipecat or the provider supplies a
 default, we pass nothing and inherit it — a default we do not set cannot go
 stale. `default_voice` appears only where no upstream default exists.
+
+There are no per-row kwarg-name columns, and there must not be again. Model and
+voice reach a service through `settings=Cls.Settings(model=…, voice=…)`, whose
+field names pipecat has made uniform across all 20 rows — the disagreement the
+old `model_kwarg`/`voice_kwarg` columns existed to paper over is gone upstream.
+`tests/test_voice_registry.py::test_tier1_every_provider_declares_a_settings_class`
+is what keeps that true.
 """
 
 from __future__ import annotations
@@ -34,8 +41,6 @@ class VoiceProvider:
     key_env: str | None = None        # None: keyless
     extra: str | None = None          # the pipecat extra that supplies it
     default_voice: str | None = None  # only where upstream has none
-    model_kwarg: str = "model"        # pipecat disagrees with itself here
-    voice_kwarg: str | None = None
     requires_voice: bool = False
     requires_model: bool = False
     # compare=False keeps the row hashable: a frozen dataclass derives __hash__
@@ -43,6 +48,12 @@ class VoiceProvider:
     # nothing — (kind, id) is unique by test, so no two rows differ only here.
     extra_kwargs: dict = field(default_factory=dict, compare=False)
     note: str = ""
+    # True only where a tier 3 live smoke has actually passed, with the date in
+    # the M15a plan's Implementation Record. It is NOT "we believe this works":
+    # catalog.availability() renders anything else as `ready, unverified`, which
+    # is the spec's answer to curating more rows than we hold keys for. Never
+    # set it from a table review — set it from a run.
+    verified: bool = False
 
 
 VOICE_PROVIDERS: tuple[VoiceProvider, ...] = (
@@ -52,6 +63,7 @@ VOICE_PROVIDERS: tuple[VoiceProvider, ...] = (
         module="pipecat.services.groq.stt", cls="GroqSTTService",
         key_env="GROQ_API_KEY", extra="groq",
         note="fast hosted Whisper; no extra key if you already use Groq",
+        verified=True,  # tier 3, 2026-08-22
     ),
     VoiceProvider(
         id="openai", kind="stt", label="OpenAI",
@@ -112,75 +124,69 @@ VOICE_PROVIDERS: tuple[VoiceProvider, ...] = (
         id="piper", kind="tts", label="Piper (local)",
         module="pipecat.services.piper.tts", cls="PiperTTSService",
         key_env=None, extra="piper", default_voice="en_US-lessac-medium",
-        voice_kwarg="voice_id",
         # Piper downloads its voice model on first use; give it a stable home
         # instead of the process working directory. A Path, NOT a str: piper's
         # download_voices does `download_dir / name` internally, and a str
         # raises TypeError there. Tier 3 is what caught this.
         extra_kwargs={"download_dir": Path.home() / ".pyrrhon" / "piper"},
         note="free, on-device, no key and no server",
+        verified=True,  # tier 3, 2026-08-22
     ),
     VoiceProvider(
         id="openai", kind="tts", label="OpenAI",
         module="pipecat.services.openai.tts", cls="OpenAITTSService",
         key_env="OPENAI_API_KEY", extra="openai", default_voice="nova",
-        voice_kwarg="voice",
         note="no extra key if you already use OpenAI",
     ),
     VoiceProvider(
         id="groq", kind="tts", label="Groq",
         module="pipecat.services.groq.tts", cls="GroqTTSService",
-        key_env="GROQ_API_KEY", extra="groq",
-        model_kwarg="model_name", voice_kwarg="voice_id", requires_voice=True,
+        key_env="GROQ_API_KEY", extra="groq", requires_voice=True,
         note="hosted TTS on your Groq key; needs an explicit voice id",
+        verified=True,  # tier 3, 2026-08-22
     ),
     VoiceProvider(
         id="cartesia", kind="tts", label="Cartesia",
         module="pipecat.services.cartesia.tts", cls="CartesiaTTSService",
-        key_env="CARTESIA_API_KEY", extra="cartesia",
-        voice_kwarg="voice_id", requires_voice=True,
+        key_env="CARTESIA_API_KEY", extra="cartesia", requires_voice=True,
         note="lowest latency; needs a voice id from your account",
     ),
     VoiceProvider(
         id="elevenlabs", kind="tts", label="ElevenLabs",
         module="pipecat.services.elevenlabs.tts", cls="ElevenLabsTTSService",
-        key_env="ELEVENLABS_API_KEY", extra="elevenlabs",
-        voice_kwarg="voice_id", requires_voice=True,
+        key_env="ELEVENLABS_API_KEY", extra="elevenlabs", requires_voice=True,
         note="needs a voice id from your account",
     ),
     VoiceProvider(
         id="deepgram", kind="tts", label="Deepgram Aura",
         module="pipecat.services.deepgram.tts", cls="DeepgramTTSService",
         key_env="DEEPGRAM_API_KEY", extra="deepgram",
-        voice_kwarg="voice",
         note="low-latency hosted voices",
+        verified=True,  # tier 3, 2026-08-22
     ),
     VoiceProvider(
         id="rime", kind="tts", label="Rime",
         module="pipecat.services.rime.tts", cls="RimeTTSService",
-        key_env="RIME_API_KEY", extra="rime",
-        voice_kwarg="voice_id", requires_voice=True,
+        key_env="RIME_API_KEY", extra="rime", requires_voice=True,
         note="low-latency conversational voices",
     ),
     VoiceProvider(
         id="inworld", kind="tts", label="Inworld",
         module="pipecat.services.inworld.tts", cls="InworldTTSService",
-        key_env="INWORLD_API_KEY", extra="inworld",
-        voice_kwarg="voice_id", requires_voice=True,
+        key_env="INWORLD_API_KEY", extra="inworld", requires_voice=True,
         note="expressive hosted voices",
     ),
     VoiceProvider(
         id="kokoro", kind="tts", label="Kokoro (local)",
         module="pipecat.services.kokoro.tts", cls="KokoroTTSService",
         key_env=None, extra="kokoro",
-        voice_kwarg="voice_id",
         note="free, on-device, ONNX",
     ),
     VoiceProvider(
         id="gemini", kind="tts", label="Google Gemini",
         module="pipecat.services.google.tts", cls="GeminiTTSService",
         key_env="GEMINI_API_KEY", extra="google", default_voice="Kore",
-        voice_kwarg="voice_id", extra_kwargs={"use_genai": True},
+        extra_kwargs={"use_genai": True},
         note="Gemini TTS on a plain API key",
     ),
     VoiceProvider(

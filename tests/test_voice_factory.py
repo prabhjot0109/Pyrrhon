@@ -1,4 +1,4 @@
-"""The factory: key checks before imports, correct kwarg names, clean degradation."""
+"""The factory: key checks before imports, the settings delta, clean degradation."""
 
 import pathlib
 import sys
@@ -17,6 +17,11 @@ from pyrrhon.voice.factory import (
 
 def _install_fake(monkeypatch, module_name, class_name, captured):
     class FakeService:
+        # Every pipecat service declares one; the factory reads it off the
+        # class to type its delta, so a stand-in without it is not a stand-in.
+        class Settings(types.SimpleNamespace):
+            pass
+
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
@@ -38,30 +43,45 @@ def test_missing_key_fails_before_importing_pipecat(monkeypatch):
     assert "CARTESIA_API_KEY" in str(exc.value)
 
 
-def test_groq_tts_uses_model_name_and_voice_id(monkeypatch):
+def test_model_and_voice_travel_in_one_settings_delta(monkeypatch):
+    """Not model_name= and voice_id=. Pipecat canonicalized both field names in
+    1.7.0, which is why the table no longer carries a kwarg column per row."""
     monkeypatch.setenv("GROQ_API_KEY", "k")
     captured: dict = {}
     _install_fake(monkeypatch, "pipecat.services.groq.tts", "GroqTTSService", captured)
     create_tts(VoiceSettings(tts_provider="groq", tts_voice="autumn", tts_model="m1"))
-    assert captured == {"api_key": "k", "model_name": "m1", "voice_id": "autumn"}
+    assert captured["api_key"] == "k"
+    assert vars(captured["settings"]) == {"model": "m1", "voice": "autumn"}
 
 
-def test_openai_tts_uses_model_and_voice(monkeypatch):
+def test_a_default_voice_reaches_the_delta_when_the_user_set_none(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "k")
     captured: dict = {}
     _install_fake(monkeypatch, "pipecat.services.openai.tts", "OpenAITTSService", captured)
     create_tts(VoiceSettings(tts_provider="openai"))
-    assert captured == {"api_key": "k", "voice": "nova"}
+    assert vars(captured["settings"]) == {"voice": "nova"}
 
 
-def test_no_model_kwarg_is_sent_when_unset(monkeypatch):
-    """The inherit-the-provider's-default rule: we must send nothing, not None."""
+def test_stt_never_carries_a_voice_field(monkeypatch):
+    """STTSettings has no `voice`; sending one would be a TypeError at runtime."""
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+    captured: dict = {}
+    _install_fake(monkeypatch, "pipecat.services.groq.stt", "GroqSTTService", captured)
+    create_stt(VoiceSettings(stt_provider="groq", stt_model="whisper-large-v3"))
+    assert vars(captured["settings"]) == {"model": "whisper-large-v3"}
+
+
+def test_no_settings_kwarg_at_all_when_nothing_was_configured(monkeypatch):
+    """The inherit-the-provider's-default rule: send nothing, not an empty delta.
+
+    An empty Settings() would still be a delta object, and a provider that
+    reads `is_given` on its fields must see them untouched.
+    """
     monkeypatch.setenv("GROQ_API_KEY", "k")
     captured: dict = {}
     _install_fake(monkeypatch, "pipecat.services.groq.stt", "GroqSTTService", captured)
     create_stt(VoiceSettings(stt_provider="groq"))
     assert captured == {"api_key": "k"}
-    assert "model" not in captured
 
 
 def test_provider_requiring_a_voice_says_so(monkeypatch):
@@ -101,7 +121,7 @@ def test_piper_gets_a_stable_download_dir(monkeypatch):
     captured: dict = {}
     _install_fake(monkeypatch, "pipecat.services.piper.tts", "PiperTTSService", captured)
     create_tts(VoiceSettings(tts_provider="piper"))
-    assert captured["voice_id"] == "en_US-lessac-medium"
+    assert captured["settings"].voice == "en_US-lessac-medium"
     # A Path, not a str: piper does `download_dir / name` internally.
     assert isinstance(captured["download_dir"], pathlib.Path)
     assert captured["download_dir"].name == "piper"

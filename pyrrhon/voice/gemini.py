@@ -16,7 +16,10 @@ from __future__ import annotations
 from google import genai
 from google.genai import types as genai_types
 from openai.types.audio import Transcription
+from pipecat.services.settings import is_given
 from pipecat.services.whisper.base_stt import BaseWhisperSTTService
+
+_DEFAULT_MODEL = "gemini-2.5-flash"
 
 _TRANSCRIBE_PROMPT = (
     "Transcribe this audio verbatim. Reply with only the transcription text — "
@@ -32,8 +35,13 @@ class GeminiSTTService(BaseWhisperSTTService):
     never used (_transcribe is fully overridden).
     """
 
-    def __init__(self, *, api_key: str, model: str = "gemini-2.5-flash", **kwargs):
-        super().__init__(model=model, api_key="unused", **kwargs)
+    def __init__(self, *, api_key: str, settings=None, **kwargs):
+        # settings=, not model=: pipecat deprecated the model kwarg in 1.7.0
+        # and the factory now speaks only the Settings dialect, so every row
+        # on the table — pipecat's and ours — is constructed the same way.
+        model = settings.model if settings and is_given(settings.model) else None
+        model = model or _DEFAULT_MODEL
+        super().__init__(settings=self.Settings(model=model), api_key="unused", **kwargs)
         self._gemini = genai.Client(api_key=api_key)
         self._gemini_model = model
 

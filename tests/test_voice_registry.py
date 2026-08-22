@@ -75,6 +75,52 @@ def test_tier1_every_provider_class_exists():
     assert not failures, "providers whose class is missing:\n" + "\n".join(failures)
 
 
+def test_tier1_every_provider_declares_a_settings_class():
+    """The factory sends model and voice as `settings=Cls.Settings(...)`.
+
+    That is only safe because pipecat declares `Settings` on every service and
+    canonicalized the field names — which is what let the table drop its
+    `model_kwarg`/`voice_kwarg` columns. AST again, not import: the rows whose
+    extra is absent are exactly the ones that used to ship broken.
+    """
+    failures = []
+    for provider in (*VOICE_PROVIDERS, PIPER_HTTP):
+        if provider.module.startswith("pyrrhon."):
+            continue  # in-repo shims are checked by their own unit tests
+        ok, why = _class_declares_settings(provider.module, provider.cls)
+        if not ok:
+            failures.append(f"{provider.kind}/{provider.id}: {why}")
+    assert not failures, "rows whose class declares no Settings:\n" + "\n".join(
+        failures
+    )
+
+
+def _class_declares_settings(module: str, cls: str) -> tuple[bool, str]:
+    """True if module.cls assigns `Settings` in its own body.
+
+    Deliberately does NOT follow base classes. Every concrete service in the
+    table declares its own `Settings` today, so requiring it here is accurate
+    rather than lenient — and if a future pipecat moves the attribute up to a
+    shared base, this test fails and a human decides, which is the drift signal
+    the tier exists for. A helper that walked bases would have to give up at
+    the first cross-module one and pass vacuously, which is precisely the
+    shape of test Phase 3 replaced.
+    """
+    spec = importlib.util.find_spec(module)
+    if spec is None or not spec.origin:
+        return False, f"module {module} has no source"
+    tree = ast.parse(pathlib.Path(spec.origin).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef) or node.name != cls:
+            continue
+        for stmt in node.body:
+            targets = getattr(stmt, "targets", None) or [getattr(stmt, "target", None)]
+            if any(isinstance(t, ast.Name) and t.id == "Settings" for t in targets):
+                return True, ""
+        return False, f"{cls} declares no Settings attribute"
+    return False, f"class {cls} not in {module}"
+
+
 def _declared_extras() -> set[str]:
     root = pathlib.Path(__file__).resolve().parents[1]
     data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
