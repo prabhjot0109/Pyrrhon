@@ -37,7 +37,7 @@ that must stay true.
 | `pyrrhon/tui/status.py` | Reactive status bar plus the instruments it renders. |
 | `pyrrhon/tui/theme.py` | The six colours. The only file under `tui/` with a hex value. |
 | `pyrrhon/tui/pyrrhon.tcss` | All layout and styling, by `$token`. |
-| `pyrrhon/tui/palette.py`, `prompt.py`, `editor.py`, `splash.py` | Command palette, multiline prompt, `$EDITOR` launch, startup splash. |
+| `pyrrhon/tui/palette.py`, `completion.py`, `prompt.py`, `editor.py`, `splash.py` | Command palette, inline `/` menu, multiline prompt, `$EDITOR` launch, startup splash. |
 | `pyrrhon/core/providers/registry.py` | The LLM provider table. Data only; `BUILTIN_PROVIDERS` and the wizard's menu derive from it. |
 | `pyrrhon/core/providers/adapters.py` | The one place `core/` may import pipecat, and only `pipecat.adapters`. Seam only so far. |
 | `pyrrhon/voice/registry.py` | The STT/TTS provider table. Data only; imports no Pipecat. |
@@ -266,28 +266,64 @@ progress affordance possible — a `RichLog` line can never be updated, which
 was the structural reason a spinner, a resolving tool row and a streaming
 answer all had no cheap fix.
 
-Three things about it are load-bearing and easy to break. The theme is
-registered in `PyrrhonApp.__init__`, not `on_mount`, because `CSS_PATH` is
-parsed at startup against the *current* theme's variables and a later
-registration leaves every `$token` undefined. `TurnView.start()` is awaited,
-because `Widget.mount()` is asynchronous and an un-awaited working row is not
-yet `is_mounted` when the turn's first event arrives — which silently put the
-first tool row *below* the spinner and left the transcript out of order.
-And `TurnView._end_speech_stream` catches `CancelledError`: Textual's
-`MarkdownStream.stop()` cancels its own task and awaits it, the task
-suppresses the error and returns, and asyncio therefore marks that task
-cancelled and re-raises into the caller — escaping the turn's `finally` it
-stranded the prompt disabled forever. It re-raises only when the current task
-has a pending cancellation of its own, so `esc` still aborts.
+Five things about it are load-bearing and easy to break, each one a bug that
+looked like a style choice until it bit.
+
+The theme is registered in `PyrrhonApp.__init__`, not `on_mount`, because
+`CSS_PATH` is parsed at startup against the *current* theme's variables and a
+later registration leaves every `$token` undefined.
+
+`PyrrhonApp.get_theme_variable_defaults()` supplies `$evidence`, `$voice`,
+`$hedge`, `$fault` and `$muted` under **every** theme. `get_css_variables()`
+builds from the active theme alone, so a token that lives only in
+`PYRRHON_THEME.variables` vanishes the moment the user picks another theme
+from the command palette and the app dies parsing its own stylesheet. For the
+same reason the background role is spelled `$background`/`$surface`, which
+every theme defines, rather than a token of ours: switching theme should
+restyle Pyrrhon, not crash it.
+
+`TurnView.start()` is awaited, because `Widget.mount()` is asynchronous and an
+un-awaited working row is not yet `is_mounted` when the turn's first event
+arrives — which silently put the first tool row *below* the spinner and left
+the transcript out of order.
+
+`TurnView` keeps its own `_said` buffer and reconciles the document against it
+after stopping the stream, because **`MarkdownStream` drops whatever is still
+pending when it is stopped**. Its `_run()` catches the `CancelledError` and
+*then* awaits the final append, but a task that has already absorbed a
+cancellation re-raises on its next await, so that append never happens. An
+answer that arrived in one late chunk rendered as an empty row — which reads
+as a large blank gap under the question, not as an error. The stream is a
+rendering optimisation; the buffer is the document.
+
+`TurnView._end_speech_stream` catches `CancelledError` for the same underlying
+reason, re-raising only when the current task has a pending cancellation of
+its own so `esc` still aborts. Prose reaches the stream through a buffer
+rather than a scheduled `stream.write`, because a turn ending between the
+schedule and the run wrote into a stopped stream and raised outright.
+
+One CSS rule is in the same category: the rail is `height: auto`, never `1fr`.
+A fr unit inside an `auto`-height row is circular, and Textual resolved it
+against the viewport instead of the sibling — every row rendered eighteen
+lines tall, which is the other half of the blank-gap symptom.
 
 The evidence rail is the signature: one gutter column carrying the epistemic
 status of each row, and it is a widget rather than a character prepended to
 the body, which is what keeps it out of copied text and out of `history`.
 Colours are six named values in `theme.py` and nowhere else; a six-digit hex
 anywhere else under `tui/` is a bug a grep catches. `esc` aborts a turn, the
-status bar shows context fill and voice state, and `ctrl+p` searches the
-command registry live, so a plugin's command is findable without anything
-being told about it. The REPL keeps its own rendering on purpose.
+status bar shows context fill and voice state, and both `ctrl+p` and typing a
+bare `/` search the command registry live, so a plugin's command is findable
+without anything being told about it. The inline `/` menu overrides the
+redesign spec, which ruled it out; the rejected *dependency* stays rejected,
+since it is Textual's own `OptionList`. `esc` has one precedence chain —
+close the menu, else clear the prompt, else stop the turn — because esc means
+"undo the innermost thing I just started".
+
+A long `ScreenArtifact` arrives folded. M14's orientation brief is a hundred
+lines of symbol counts on a real repo, and it used to land on top of the
+splash as the first thing a new user ever saw. The REPL keeps its own
+rendering on purpose.
 
 **LLM lane and vision (M15b).** LLM providers are rows in
 `core/providers/registry.py`; `BUILTIN_PROVIDERS` and the wizard's catalog are
