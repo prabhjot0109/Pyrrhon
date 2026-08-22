@@ -24,6 +24,23 @@ HEDGE = "#d9a441"      # downgraded claims, warnings
 FAULT = "#e05252"      # errors
 MUTED = "#6b7280"      # tool machinery, footer, durations
 
+# The rail's vocabulary, addressable from the stylesheet by the same names the
+# spec's glyph table uses.
+#
+# Deliberately NOT including the background. Textual builds $variables from the
+# *active* theme only, so a token defined here and used in the stylesheet must
+# be meaningful under any theme the user switches to — and a near-black
+# background is not. The ink role is spelled $background/$surface in the
+# stylesheet, which every theme defines, so switching themes restyles the app
+# instead of crashing it with "reference to undefined variable".
+TOKENS: dict[str, str] = {
+    "evidence": EVIDENCE,
+    "voice": VOICE,
+    "hedge": HEDGE,
+    "fault": FAULT,
+    "muted": MUTED,
+}
+
 PYRRHON_THEME = Theme(
     name="pyrrhon",
     primary=EVIDENCE,
@@ -37,14 +54,5 @@ PYRRHON_THEME = Theme(
     panel="#161a23",   # one step off the background, for the status strip
     foreground="#d7dae0",
     dark=True,
-    variables={
-        # The rail's vocabulary, addressable from the stylesheet by the same
-        # names the spec's glyph table uses.
-        "evidence": EVIDENCE,
-        "voice": VOICE,
-        "hedge": HEDGE,
-        "fault": FAULT,
-        "muted": MUTED,
-        "ink": INK,
-    },
+    variables=dict(TOKENS),
 )

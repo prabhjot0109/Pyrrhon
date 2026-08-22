@@ -8,6 +8,7 @@ both, at the cost of owning the enter key explicitly.
 from __future__ import annotations
 
 from textual.binding import Binding
+from textual.events import Key
 from textual.message import Message
 from textual.widgets import TextArea
 
@@ -40,7 +41,55 @@ class Prompt(TextArea):
         def control(self) -> "Prompt":
             return self.prompt
 
+    # Set by the App once both widgets exist. None keeps this widget usable
+    # on its own, which is what its tests rely on.
+    completion = None
+
+    def _menu_open(self) -> bool:
+        return self.completion is not None and self.completion.display
+
+    async def _on_key(self, event: Key) -> None:
+        """Steer the completion menu before TextArea sees the key.
+
+        up/down are TextArea's own cursor bindings, so the menu has to claim
+        them here rather than through a binding, or the cursor moves and the
+        highlight does not. escape is deliberately absent: the App binds it
+        with priority and owns the whole precedence chain.
+        """
+        if not self._menu_open():
+            return
+        if event.key in ("up", "down"):
+            self.completion.move(-1 if event.key == "up" else 1)
+        elif event.key == "tab":
+            self.accept_completion()
+        else:
+            return
+        event.prevent_default()
+        event.stop()
+
+    def accept_completion(self) -> None:
+        """Replace the typed prefix with the highlighted command."""
+        name = self.completion.selected if self.completion else None
+        if name is None:
+            return
+        self.completion.hide()
+        self.text = f"/{name} "
+        self.move_cursor(self.document.end)
+
     def action_submit(self) -> None:
+        """enter completes a partial command, and runs a complete one.
+
+        Sending "/mod" and being told it is unknown, with the answer on screen
+        at the time, is the worst of both — so a partial name completes. But
+        typing "/help" in full and pressing enter means run it: completing
+        what is already complete would demand a second enter for no reason.
+        """
+        if self._menu_open():
+            selected = self.completion.selected
+            if selected is not None and self.text.strip() != f"/{selected}":
+                self.accept_completion()
+                return
+            self.completion.hide()
         self.post_message(self.Submitted(self, self.text))
 
     def action_newline(self) -> None:

@@ -18,7 +18,7 @@ from textual import on
 from textual.app import App, ComposeResult, SuspendNotSupported
 from textual.binding import Binding
 from textual.containers import VerticalScroll
-from textual.widgets import Footer, Header, Markdown, Static
+from textual.widgets import Footer, Header, Markdown, Static, TextArea
 
 from pyrrhon.bootstrap import (
     orient_in_background,
@@ -57,6 +57,7 @@ from pyrrhon.core.mcp import MCPManager
 from pyrrhon.core.providers.llm import FallbackLLM
 from pyrrhon.core.session import Session
 from pyrrhon.tui import status
+from pyrrhon.tui.completion import CommandMenu, matches
 from pyrrhon.tui.editor import open_in_editor
 from pyrrhon.tui.messages import InterruptRow, NoticeRow, UserRow
 from pyrrhon.tui.palette import PyrrhonCommands
@@ -64,7 +65,7 @@ from pyrrhon.tui.prompt import Prompt
 from pyrrhon.tui.renderer import TuiRenderer
 from pyrrhon.tui.splash import splash_text
 from pyrrhon.tui.status import StatusBar
-from pyrrhon.tui.theme import PYRRHON_THEME
+from pyrrhon.tui.theme import PYRRHON_THEME, TOKENS
 from pyrrhon.tui.turn import TurnView
 from pyrrhon.voice import VoiceController
 
@@ -166,6 +167,17 @@ class PyrrhonApp(App):
     def history(self) -> list[dict]:
         return self.session.history
 
+    def get_theme_variable_defaults(self) -> dict[str, str]:
+        """Pyrrhon's own tokens, under whatever theme is active.
+
+        Textual builds $variables from the current theme alone, so tokens that
+        live only in our Theme vanish the moment the user picks another one
+        from the command palette — and the stylesheet then fails to parse with
+        "reference to undefined variable '$evidence'". This is the documented
+        hook for variables that must outlive a theme switch.
+        """
+        return dict(TOKENS)
+
     def compose(self) -> ComposeResult:
         yield Header()
         yield Static(id="splash")
@@ -174,6 +186,7 @@ class PyrrhonApp(App):
         # reason a spinner, an elapsed timer and a resolving tool row are
         # possible at all.
         yield VerticalScroll(id="transcript")
+        yield CommandMenu(id="completion")
         yield Prompt(placeholder="Ask about the repo — or /help", id="prompt")
         yield StatusBar(id="status-bar")
         yield Footer()
@@ -183,7 +196,11 @@ class PyrrhonApp(App):
         # streaming releases the anchor rather than fighting the user.
         self.query_one("#transcript", VerticalScroll).anchor()
         self.refresh_status()
-        self.query_one("#prompt", Prompt).focus()
+        prompt = self.query_one("#prompt", Prompt)
+        menu = self.query_one("#completion", CommandMenu)
+        menu.display = False
+        prompt.completion = menu
+        prompt.focus()
         self._show_splash()
         # Build the symbol index and open the provider connection now, so the
         # first turn pays neither the cold walk nor the TLS handshake. Held on
@@ -217,12 +234,20 @@ class PyrrhonApp(App):
         await self.run_command("/help")
 
     def action_abort_turn(self) -> None:
-        """esc: stop the turn. D5, and the second caller of a path voice
-        barge-in already exercises on every interruption.
+        """esc, in precedence order: close the menu, clear the prompt, stop
+        the turn. D5, and the second caller of a path voice barge-in already
+        exercises on every interruption.
 
-        With no turn running it clears the prompt instead, so the key is
-        never dead.
+        The order is the point. esc means "undo the thing I just started", and
+        the most recent thing is always the innermost one — so an open command
+        menu closes without touching what was typed, and only a prompt with
+        nothing left to dismiss reaches the turn. The key is never dead at any
+        step.
         """
+        menu = self.query_one("#completion", CommandMenu)
+        if menu.display:
+            menu.hide()
+            return
         prompt = self.query_one("#prompt", Prompt)
         if not prompt.disabled:
             prompt.clear()
@@ -249,8 +274,9 @@ class PyrrhonApp(App):
             )
 
     def refresh_status(self) -> None:
-        # Header carries identity and mode; StatusBar carries the instruments.
-        self.sub_title = f"{self.repo_root.name} · {self.session.mode}"
+        # Header carries identity, the status line carries state. The mode was
+        # in both, and a value shown twice is a value you have to check twice.
+        self.sub_title = self.repo_root.name
         status.sync(
             self.query_one(StatusBar),
             mode=self.session.mode,
@@ -280,6 +306,11 @@ class PyrrhonApp(App):
         """The one field the working row's timer repaints."""
         self.query_one(StatusBar).voice_state = self.voice_state()
 
+    @on(TextArea.Changed, "#prompt")
+    def on_prompt_changed(self, event: TextArea.Changed) -> None:
+        """Offer commands as the name is typed, and stop once it is a sentence."""
+        self.query_one("#completion", CommandMenu).show(matches(event.text_area.text))
+
     @on(Prompt.Submitted, "#prompt")
     async def on_prompt_submitted(self, event: Prompt.Submitted) -> None:
         text = event.value.strip()
@@ -287,6 +318,7 @@ class PyrrhonApp(App):
         if not text:
             return
         self._clear_splash()
+        self.query_one("#completion", CommandMenu).hide()
         self.query_one("#transcript", VerticalScroll).mount(
             UserRow(_redact_secret_echo(text))
         )

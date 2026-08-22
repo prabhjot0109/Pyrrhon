@@ -1,18 +1,24 @@
 /* All layout and styling for the Textual channel (D6).
  *
- * Every colour is a token from theme.py. A hex value in this file, or in any
- * widget module, is a bug: `grep -rn "#[0-9a-fA-F]\{6\}" pyrrhon/tui/` must
- * match theme.py and nothing else.
+ * Every colour is a token from theme.py, or one of Textual's own theme
+ * variables. A hex value in this file, or in any widget module, is a bug:
+ * `grep -rn "#[0-9a-fA-F]\{6\}" pyrrhon/tui/` must match theme.py alone.
+ *
+ * $background, $surface and $panel are Textual's, so they follow whichever
+ * theme is active. $evidence, $voice, $hedge, $fault and $muted are ours, and
+ * PyrrhonApp.get_theme_variable_defaults() supplies them under every theme —
+ * without that, switching theme from the command palette left them undefined
+ * and the stylesheet failed to parse.
  */
 
 Screen {
-    background: $ink;
+    background: $background;
 }
 
 #transcript {
     height: 1fr;
     padding: 0 1;
-    background: $ink;
+    background: $background;
 }
 
 StatusBar {
@@ -24,6 +30,7 @@ StatusBar {
 
 #prompt {
     border: tall $panel;
+    margin-top: 1;
     background: $panel;
     /* Grows with the text and stops; a prompt must never eat the transcript. */
     height: auto;
@@ -39,7 +46,7 @@ StatusBar {
 #splash {
     height: auto;
     padding: 1 1 0 1;
-    background: $ink;
+    background: $background;
 }
 
 /* -- the transcript and its rows ---------------------------------------- */
@@ -54,11 +61,29 @@ StatusBar {
     margin: 0;
 }
 
+/* One blank line before each question, and nowhere else. Turns need to be
+ * separable at a glance; the rows inside a turn belong together and padding
+ * between them only pushes the answer off the screen. */
+UserRow {
+    margin-top: 1;
+}
+
+/* Except the first, which would otherwise start one line down from nothing. */
+#transcript > UserRow:first-of-type {
+    margin-top: 0;
+}
+
 /* The rail is a gutter widget, never a character in the body: that is what
- * keeps it out of copied text and out of the session history. */
+ * keeps it out of copied text and out of the session history.
+ *
+ * height: auto, not 1fr. A fr unit inside an auto-height row is circular —
+ * Textual resolved it against the viewport instead of the sibling, so every
+ * row rendered eighteen lines tall and the transcript looked like it had
+ * enormous gaps between the question and the answer. */
 .rail {
     width: 2;
-    height: 1fr;
+    height: auto;
+    min-height: 1;
     color: $muted;
 }
 
@@ -73,6 +98,7 @@ StatusBar {
 }
 
 .user-body     { color: $voice; text-style: bold; }
+.notice-body, .tool-body, .citation-body { text-style: none; }
 .tool-body     { color: $muted; }
 .notice-body   { color: $hedge; }
 .citation-body { color: $evidence; }
@@ -90,4 +116,34 @@ StatusBar {
 .row MarkdownBlock {
     margin: 0;
     padding: 0;
+}
+
+/* A folded brief. Collapsible brings its own chrome; the row owns spacing. */
+.brief-body {
+    height: auto;
+    background: $background;
+    border: none;
+    padding: 0;
+}
+
+.brief-body CollapsibleTitle {
+    color: $muted;
+    padding: 0;
+}
+
+/* Slash-command completion. Above the prompt, never over the transcript:
+ * an overlay that hides what you are asking about is the wrong trade. */
+#completion {
+    height: auto;
+    max-height: 8;
+    border: none;
+    background: $panel;
+    color: $muted;
+    scrollbar-size-vertical: 1;
+}
+
+#completion > .option-list--option-highlighted {
+    background: $evidence;
+    color: $background;
+    text-style: bold;
 }

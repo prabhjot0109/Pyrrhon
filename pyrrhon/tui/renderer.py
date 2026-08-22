@@ -34,6 +34,7 @@ from pyrrhon.tui.messages import (
     NoticeRow,
     ToolRow,
     UserRow,
+    artifact_row,
 )
 
 if TYPE_CHECKING:
@@ -77,8 +78,8 @@ class TuiRenderer(EventRenderer):
         self._app.turn.mount(row)
 
     def on_transcription(self, event: Transcription) -> None:
-        # What STT heard — mirrors the typed "you>" so voice and text read the
-        # same in the transcript. The 🎙 marks it as spoken input.
+        # What STT heard, on the same rail as a typed turn so voice and text
+        # read the same in the transcript. The 🎙 marks it as spoken input.
         self._mount(UserRow(event.text, spoken=True))
 
     def on_voice_notice(self, event: VoiceNotice) -> None:
@@ -132,9 +133,10 @@ class TuiRenderer(EventRenderer):
         self._app.record_citation(event)
 
     def on_artifact(self, event: ScreenArtifact) -> None:
-        # First real emitter is M14's orientation brief; rendered plainly
-        # until a channel needs per-kind treatment.
-        self._mount(AssistantRow(event.content))
+        # M14's orientation brief is the first real emitter, and on a real repo
+        # it is a hundred lines of symbol counts that used to land on top of
+        # the splash. Long artifacts arrive folded; short ones read inline.
+        self._mount(artifact_row(event.content))
 
     def on_question(self, event: AskUser) -> None:
         # Design mode's Socratic question (spec: M6). Pyrrhon speaking, so the

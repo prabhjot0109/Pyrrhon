@@ -178,3 +178,38 @@ async def test_the_transcript_reads_in_the_order_the_events_arrived(sample_repo:
         ]
         assert kinds.index("UserRow") < kinds.index("ToolRow")
         assert kinds.index("ToolRow") < kinds.index("CitationRow")
+
+
+async def test_rows_are_as_tall_as_their_content_and_no_taller(sample_repo: Path):
+    """The "huge gap" between a question and its answer.
+
+    The rail was `height: 1fr` inside a `height: auto` row, which is circular:
+    Textual resolved the fr against the viewport rather than the sibling, so
+    every row rendered the full height of the screen. Three rows filled a
+    terminal and the transcript looked like it had enormous blank gaps.
+    """
+    from pyrrhon.tui.messages import Row
+
+    replies = [LLMReply(text="One short line.")]
+    app, fake = make_app(replies, sample_repo)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await submit(app, pilot, "hi")
+        await pilot.pause()
+        for row in app.query(Row):
+            assert row.outer_size.height <= 6, (
+                f"{type(row).__name__} is {row.outer_size.height} lines tall"
+            )
+
+
+async def test_a_long_artifact_arrives_folded(sample_repo: Path):
+    """M14's orientation brief is a hundred lines of symbol counts, and it
+    used to land on top of the splash as the first thing a user ever saw."""
+    from pyrrhon.tui.messages import AssistantRow, BriefRow, artifact_row
+
+    wall = chr(10).join(f"line {i}" for i in range(60))
+    folded = artifact_row(wall)
+    assert isinstance(folded, BriefRow)
+    assert folded.body().collapsed, "folded until asked for"
+
+    short = artifact_row("Just a sentence.")
+    assert isinstance(short, AssistantRow), "a short artifact still reads inline"
