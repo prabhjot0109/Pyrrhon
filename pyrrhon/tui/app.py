@@ -63,6 +63,7 @@ from pyrrhon.tui.messages import (
     NoticeRow,
     ToolRow,
     UserRow,
+    WorkingRow,
 )
 from pyrrhon.tui.theme import PYRRHON_THEME
 from pyrrhon.tui.widgets import StatusBar
@@ -112,7 +113,13 @@ class TuiRenderer(EventRenderer):
         return self._app.query_one("#transcript", VerticalScroll)
 
     def _mount(self, row) -> None:
-        self._transcript.mount(row)
+        # The working row stays at the foot of the column, so new rows land
+        # above it rather than pushing it up into the finished transcript.
+        working = self._app.working_row
+        if working is not None and working.is_mounted:
+            self._transcript.mount(row, before=working)
+        else:
+            self._transcript.mount(row)
 
     def on_transcription(self, event: Transcription) -> None:
         # What STT heard — mirrors the typed "you>" so voice and text read the
@@ -143,6 +150,7 @@ class TuiRenderer(EventRenderer):
             self._mount(NoticeRow(hedge))
 
     def on_tool_started(self, event: ToolCallStarted) -> None:
+        self._app.set_working_label(event.name)
         row = ToolRow(event.name, event.args)
         self._app.track_tool_row(event.name, row)
         self._mount(row)
@@ -157,6 +165,8 @@ class TuiRenderer(EventRenderer):
             self._mount(ToolRow(event.name, {}))
             return
         row.resolve(event.result_preview, self._app.tool_elapsed(row))
+        # The working row collapses into the row that just resolved.
+        self._app.set_working_label("thinking")
 
     def on_citation(self, event: Citation) -> None:
         # Two independent routes to the same line, so a terminal without
@@ -188,6 +198,9 @@ class PyrrhonApp(App):
     # Every binding carries a description because that string is what Footer
     # renders; a binding with none is a key nothing on screen advertises.
     BINDINGS = [
+        # priority, because the prompt has focus for the whole session and
+        # would otherwise swallow escape before the app ever sees it.
+        Binding("escape", "abort_turn", "stop", priority=True),
         Binding("ctrl+o", "open_citation", "open citation"),
         Binding("ctrl+p", "command_palette", "commands"),
         Binding("ctrl+l", "clear_transcript", "clear"),
@@ -226,6 +239,9 @@ class PyrrhonApp(App):
         self._speech_stream = None
         self._pending_tools: dict[str, list[tuple[ToolRow, float]]] = {}
         self._tool_started_at: dict[ToolRow, float] = {}
+        self.working_row: WorkingRow | None = None
+        self._working_timer = None
+        self._turn_started: float = 0.0
         # Injection point, not indirection for its own sake: the pilot has no
         # terminal to hand an editor, so the tests swap this for a recorder.
         self._open_editor = open_in_editor
@@ -332,6 +348,20 @@ class PyrrhonApp(App):
         """f1 routes through dispatch() so there is one execution path."""
         await self._run_command("/help")
 
+    def action_abort_turn(self) -> None:
+        """esc: stop the turn. D5, and the second caller of a path voice
+        barge-in already exercises on every interruption.
+
+        With no turn running it clears the prompt instead, so the key is
+        never dead.
+        """
+        prompt = self.query_one("#prompt", Input)
+        if not prompt.disabled:
+            prompt.clear()
+            return
+        self.session.abort_current_turn()
+        self.query_one("#transcript", VerticalScroll).mount(InterruptRow())
+
     def action_open_citation(self) -> None:
         """ctrl+o: the keyboard half of D2's two routes to a cited line."""
         citation = self.last_citation
@@ -416,6 +446,7 @@ class PyrrhonApp(App):
         """Consume the core event stream inside a worker — the UI never blocks."""
         transcript = self.query_one("#transcript", VerticalScroll)
         prompt = self.query_one("#prompt", Input)
+        self._start_working_row()
         try:
             async for event in self.session.run_turn(user_text):
                 self._render_event(event)
@@ -426,6 +457,10 @@ class PyrrhonApp(App):
         finally:
             # The stream is closed here and nowhere else, so an aborted or
             # failed turn cannot leak one into the next turn's row.
+            # CancelledError is a BaseException, so the broad `except
+            # Exception` above cannot swallow an abort; it lands here, which
+            # is what makes esc leave the prompt usable.
+            self._stop_working_row()
             await self._end_speech_stream()
             self._pending_tools.clear()
             self.refresh_status()  # picks up the turn's latency measurement
@@ -468,6 +503,30 @@ class PyrrhonApp(App):
             current = asyncio.current_task()
             if current is not None and current.cancelling():
                 raise
+
+    def set_working_label(self, label: str) -> None:
+        if self.working_row is not None:
+            self.working_row.label = label
+
+    def _start_working_row(self) -> None:
+        self._turn_started = time.monotonic()
+        self.working_row = WorkingRow()
+        self.query_one("#transcript", VerticalScroll).mount(self.working_row)
+        self._working_timer = self.set_interval(0.1, self._tick_working)
+
+    def _tick_working(self) -> None:
+        if self.working_row is not None:
+            self.working_row.tick(time.monotonic() - self._turn_started)
+
+    def _stop_working_row(self) -> None:
+        """Removed on every exit path, including abort. A stranded spinner
+        claims Pyrrhon is still working when it is not."""
+        if self._working_timer is not None:
+            self._working_timer.stop()
+            self._working_timer = None
+        if self.working_row is not None:
+            self.working_row.remove()
+            self.working_row = None
 
     def track_tool_row(self, name: str, row: ToolRow) -> None:
         self._pending_tools.setdefault(name, []).append((row, time.monotonic()))

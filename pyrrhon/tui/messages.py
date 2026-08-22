@@ -175,3 +175,31 @@ class InterruptRow(Row):
 
     def body(self) -> Static:
         return self._body
+
+
+class WorkingRow(Row):
+    """The one orchestrated moment in the design, and the only animation.
+
+    Between submit and the first chunk the screen used to be frozen with a
+    disabled input and nothing else (defect 5). This shows the active tool and
+    the elapsed seconds, including before the first tool call, because the
+    wait for first-token is the wait users actually notice.
+    """
+
+    GLYPH = "┊"
+    RAIL = "rail-muted"
+    FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.label = "thinking"
+        self._frame = 0
+        self._body = Static("", classes="body tool-body")
+
+    def body(self) -> Static:
+        return self._body
+
+    def tick(self, elapsed: float) -> None:
+        self._frame = (self._frame + 1) % len(self.FRAMES)
+        spinner = self.FRAMES[self._frame]
+        self._body.update(f"{spinner} {self.label}  {elapsed:.1f}s")
