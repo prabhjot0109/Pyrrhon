@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from textual.widgets import Input, RichLog
+from textual.widgets import Input, RichLog, Static
 
 from pyrrhon.bootstrap import build_agent
 from pyrrhon.core.events import Citation
@@ -62,3 +62,83 @@ async def test_ctrl_o_surfaces_the_editors_complaint(sample_repo: Path):
         await pilot.press("ctrl+o")
         await pilot.pause()
         assert app.query_one("#prompt", Input) is not None
+
+
+# -- Phase 1: chrome -------------------------------------------------------
+
+
+async def test_every_binding_advertises_itself(sample_repo: Path):
+    """Footer renders the description, so a blank one is a key nobody sees."""
+    app = make_app(sample_repo)
+    async with app.run_test(size=(120, 40)):
+        assert PyrrhonApp.BINDINGS, "the app declares its own keymap"
+        for binding in PyrrhonApp.BINDINGS:
+            assert binding.description, f"{binding.key} has no description"
+
+
+async def test_the_theme_is_registered_and_selected(sample_repo: Path):
+    app = make_app(sample_repo)
+    async with app.run_test(size=(120, 40)):
+        assert app.theme == "pyrrhon"
+        # $ink resolving at all is the proof the theme was in place before the
+        # stylesheet parsed; an unregistered theme is a startup crash.
+        assert app.get_theme("pyrrhon") is not None
+
+
+def _transcript_text(app) -> str:
+    """What is actually on the transcript, as one string."""
+    return "\n".join(strip.text for strip in app.query_one("#transcript", RichLog).lines)
+
+
+async def test_ctrl_l_clears_the_screen_not_the_session(sample_repo: Path):
+    app = make_app(sample_repo)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.query_one("#transcript", RichLog).write("something to wipe")
+        await pilot.pause()
+        assert "something to wipe" in _transcript_text(app)
+        await pilot.press("ctrl+l")
+        await pilot.pause()
+        # Not "the transcript is empty": the background orientation task may
+        # legitimately write again a tick later. What ctrl+l promises is that
+        # what was there is gone.
+        assert "something to wipe" not in _transcript_text(app)
+        assert app.history == []          # nothing to lose here, but explicit
+        assert app.query_one("#prompt", Input) is not None   # session survives
+
+
+async def test_the_splash_fits_a_narrow_terminal(sample_repo: Path):
+    """Defect 11: the 60-column block art wrapped mid-glyph below 62 columns."""
+    app = make_app(sample_repo)
+    async with app.run_test(size=(50, 20)) as pilot:
+        await pilot.pause()
+        rendered = app.query_one("#splash", Static).content
+        for line in str(rendered).splitlines():
+            assert len(line) <= 50, f"splash line overflows 50 columns: {line!r}"
+
+
+async def test_the_splash_shows_the_block_art_when_it_fits(sample_repo: Path):
+    app = make_app(sample_repo)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        assert "█" in str(app.query_one("#splash", Static).content)
+
+
+async def test_a_repo_name_with_brackets_is_not_rich_markup(tmp_path: Path):
+    """Defect 12: `weird[repo]` used to be parsed as markup on the way in."""
+    repo = tmp_path / "weird[repo]"
+    repo.mkdir()
+    agent = build_agent(repo, llm=FakeLLM([]), home=tmp_path)
+    app = PyrrhonApp(repo_root=repo, agent=agent)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        assert "weird[repo]" in str(app.query_one("#splash", Static).content)
+
+
+async def test_the_first_turn_takes_the_screen_back(sample_repo: Path):
+    app = make_app(sample_repo)
+    async with app.run_test(size=(120, 40)) as pilot:
+        assert app.query("#splash")
+        app.query_one("#prompt", Input).value = "/help"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert not app.query("#splash")

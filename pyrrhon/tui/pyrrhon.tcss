@@ -1,0 +1,40 @@
+/* All layout and styling for the Textual channel (D6).
+ *
+ * Every colour is a token from theme.py. A hex value in this file, or in any
+ * widget module, is a bug: `grep -rn "#[0-9a-fA-F]\{6\}" pyrrhon/tui/` must
+ * match theme.py and nothing else.
+ */
+
+Screen {
+    background: $ink;
+}
+
+#transcript {
+    height: 1fr;
+    padding: 0 1;
+    background: $ink;
+}
+
+StatusBar {
+    height: 1;
+    background: $panel;
+    color: $muted;
+    padding: 0 1;
+}
+
+#prompt {
+    border: tall $panel;
+    background: $panel;
+}
+
+#prompt:focus {
+    /* evidence is the focus ring as well as the verified rail: one blue,
+     * meaning "this is the thing you are working with". */
+    border: tall $evidence;
+}
+
+#splash {
+    height: auto;
+    padding: 1 1 0 1;
+    background: $ink;
+}

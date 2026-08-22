@@ -16,7 +16,7 @@ from rich.text import Text
 from textual import on
 from textual.app import App, ComposeResult, SuspendNotSupported
 from textual.binding import Binding
-from textual.widgets import Input, RichLog
+from textual.widgets import Footer, Header, Input, RichLog, Static
 
 from pyrrhon.bootstrap import (
     orient_in_background,
@@ -52,6 +52,7 @@ from pyrrhon.core.mcp import MCPManager
 from pyrrhon.core.providers.llm import FallbackLLM
 from pyrrhon.core.session import Session
 from pyrrhon.tui.editor import open_in_editor
+from pyrrhon.tui.theme import PYRRHON_THEME
 from pyrrhon.tui.widgets import StatusBar
 from pyrrhon.voice import VoiceController
 
@@ -127,22 +128,20 @@ class TuiRenderer(EventRenderer):
 class PyrrhonApp(App):
     TITLE = "Pyrrhon"
 
+    # Every binding carries a description because that string is what Footer
+    # renders; a binding with none is a key nothing on screen advertises.
     BINDINGS = [
         Binding("ctrl+o", "open_citation", "open citation"),
+        Binding("ctrl+p", "command_palette", "commands"),
+        Binding("ctrl+l", "clear_transcript", "clear"),
+        Binding("f1", "help", "help"),
+        # Textual maps ctrl+c to help_quit, which tells you to press ctrl+q.
+        # In a terminal agent ctrl+c means stop, so it quits outright.
+        Binding("ctrl+c", "quit", "quit"),
     ]
 
-    CSS = """
-    #transcript {
-        height: 1fr;
-        padding: 0 1;
-    }
-    StatusBar {
-        height: 1;
-        background: $panel;
-        color: $text-muted;
-        padding: 0 1;
-    }
-    """
+    # D6: the stylesheet is a file, not a string on the class.
+    CSS_PATH = "pyrrhon.tcss"
 
     def __init__(
         self,
@@ -153,6 +152,11 @@ class PyrrhonApp(App):
         plugins: list | None = None,
     ):
         super().__init__()
+        # Before anything else: CSS_PATH is parsed at startup against the
+        # *current* theme's variables, so a theme registered in on_mount is
+        # registered one step too late and every $token is undefined.
+        self.register_theme(PYRRHON_THEME)
+        self.theme = PYRRHON_THEME.name
         self.repo_root = repo_root
         self.session = Session(agent)
         self.mcp = mcp
@@ -198,20 +202,17 @@ class PyrrhonApp(App):
         return self.session.history
 
     def compose(self) -> ComposeResult:
+        yield Header()
+        yield Static(id="splash")
         yield RichLog(id="transcript", wrap=True, markup=True)
-        yield StatusBar(id="status-bar")
         yield Input(placeholder="Ask about the repo — or /help", id="prompt")
+        yield StatusBar(id="status-bar")
+        yield Footer()
 
     def on_mount(self) -> None:
         self.refresh_status()
         self.query_one("#prompt", Input).focus()
-        from pyrrhon.branding import banner
-
-        transcript = self.query_one("#transcript", RichLog)
-        transcript.write(banner())  # pre-styled Text; an outer style would flatten it
-        transcript.write(
-            f"Discussing {self.repo_root.name}. Type /help for commands."
-        )
+        self._show_splash()
         # Build the symbol index and open the provider connection now, so the
         # first turn pays neither the cold walk nor the TLS handshake. Held on
         # self so the tasks aren't GC'd mid-flight.
@@ -221,9 +222,42 @@ class PyrrhonApp(App):
         if self._start_voice:
             self.notify(self.voice.start())
 
+    def _show_splash(self) -> None:
+        """The banner as a splash, not a logged line (defect 11).
+
+        Written into the scrolling log it wrapped mid-glyph on a narrow
+        terminal and scrolled away within one turn. As a widget it is sized
+        to the terminal and cleared by the first real turn.
+
+        Everything here is a Text object rather than a string, which is what
+        fixes defect 12: a repo directory named `weird[repo]` was parsed as
+        Rich markup on its way into a markup=True sink.
+        """
+        from pyrrhon.branding import NARROW_COLUMNS, banner, banner_narrow
+
+        wordmark = banner() if self.size.width >= NARROW_COLUMNS else banner_narrow()
+        content = Text()
+        content.append_text(wordmark)
+        content.append("\n\n")
+        content.append(f"Discussing {self.repo_root.name}. Type /help for commands.")
+        self.query_one("#splash", Static).update(content)
+
+    def _clear_splash(self) -> None:
+        """The first submitted turn takes the screen back."""
+        for node in self.query("#splash"):
+            node.remove()
+
     def record_citation(self, citation: Citation) -> None:
         """Remember the most recent citation; ctrl+o and /code both read it."""
         self.last_citation = citation
+
+    def action_clear_transcript(self) -> None:
+        """ctrl+l: clear the screen, not the session. History is untouched."""
+        self.query_one("#transcript", RichLog).clear()
+
+    async def action_help(self) -> None:
+        """f1 routes through dispatch() so there is one execution path."""
+        await self._run_command("/help")
 
     def action_open_citation(self) -> None:
         """ctrl+o: the keyboard half of D2's two routes to a cited line."""
@@ -244,6 +278,8 @@ class PyrrhonApp(App):
             )
 
     def refresh_status(self) -> None:
+        # Header carries identity and mode; StatusBar carries the instruments.
+        self.sub_title = f"{self.repo_root.name} · {self.session.mode}"
         fast = getattr(self.agent.llm, "model", "unknown")
         deep = getattr(self.agent.deep_llm, "model", "= fast")
         self.query_one(StatusBar).show_status(
@@ -256,10 +292,19 @@ class PyrrhonApp(App):
         event.input.clear()
         if not text:
             return
+        self._clear_splash()
         transcript = self.query_one("#transcript", RichLog)
         transcript.write(Text(f"you> {_redact_secret_echo(text)}", style="bold cyan"))
 
-        ctx = CommandContext(
+        if await self._run_command(text) is not None:
+            return
+
+        # One turn at a time; M3 replaces this with real barge-in/cancellation.
+        event.input.disabled = True
+        self.run_worker(self._agent_turn(text), exclusive=True)
+
+    def _command_context(self) -> CommandContext:
+        return CommandContext(
             repo_root=self.repo_root,
             agent=self.agent,
             ui=self,
@@ -268,17 +313,21 @@ class PyrrhonApp(App):
             mcp=self.mcp,
             plugins=self.plugins,
         )
-        response = await dispatch(text, ctx)
-        if response is not None:
-            self.last_command_response = response
-            style = "red" if response.startswith("ERROR") else "yellow"
-            transcript.write(Text(response, style=style))
-            self.refresh_status()  # /model may have swapped a slot
-            return
 
-        # One turn at a time; M3 replaces this with real barge-in/cancellation.
-        event.input.disabled = True
-        self.run_worker(self._agent_turn(text), exclusive=True)
+    async def _run_command(self, line: str) -> str | None:
+        """Dispatch one slash command and render its response.
+
+        The single execution path for every entry point: the prompt, f1, and
+        the command palette. None means "not a command, send it to the agent".
+        """
+        response = await dispatch(line, self._command_context())
+        if response is None:
+            return None
+        self.last_command_response = response
+        style = "red" if response.startswith("ERROR") else "yellow"
+        self.query_one("#transcript", RichLog).write(Text(response, style=style))
+        self.refresh_status()  # /model may have swapped a slot
+        return response
 
     def _render_event(self, event) -> None:
         """Render one core event into the panes — agent turns and the M3
