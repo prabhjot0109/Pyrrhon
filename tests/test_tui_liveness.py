@@ -126,3 +126,42 @@ async def test_no_working_row_survives_a_failed_turn(sample_repo: Path):
         await pilot.pause()
         assert not list(app.query(WorkingRow))
         assert not app.query_one("#prompt", Prompt).disabled
+
+
+# -- the streaming lifecycle -----------------------------------------------
+
+
+async def test_a_chunk_arriving_after_the_turn_ends_is_dropped(sample_repo: Path):
+    """The CI flake, made deterministic.
+
+    Chunks arrive on a sync hook while MarkdownStream.write is a coroutine, so
+    there is always a gap between "a chunk arrived" and "the stream has it". A
+    turn ending inside that gap used to run a queued write against a stopped
+    stream and raise RuntimeError: Can't write to the stream after it has
+    stopped. Here the turn is ended first and the chunk sent afterwards, which
+    is the same ordering without the race.
+    """
+    app = make_app(FakeLLM([]), sample_repo)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await app.turn.start()
+        app.turn.stream_speech("First sentence. ")
+        await pilot.pause()
+        await app.turn.finish()
+
+        app.turn.stream_speech("A sentence nobody is waiting for.")
+        await pilot.pause()          # must not raise
+        assert app.query_one("#prompt", Prompt) is not None
+
+
+async def test_the_last_chunk_of_a_turn_is_not_dropped(sample_repo: Path):
+    """The other half: flushing before stopping, so ending a turn does not
+    silently eat the sentence that was still in the buffer."""
+    app = make_app(FakeLLM([]), sample_repo)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await app.turn.start()
+        app.turn.stream_speech("The very last thing said.")
+        await app.turn.finish()      # no pause: the flush must happen here
+        await pilot.pause()
+        rows = list(app.query("AssistantRow.speech"))
+        assert len(rows) == 1
+        assert "The very last thing said." in rows[0].markdown.source

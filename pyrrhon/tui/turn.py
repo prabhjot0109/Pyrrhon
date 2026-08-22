@@ -32,6 +32,13 @@ class TurnView:
         self.working_row: WorkingRow | None = None
         self._speech_row: AssistantRow | None = None
         self._speech_stream = None
+        # Prose waiting to reach the stream. Chunks arrive on a sync hook and
+        # MarkdownStream.write is a coroutine, so there is always a gap between
+        # "a chunk arrived" and "the stream has it"; this is what lives in it.
+        self._prose: list[str] = []
+        # And everything the turn ever said, which is the authority. The
+        # stream is a rendering optimisation; this is the document.
+        self._said: list[str] = []
         self._timer = None
         self._started: float = 0.0
         # A FIFO per tool name, because M10 dispatches in parallel and the
@@ -91,10 +98,21 @@ class TurnView:
     def stream_speech(self, text: str) -> None:
         """Append prose to this turn's single assistant row (defect 2).
 
-        The first chunk mounts the row and opens the stream; the rest write
-        into it. MarkdownStream coalesces high-frequency appends, which is
-        what removes the defect without the core changing its splitter.
+        The first chunk mounts the row and opens the stream; the rest are
+        buffered and flushed into it. MarkdownStream coalesces high-frequency
+        appends, which is what removes the defect without the core changing
+        its splitter.
+
+        Buffered rather than handed straight to `call_later(stream.write)`,
+        because that scheduled a coroutine holding a direct reference to the
+        stream. A turn ending between the schedule and the run — an abort, or
+        simply the last chunk racing the finally — ran that write against a
+        stopped stream and raised "Can't write to the stream after it has
+        stopped". Going through the buffer means the only reference is
+        `self._speech_stream`, which finish() clears before stopping anything.
         """
+        if self._speech_stream is None and self._speech_row is not None:
+            return  # the turn is over; a late chunk has nowhere to go
         if self._speech_row is None:
             # Tagged so the turn's prose is distinguishable from an artifact
             # row: a background ScreenArtifact can land mid-turn, and "one
@@ -102,10 +120,29 @@ class TurnView:
             self._speech_row = AssistantRow(classes="speech")
             self.mount(self._speech_row)
             self._speech_stream = Markdown.get_stream(self._speech_row.markdown)
-        self._app.call_later(self._speech_stream.write, text)
+        self._prose.append(text)
+        self._said.append(text)
+        self._app.call_later(self._flush_prose)
+
+    async def _flush_prose(self) -> None:
+        """Push everything buffered into the stream, if there still is one."""
+        stream = self._speech_stream
+        if stream is None or not self._prose:
+            return
+        text = "".join(self._prose)
+        self._prose.clear()
+        await stream.write(text)
 
     async def _end_speech_stream(self) -> None:
-        stream, self._speech_stream, self._speech_row = self._speech_stream, None, None
+        # Flush first, so the last chunk of a turn is not the one that gets
+        # dropped, then clear the stream reference so any flush still queued
+        # behind us finds nothing to write into.
+        await self._flush_prose()
+        stream, self._speech_stream = self._speech_stream, None
+        row, self._speech_row = self._speech_row, None
+        self._prose.clear()
+        said = "".join(self._said)
+        self._said.clear()
         if stream is None:
             return
         try:
@@ -122,6 +159,29 @@ class TurnView:
             current = asyncio.current_task()
             if current is not None and current.cancelling():
                 raise
+        finally:
+            self._reconcile(row, said)
+
+    @staticmethod
+    def _reconcile(row: AssistantRow | None, said: str) -> None:
+        """Make the document say what the turn actually said.
+
+        MarkdownStream loses whatever is still pending when it is stopped, and
+        not by accident: its _run() catches the CancelledError and *then*
+        awaits the final append, but a task that has already absorbed a
+        cancellation re-raises on its next await, so that append never
+        happens. A whole answer that arrived in one late chunk therefore
+        rendered as an empty row — visible as a large blank gap under the
+        question rather than as an error.
+
+        So the stream is treated as what it is, a rendering optimisation for
+        the live case, and the buffer is the authority. This costs one string
+        comparison per turn and makes a dropped tail impossible.
+        """
+        if row is None or not said:
+            return
+        if row.markdown.source != said:
+            row.markdown.update(said)
 
     # -- rows --------------------------------------------------------------
 
