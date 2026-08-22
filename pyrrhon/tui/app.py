@@ -1,8 +1,10 @@
 """The Textual TUI — the second channel over the headless core (M2).
 
-Layout: transcript (left) · code viewer (right) · status bar · input.
+Layout: one column. Transcript · status bar · input. A user who is
+listening is not reading two panes, so the screen holds the conversation
+and the one thing the voice is forbidden to say, the coordinates.
 Agent turns run in a Textual worker so this event loop never blocks —
-from M3 the same loop carries audio (spec: real-time discipline).
+the same loop carries audio (spec: real-time discipline).
 """
 
 from __future__ import annotations
@@ -12,8 +14,8 @@ from pathlib import Path
 from rich.markdown import Markdown
 from rich.text import Text
 from textual import on
-from textual.app import App, ComposeResult
-from textual.containers import Horizontal
+from textual.app import App, ComposeResult, SuspendNotSupported
+from textual.binding import Binding
 from textual.widgets import Input, RichLog
 
 from pyrrhon.bootstrap import (
@@ -49,7 +51,8 @@ from pyrrhon.core.events import (
 from pyrrhon.core.mcp import MCPManager
 from pyrrhon.core.providers.llm import FallbackLLM
 from pyrrhon.core.session import Session
-from pyrrhon.tui.widgets import CodeViewer, StatusBar
+from pyrrhon.tui.editor import open_in_editor
+from pyrrhon.tui.widgets import StatusBar
 from pyrrhon.voice import VoiceController
 
 
@@ -65,7 +68,7 @@ def _redact_secret_echo(text: str) -> str:
 
 
 class TuiRenderer(EventRenderer):
-    """Core events as transcript writes and code-viewer jumps.
+    """Core events as transcript writes.
 
     Composition rather than inheritance on the App: PyrrhonApp already
     subclasses Textual's App, and mixing a second base into a Textual widget
@@ -98,14 +101,14 @@ class TuiRenderer(EventRenderer):
         self._transcript.write(Text(f"→ {event.name}({event.args})", style="dim"))
 
     def on_citation(self, event: Citation) -> None:
-        # Clickable as well as viewer-linked: the pane shows it here, but a
-        # citation is also how the user gets the line open in their editor.
+        # Two independent routes to the same line, so a terminal without
+        # OSC 8 and a machine without $EDITOR each still have one (D2).
         uri = citation_uri(self._app.repo_root, event)
         label = f"📍 {event.file}:{event.line}"
         self._transcript.write(
             Text(label, style=f"green link {uri}" if uri else "green")
         )
-        self._app.show_citation(event)
+        self._app.record_citation(event)
 
     def on_artifact(self, event: ScreenArtifact) -> None:
         # First real emitter is M14's orientation brief; rendered plainly
@@ -124,17 +127,13 @@ class TuiRenderer(EventRenderer):
 class PyrrhonApp(App):
     TITLE = "Pyrrhon"
 
+    BINDINGS = [
+        Binding("ctrl+o", "open_citation", "open citation"),
+    ]
+
     CSS = """
-    #panes {
-        height: 1fr;
-    }
     #transcript {
-        width: 3fr;
-        padding: 0 1;
-    }
-    CodeViewer {
-        width: 2fr;
-        border-left: solid $accent;
+        height: 1fr;
         padding: 0 1;
     }
     StatusBar {
@@ -159,6 +158,9 @@ class PyrrhonApp(App):
         self.mcp = mcp
         self.plugins = plugins or []
         self.last_citation: Citation | None = None
+        # Injection point, not indirection for its own sake: the pilot has no
+        # terminal to hand an editor, so the tests swap this for a recorder.
+        self._open_editor = open_in_editor
         self.last_command_response: str | None = None
         self._start_voice = start_voice
         self._renderer = TuiRenderer(self)
@@ -180,7 +182,7 @@ class PyrrhonApp(App):
 
     def _on_voice_event(self, event) -> None:
         # Bridge events arrive on the same asyncio loop Textual runs on;
-        # hand them to the normal renderer (citations jump the code viewer,
+        # hand them to the normal renderer (citations are recorded,
         # TruncateSpeech marks the transcript).
         self.call_later(self._render_event, event)
 
@@ -196,9 +198,7 @@ class PyrrhonApp(App):
         return self.session.history
 
     def compose(self) -> ComposeResult:
-        with Horizontal(id="panes"):
-            yield RichLog(id="transcript", wrap=True, markup=True)
-            yield CodeViewer(id="code-viewer")
+        yield RichLog(id="transcript", wrap=True, markup=True)
         yield StatusBar(id="status-bar")
         yield Input(placeholder="Ask about the repo — or /help", id="prompt")
 
@@ -221,10 +221,27 @@ class PyrrhonApp(App):
         if self._start_voice:
             self.notify(self.voice.start())
 
-    def show_citation(self, citation: Citation) -> None:
-        """Record the citation and jump the code viewer to it."""
+    def record_citation(self, citation: Citation) -> None:
+        """Remember the most recent citation; ctrl+o and /code both read it."""
         self.last_citation = citation
-        self.query_one(CodeViewer).show(citation, self.repo_root)
+
+    def action_open_citation(self) -> None:
+        """ctrl+o: the keyboard half of D2's two routes to a cited line."""
+        citation = self.last_citation
+        if citation is None:
+            self.notify("No citation yet — ask about the code.")
+            return
+        try:
+            with self.suspend():
+                message = self._open_editor(self.repo_root, citation)
+        except SuspendNotSupported:
+            # Headless drivers and Textual Web. A GUI editor never wanted the
+            # terminal, so running it unsuspended beats refusing to open.
+            message = self._open_editor(self.repo_root, citation)
+        if message:
+            self.notify(
+                message, severity="error" if message.startswith("ERROR") else "warning"
+            )
 
     def refresh_status(self) -> None:
         fast = getattr(self.agent.llm, "model", "unknown")

@@ -1,58 +1,15 @@
-"""Custom widgets for the Pyrrhon TUI: the code viewer and the status bar.
+"""The status bar. The code viewer used to live here too; see D1.
 
-Channel code — small sync file reads here are acceptable (the core/ hard
-rule about asyncio.to_thread targets core/); M3 revisits if profiling says
-otherwise.
+A permanent half-screen source window was the wrong answer to "where is
+that": it showed one location, cost 40% of the width on every turn
+including the ones that cite nothing, and duplicated the editor the user
+already has open. Its containment guard is not lost — the same check lives
+in `citation_uri`, which `editor.open_in_editor` calls.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from rich.syntax import Syntax
 from textual.widgets import Static
-
-from pyrrhon.core.events import Citation
-
-CONTEXT_LINES = 15  # lines shown above and below the cited line
-
-
-class CodeViewer(Static):
-    """Right-hand pane: syntax-highlighted view of the most recent citation."""
-
-    def __init__(self, **kwargs):
-        super().__init__("No citation yet — ask about the code.", **kwargs)
-        self.current_file: str | None = None
-        self.current_line: int | None = None
-
-    def show(self, citation: Citation, root: Path) -> None:
-        # Guard: ensure citation path stays inside root (mirrors repo-tools containment rule).
-        path = (root / citation.file).resolve()
-        try:
-            path.relative_to(root.resolve())
-        except ValueError:
-            self.update(f"ERROR: citation escapes the repo: {citation.file}")
-            return
-        try:
-            source = path.read_text(encoding="utf-8", errors="replace")
-        except OSError as exc:
-            self.update(f"ERROR: could not read {citation.file}: {exc}")
-            return
-        line = citation.line or 1
-        # "Centered": a symmetric window around the cited line. The pane's
-        # height varies with the terminal, so a fixed window is the stable
-        # approximation; the cited line itself is highlighted.
-        window = (max(1, line - CONTEXT_LINES), line + CONTEXT_LINES)
-        syntax = Syntax(
-            source,
-            lexer=Syntax.guess_lexer(str(path), code=source),
-            line_numbers=True,
-            line_range=window,
-            highlight_lines={line},
-        )
-        self.current_file = citation.file
-        self.current_line = line
-        self.update(syntax)
 
 
 class StatusBar(Static):

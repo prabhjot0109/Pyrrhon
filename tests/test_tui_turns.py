@@ -6,7 +6,6 @@ from pyrrhon.bootstrap import build_agent
 from pyrrhon.core.events import Citation
 from pyrrhon.core.providers.llm import LLMReply, ToolCall
 from pyrrhon.tui.app import PyrrhonApp
-from pyrrhon.tui.widgets import CodeViewer
 from tests.helpers import FakeLLM
 
 
@@ -25,7 +24,7 @@ async def submit(app: PyrrhonApp, pilot, text: str) -> None:
     await pilot.pause()
 
 
-async def test_turn_streams_speech_citation_and_code_jump(sample_repo: Path):
+async def test_turn_streams_speech_and_records_the_citation(sample_repo: Path):
     replies = [
         LLMReply(
             tool_calls=(
@@ -42,7 +41,6 @@ async def test_turn_streams_speech_citation_and_code_jump(sample_repo: Path):
             "content": "greet is defined at .",
         }
         assert app.last_citation == Citation(file="utils/helpers.py", line=1)
-        assert app.query_one(CodeViewer).current_line == 1
         prompt = app.query_one("#prompt", Input)
         assert not prompt.disabled and prompt.has_focus  # ready for the next turn
 

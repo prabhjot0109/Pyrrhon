@@ -5,7 +5,7 @@ from textual.widgets import Input, RichLog
 from pyrrhon.bootstrap import build_agent
 from pyrrhon.core.events import Citation
 from pyrrhon.tui.app import PyrrhonApp
-from pyrrhon.tui.widgets import CodeViewer, StatusBar
+from pyrrhon.tui.widgets import StatusBar
 from tests.helpers import FakeLLM
 
 
@@ -16,40 +16,49 @@ def make_app(repo: Path) -> PyrrhonApp:
     return PyrrhonApp(repo_root=repo, agent=agent)
 
 
-async def test_layout_panes_status_and_focused_input(sample_repo: Path):
+async def test_layout_is_one_full_width_column(sample_repo: Path):
     app = make_app(sample_repo)
     async with app.run_test(size=(120, 40)):
-        assert app.query_one("#transcript", RichLog) is not None
-        assert app.query_one(CodeViewer) is not None
+        transcript = app.query_one("#transcript", RichLog)
+        assert transcript is not None
+        # D1: the transcript owns the full width, with nothing beside it.
+        # outer_size, not size: the content region is 118 because of the
+        # one-column padding, and padding is not another pane.
+        assert transcript.outer_size.width == 120
         assert app.query_one("#prompt", Input).has_focus
         assert "mode: understand" in app.query_one(StatusBar).status_text
 
 
-async def test_show_citation_jumps_code_viewer(sample_repo: Path):
+
+async def test_ctrl_o_opens_the_last_citation(sample_repo: Path):
     app = make_app(sample_repo)
+    seen: list[tuple[Path, Citation]] = []
+    app._open_editor = lambda root, cit: seen.append((root, cit)) or None
     async with app.run_test(size=(120, 40)) as pilot:
-        app.show_citation(Citation(file="utils/helpers.py", line=1))
+        app.record_citation(Citation(file="utils/helpers.py", line=12))
+        await pilot.press("ctrl+o")
         await pilot.pause()
-        viewer = app.query_one(CodeViewer)
-        assert viewer.current_file == "utils/helpers.py"
-        assert viewer.current_line == 1
-        assert app.last_citation == Citation(file="utils/helpers.py", line=1)
+        assert len(seen) == 1
+        assert seen[0][1] == Citation(file="utils/helpers.py", line=12)
 
 
-async def test_show_citation_unreadable_file_is_error_not_crash(sample_repo: Path):
+async def test_ctrl_o_without_a_citation_does_not_kill_the_app(sample_repo: Path):
     app = make_app(sample_repo)
+    called = []
+    app._open_editor = lambda root, cit: called.append(cit) or None
     async with app.run_test(size=(120, 40)) as pilot:
-        app.show_citation(Citation(file="does/not/exist.py", line=3))
+        await pilot.press("ctrl+o")
         await pilot.pause()
-        viewer = app.query_one(CodeViewer)
-        assert viewer.current_file is None  # nothing loaded, app still alive
+        assert called == []                       # nothing to open, nothing run
+        assert app.query_one("#prompt", Input) is not None   # still alive
 
 
-async def test_show_citation_escaping_path_is_rejected(sample_repo: Path):
+async def test_ctrl_o_surfaces_the_editors_complaint(sample_repo: Path):
+    """A failure to open is a notification, never a dead app."""
     app = make_app(sample_repo)
+    app._open_editor = lambda root, cit: "ERROR: could not run vim: nope"
     async with app.run_test(size=(120, 40)) as pilot:
-        app.show_citation(Citation(file="../../outside.py", line=1))
+        app.record_citation(Citation(file="utils/helpers.py", line=1))
+        await pilot.press("ctrl+o")
         await pilot.pause()
-        viewer = app.query_one(CodeViewer)
-        assert viewer.current_file is None  # escape rejected, app still alive
-        assert "escapes the repo" in str(viewer.render())
+        assert app.query_one("#prompt", Input) is not None
