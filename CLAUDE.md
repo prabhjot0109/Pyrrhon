@@ -44,16 +44,24 @@ that must stay true.
 | `pyrrhon/config/` | Settings, credentials, trust grants, setup wizard. |
 | `pyrrhon/plugins/` | Plugin discovery and loading. |
 
-**The layering rule: `pyrrhon/core/` and `pyrrhon/config/` import nothing from
-`tui`, `voice`, `repl`, `commands`, or `cli`.** Channels depend on the core, and
-`bootstrap.py` sits above every channel. Verify with:
+**The layering rule: `pyrrhon/core/` and `pyrrhon/config/` take no import-time
+dependency on `tui`, `voice`, `repl`, `commands`, or `cli`.** Channels depend on
+the core, and `bootstrap.py` sits above every channel. Verify with:
 
 ```bash
-grep -rn "from pyrrhon\.\(tui\|voice\|repl\|commands\|cli\)" pyrrhon/core/ pyrrhon/config/
+grep -rn "^from pyrrhon\.\(tui\|voice\|repl\|commands\|cli\)" pyrrhon/core/ pyrrhon/config/
 ```
 
 That should print nothing. If it prints something, that is the bug, not a style
 question.
+
+Note the `^`, which is the rule stated precisely rather than approximately.
+Drop it and the grep matches `catalog._providers`, whose import of
+`voice/registry.py` is deliberately **function-local**: nothing runs until a
+menu is rendered, so `config/` still imports without the audio stack, which is
+what the rule is protecting. An unanchored grep reads like a break to whoever
+runs it next. The same care applies to the pipecat exception in
+`core/providers/adapters.py` — see the M15b notes below.
 
 ### How to add a tool
 

@@ -251,3 +251,63 @@ def test_symbol_context_is_gated_on_knowing_an_identifier(agent):
     description = agent.tools["symbol_context"].description
     assert "exact identifier" in description
     assert "grep" in description
+
+
+# -- The layering rule, enforced rather than documented -----------------------
+
+CHANNEL_PACKAGES = ("tui", "voice", "repl", "commands", "cli")
+
+
+def _module_level_imports(source: str) -> list[str]:
+    """Names imported at module scope. Function-local imports are excluded on
+    purpose: they are the documented escape hatch, because what the rule
+    protects is that core/ and config/ stay IMPORTABLE without a channel."""
+    import ast
+
+    tree = ast.parse(source)
+    names = []
+    for node in tree.body:  # top level only, never ast.walk
+        if isinstance(node, ast.Import):
+            names += [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names.append(node.module)
+    return names
+
+
+def test_core_and_config_take_no_import_time_dependency_on_a_channel():
+    """CLAUDE.md calls this the one thing that must stay true, and until now it
+    was checked by a grep someone had to remember to run.
+
+    The pipecat exception in core/providers/adapters.py has had a test since
+    M15b; the rule that exception is an exception TO did not. This is that
+    test, and it is the reason a doc grep is documentation and not enforcement.
+    """
+    import pyrrhon.config
+    import pyrrhon.core
+
+    banned = {f"pyrrhon.{name}" for name in CHANNEL_PACKAGES}
+    offenders = []
+    for package in (pyrrhon.core, pyrrhon.config):
+        root = Path(package.__file__).parent
+        for path in root.rglob("*.py"):
+            source = path.read_text(encoding="utf-8")
+            for name in _module_level_imports(source):
+                if name in banned or any(name.startswith(b + ".") for b in banned):
+                    offenders.append(f"{path.relative_to(root.parent)}: {name}")
+    assert not offenders, (
+        "core/ and config/ must import no channel at module scope:\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_the_escape_hatch_this_rule_allows_is_still_the_only_one():
+    """config/catalog.py reads the voice table inside a function so that a menu
+    render pays for it and an import does not. Pinned because the previous
+    check was an unanchored grep that matched this line and therefore looked
+    like a violation — which is how a correct exception gets 'fixed'."""
+    import inspect
+
+    from pyrrhon.config import catalog
+
+    assert "from pyrrhon.voice.registry import" in inspect.getsource(catalog._providers)
+    assert "from pyrrhon.voice" not in catalog.__dict__.get("__doc__", "")

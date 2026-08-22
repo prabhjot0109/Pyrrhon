@@ -69,10 +69,14 @@ class GroundedText:
 
 
 def _literal(value: str) -> Callable[[re.Match[str]], str]:
-    """A re.sub replacement that inserts `value` verbatim.
+    r"""A re.sub replacement that inserts `value` verbatim.
 
     A function, not a string: a Windows path in a string replacement would be
     read as regex escapes (\g, \1) and mangle the citation it is repairing.
+
+    Raw docstring for the same reason it is describing: unescaped, `\g` is an
+    invalid escape sequence, which is a SyntaxWarning today and a SyntaxError
+    in a later Python.
     """
     return lambda _match: value
 
