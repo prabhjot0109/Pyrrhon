@@ -16,11 +16,13 @@ currently run, but it may never imply that it can.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import os
-import re
+import pathlib
+import sys
 from dataclasses import dataclass
-from importlib import metadata
+from functools import lru_cache
 
 
 @dataclass(frozen=True)
@@ -76,38 +78,82 @@ def _providers(kind: str):
     return stt_providers() if kind == "stt" else tts_providers()
 
 
-def _extra_satisfied(extra: str) -> bool:
-    """True if every distribution `pipecat-ai[extra]` pulls in is installed.
+def _dependencies_present(module: str) -> bool:
+    """True if everything `module` imports at the top level is installed.
 
     Locating the module is NOT enough, and getting this wrong is the whole
-    failure this function exists to prevent: pipecat ships every service
-    module in the base wheel, so find_spec succeeds for providers whose
-    third-party dependencies are absent — the module imports onnxruntime (or
-    whatever) at import time and blows up. Asking pipecat's own metadata which
-    distributions the extra requires answers "can this actually run" exactly,
-    with no imports and no second list for someone to forget to update.
+    failure this function exists to prevent: pipecat ships every service module
+    in the base wheel, so find_spec succeeds for providers whose third-party
+    dependencies are absent — the module imports onnxruntime (or whatever) at
+    import time and blows up.
+
+    Asking the MODULE what it imports, rather than asking pipecat's metadata
+    what an extra pulls in, is both cheaper and exactly right, because an extra
+    is coarser than a row. `pipecat-ai[deepgram]` covers two modules with
+    different needs: the STT service imports the vendor SDK, the TTS service is
+    plain HTTP over aiohttp and runs with nothing extra installed. The metadata
+    question marked Deepgram TTS uninstallable while tier 3 was making it
+    speak.
+
+    Full dotted paths, never just the root package, and that is load-bearing:
+    `google` is a namespace package, so find_spec("google") succeeds on a
+    machine with nothing under it and Gemini TTS would be reported ready when
+    it cannot import. Checking `google.api_core` is what keeps this honest.
+
+    Parsed, not imported — importing is what we are trying to avoid finding out
+    the hard way.
     """
-    try:
-        requirements = metadata.requires("pipecat-ai") or []
-    except metadata.PackageNotFoundError:
-        return False
-    marker = f'extra == "{extra}"'
-    names = [
-        _requirement_name(req) for req in requirements
-        if marker in req and not req.startswith("pipecat-ai[")
-    ]
-    for name in names:
+    for name in _imports_of(module):
         try:
-            metadata.version(name)
-        except metadata.PackageNotFoundError:
+            if importlib.util.find_spec(name) is None:
+                return False
+        except (ImportError, ValueError):
             return False
     return True
 
 
-def _requirement_name(requirement: str) -> str:
-    """'kokoro-onnx<1,>=0.5.0; extra == "kokoro"' -> 'kokoro-onnx'."""
-    head = requirement.split(";", 1)[0].strip()
-    return re.split(r"[<>=!~\[\s(]", head, maxsplit=1)[0]
+def _toplevel_imports(source: str) -> set[str]:
+    """Every non-stdlib, non-pipecat module `source` imports by absolute path."""
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            names |= {alias.name for alias in node.names}
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names.add(node.module)
+    return {
+        name for name in names
+        if name.split(".")[0] not in sys.stdlib_module_names
+        and name.split(".")[0] != "pipecat"
+    }
+
+
+@lru_cache(maxsize=None)
+def _imports_of(module: str) -> frozenset[str]:
+    """What `module` imports, read off disk once per process.
+
+    The read-and-parse is cached, the find_spec lookups in the caller are not:
+    what a module imports cannot change while Pyrrhon runs, but whether those
+    imports resolve can, if the user installs an extra mid-session.
+
+    A module that is missing or unreadable yields the sentinel below, so the
+    caller reports it unrunnable rather than vacuously fine.
+    """
+    try:
+        spec = importlib.util.find_spec(module)
+    except ModuleNotFoundError:
+        return _UNREADABLE
+    if spec is None or not spec.origin:
+        return _UNREADABLE
+    try:
+        source = pathlib.Path(spec.origin).read_text(encoding="utf-8")
+        return frozenset(_toplevel_imports(source))
+    except (OSError, SyntaxError, ValueError):
+        return _UNREADABLE  # a menu render must never raise over one bad row
+
+
+# A module name that cannot resolve, so an unreadable module fails the check
+# instead of passing it with an empty import set.
+_UNREADABLE = frozenset({"pyrrhon.this.module.could.not.be.read"})
 
 
 def _installed(module: str) -> bool:
@@ -130,9 +176,7 @@ def availability(provider) -> str:
     fewer rows, and the alternative to labelling it is claiming a readiness
     nobody checked. Honest beats broad, and this is what makes it honest.
     """
-    runnable = _installed(provider.module) and (
-        provider.extra is None or _extra_satisfied(provider.extra)
-    )
+    runnable = _installed(provider.module) and _dependencies_present(provider.module)
     if not runnable:
         if provider.extra:
             return f'install: uv add "pipecat-ai[{provider.extra}]"'

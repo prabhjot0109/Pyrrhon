@@ -54,7 +54,7 @@ def test_a_row_no_tier_3_run_has_touched_says_unverified(monkeypatch):
     """
     inworld = find("tts", "inworld")
     monkeypatch.setattr("pyrrhon.config.catalog._installed", lambda module: True)
-    monkeypatch.setattr("pyrrhon.config.catalog._extra_satisfied", lambda extra: True)
+    monkeypatch.setattr("pyrrhon.config.catalog._dependencies_present", lambda m: True)
     monkeypatch.setenv("INWORLD_API_KEY", "k")
     assert not inworld.verified
     assert availability(inworld) == "ready, unverified"
@@ -91,12 +91,34 @@ def test_a_present_module_with_an_unsatisfied_extra_is_not_ready(monkeypatch):
     """
     kokoro = find("tts", "kokoro")
     monkeypatch.setattr("pyrrhon.config.catalog._installed", lambda module: True)
-    monkeypatch.setattr("pyrrhon.config.catalog._extra_satisfied", lambda extra: False)
+    monkeypatch.setattr("pyrrhon.config.catalog._dependencies_present", lambda m: False)
     assert availability(kokoro) == 'install: uv add "pipecat-ai[kokoro]"'
 
 
-def test_extra_satisfaction_is_read_from_pipecats_metadata():
-    from pyrrhon.config.catalog import _extra_satisfied
+def test_runnability_is_read_from_what_the_module_itself_imports():
+    """Not from what pipecat says the extra pulls in — an extra is coarser than
+    a row. `pipecat-ai[deepgram]` covers a TTS service that is plain HTTP and an
+    STT service that needs the vendor SDK, and the metadata question marked the
+    TTS one uninstallable while tier 3 was making it speak.
+    """
+    from pyrrhon.config.catalog import _dependencies_present
 
-    # piper is in our `voice` extra and installed in this environment.
-    assert _extra_satisfied("piper") is True
+    assert _dependencies_present("pipecat.services.piper.tts") is True
+    assert _dependencies_present("pipecat.services.deepgram.tts") is True
+    assert _dependencies_present("pipecat.services.deepgram.stt") is False
+    assert _dependencies_present("pipecat.services.nowhere.at_all") is False
+
+
+def test_a_namespace_package_is_not_mistaken_for_an_installed_one():
+    """The trap that would have reintroduced the exact lie availability()
+    prevents: `google` is a namespace package, so find_spec("google") succeeds
+    on a machine with nothing under it. Gemini TTS imports `google.api_core`,
+    and only the full dotted path tells the truth about it.
+    """
+    from pyrrhon.config.catalog import _dependencies_present, _toplevel_imports
+
+    source = "from google.api_core import x\nimport os\nimport pipecat.frames\n"
+    assert _toplevel_imports(source) == {"google.api_core"}, (
+        "root-only would have said {'google'}, and stdlib/pipecat must drop out"
+    )
+    assert _dependencies_present("pipecat.services.google.tts") is False

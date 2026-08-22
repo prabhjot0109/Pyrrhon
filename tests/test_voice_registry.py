@@ -162,8 +162,10 @@ def test_tier2_optional_providers_name_an_extra_users_can_install():
 def test_tier2_every_named_extra_is_one_pipecat_actually_declares():
     """A typo'd extra would render an install command that cannot work.
 
-    It is also what makes _extra_satisfied safe: an unknown extra matches no
-    requirement and would therefore look vacuously satisfied.
+    availability() no longer reads pipecat's extra metadata — it asks each
+    module what it imports, which is finer-grained. The extra name survives as
+    the thing the install command tells the user to run, and this is the only
+    check left on it.
     """
     from importlib import metadata
 
