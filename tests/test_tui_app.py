@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from textual.widgets import Input, RichLog, Static
+from textual.containers import VerticalScroll
+from textual.widgets import Input, Static
 
 from pyrrhon.bootstrap import build_agent
 from pyrrhon.core.events import Citation
@@ -19,7 +20,7 @@ def make_app(repo: Path) -> PyrrhonApp:
 async def test_layout_is_one_full_width_column(sample_repo: Path):
     app = make_app(sample_repo)
     async with app.run_test(size=(120, 40)):
-        transcript = app.query_one("#transcript", RichLog)
+        transcript = app.query_one("#transcript", VerticalScroll)
         assert transcript is not None
         # D1: the transcript owns the full width, with nothing beside it.
         # outer_size, not size: the content region is 118 because of the
@@ -86,14 +87,24 @@ async def test_the_theme_is_registered_and_selected(sample_repo: Path):
 
 
 def _transcript_text(app) -> str:
-    """What is actually on the transcript, as one string."""
-    return "\n".join(strip.text for strip in app.query_one("#transcript", RichLog).lines)
+    """Everything on the transcript, as one string.
+
+    Walks the mounted rows rather than a line buffer: since D3 the
+    transcript is a widget tree, and that is the whole point of it.
+    """
+    from pyrrhon.tui.messages import Row
+
+    return chr(10).join(
+        str(getattr(row.body(), "content", ""))
+        for row in app.query(Row)
+    )
 
 
 async def test_ctrl_l_clears_the_screen_not_the_session(sample_repo: Path):
     app = make_app(sample_repo)
     async with app.run_test(size=(120, 40)) as pilot:
-        app.query_one("#transcript", RichLog).write("something to wipe")
+        from pyrrhon.tui.messages import NoticeRow
+        app.query_one("#transcript", VerticalScroll).mount(NoticeRow("something to wipe"))
         await pilot.pause()
         assert "something to wipe" in _transcript_text(app)
         await pilot.press("ctrl+l")

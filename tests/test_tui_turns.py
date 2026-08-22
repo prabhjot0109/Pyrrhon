@@ -1,12 +1,12 @@
 from pathlib import Path
 
-from textual.widgets import Input
+from textual.widgets import Input, Markdown
 
 from pyrrhon.bootstrap import build_agent
-from pyrrhon.core.events import Citation
+from pyrrhon.core.events import Citation, SpeechChunk
 from pyrrhon.core.providers.llm import LLMReply, ToolCall
 from pyrrhon.tui.app import PyrrhonApp
-from tests.helpers import FakeLLM
+from tests.helpers import FakeLLM, StreamingFakeLLM
 
 
 def make_app(replies, repo_root: Path) -> tuple[PyrrhonApp, FakeLLM]:
@@ -77,3 +77,73 @@ async def test_turn_failure_reports_error_and_recovers(sample_repo: Path):
         await submit(app, pilot, "hello")
         prompt = app.query_one("#prompt", Input)
         assert not prompt.disabled and prompt.has_focus  # session survived the failed turn
+
+
+# -- Phase 2: the transcript -----------------------------------------------
+
+
+async def test_a_three_sentence_answer_is_one_document(sample_repo: Path):
+    """The regression test for defect 2.
+
+    The core selects the sentence splitter whenever voice is active, and the
+    TUI used to call Markdown() once per chunk — so a three-sentence answer
+    was three stacked documents, each with its own padding. StreamingFakeLLM
+    is what puts the agent on the streaming path, which is where the splitter
+    actually runs; the chunk count is asserted so this proves the screen
+    coalesced three chunks rather than that the splitter stopped splitting.
+    """
+    body = "First sentence. Second sentence. Third sentence."
+    llm = StreamingFakeLLM([(list(body), LLMReply(text=body))])
+    agent = build_agent(sample_repo, llm=llm, home=sample_repo.parent)
+    agent.voice_active = True
+    app = PyrrhonApp(repo_root=sample_repo, agent=agent)
+
+    chunks: list[str] = []
+    original = app._render_event
+
+    def counting(event):
+        if isinstance(event, SpeechChunk):
+            chunks.append(event.text)
+        original(event)
+
+    app._render_event = counting
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await submit(app, pilot, "tell me three things")
+        await pilot.pause()
+        assert len(chunks) >= 3, f"the splitter should still split: {chunks}"
+        speech = list(app.query("AssistantRow.speech"))
+        assert len(speech) == 1, "one turn, one prose row"
+        assert len(list(speech[0].query(Markdown))) == 1, "one markdown document"
+
+
+async def test_two_tool_calls_produce_two_resolved_rows(sample_repo: Path):
+    """Defect 6: ToolCallFinished was dropped by every screen channel, so a
+    user learned a tool started and never learned whether it worked."""
+    from pyrrhon.tui.messages import ToolRow
+
+    replies = [
+        LLMReply(tool_calls=(
+            ToolCall(id="c1", name="read_file", arguments={"path": "utils/helpers.py"}),
+            ToolCall(id="c2", name="read_file", arguments={"path": "main.py"}),
+        )),
+        LLMReply(text="Both read."),
+    ]
+    app, fake = make_app(replies, sample_repo)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await submit(app, pilot, "read both files")
+        await pilot.pause()
+        rows = list(app.query(ToolRow))
+        assert len(rows) == 2, "one row per call, not a second row on finish"
+        assert all(row.state != "running" for row in rows), "both resolved"
+
+
+async def test_a_hedge_leaves_the_prose_for_the_warning_rail(sample_repo: Path):
+    """A hedge is a different epistemic claim from the prose it trails."""
+    from pyrrhon.core.grounding.gate import HEDGE
+    from pyrrhon.tui.app import split_hedge
+
+    prose, hedge = split_hedge(f"It lives in the loop. {HEDGE}")
+    assert prose == "It lives in the loop."
+    assert hedge == HEDGE
+    assert split_hedge("No hedge here.") == ("No hedge here.", "")

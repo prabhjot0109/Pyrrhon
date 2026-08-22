@@ -9,14 +9,16 @@ the same loop carries audio (spec: real-time discipline).
 
 from __future__ import annotations
 
+import asyncio
+import time
 from pathlib import Path
 
-from rich.markdown import Markdown
 from rich.text import Text
 from textual import on
 from textual.app import App, ComposeResult, SuspendNotSupported
 from textual.binding import Binding
-from textual.widgets import Footer, Header, Input, RichLog, Static
+from textual.containers import VerticalScroll
+from textual.widgets import Footer, Header, Input, Markdown, Static
 
 from pyrrhon.bootstrap import (
     orient_in_background,
@@ -43,15 +45,25 @@ from pyrrhon.core.events import (
     Citation,
     ScreenArtifact,
     SpeechChunk,
+    ToolCallFinished,
     ToolCallStarted,
     Transcription,
     TruncateSpeech,
     VoiceNotice,
 )
+from pyrrhon.core.grounding.gate import HEDGE, LINE_HEDGE, LINE_UNSEEN_HEDGE
 from pyrrhon.core.mcp import MCPManager
 from pyrrhon.core.providers.llm import FallbackLLM
 from pyrrhon.core.session import Session
 from pyrrhon.tui.editor import open_in_editor
+from pyrrhon.tui.messages import (
+    AssistantRow,
+    CitationRow,
+    InterruptRow,
+    NoticeRow,
+    ToolRow,
+    UserRow,
+)
 from pyrrhon.tui.theme import PYRRHON_THEME
 from pyrrhon.tui.widgets import StatusBar
 from pyrrhon.voice import VoiceController
@@ -68,8 +80,24 @@ def _redact_secret_echo(text: str) -> str:
     return text
 
 
+def split_hedge(text: str) -> tuple[str, str]:
+    """Separate a gate hedge from the prose it was appended to.
+
+    The gate appends one of three sentences to the speech when a reference
+    could not be verified. On screen those are a different kind of claim from
+    the prose, so they leave the paragraph and take the ⚠ rail. Imported from
+    the gate rather than restated here, so a reworded hedge cannot drift.
+    """
+    for hedge in (HEDGE, LINE_HEDGE, LINE_UNSEEN_HEDGE):
+        if text.endswith(hedge):
+            return text[: -len(hedge)].rstrip(), hedge
+        if text == hedge:
+            return "", hedge
+    return text, ""
+
+
 class TuiRenderer(EventRenderer):
-    """Core events as transcript writes.
+    """Core events as mounted transcript rows.
 
     Composition rather than inheritance on the App: PyrrhonApp already
     subclasses Textual's App, and mixing a second base into a Textual widget
@@ -80,49 +108,78 @@ class TuiRenderer(EventRenderer):
         self._app = app
 
     @property
-    def _transcript(self) -> RichLog:
-        return self._app.query_one("#transcript", RichLog)
+    def _transcript(self) -> VerticalScroll:
+        return self._app.query_one("#transcript", VerticalScroll)
+
+    def _mount(self, row) -> None:
+        self._transcript.mount(row)
 
     def on_transcription(self, event: Transcription) -> None:
-        # What STT heard — mirrors the typed "you>" so voice and text read
-        # the same in the transcript. The 🎙 marks it as spoken input.
-        self._transcript.write(Text(f"🎙 you> {event.text}", style="bold cyan"))
+        # What STT heard — mirrors the typed "you>" so voice and text read the
+        # same in the transcript. The 🎙 marks it as spoken input.
+        self._mount(UserRow(event.text, spoken=True))
 
     def on_voice_notice(self, event: VoiceNotice) -> None:
-        style = "bold red" if event.is_error else "yellow"
-        self._transcript.write(Text(event.text, style=style))
+        self._mount(NoticeRow(event.text, is_error=event.is_error))
         self._app.notify(
             event.text, severity="error" if event.is_error else "information"
         )
 
     def on_speech(self, event: SpeechChunk) -> None:
-        self._transcript.write(Markdown(event.text))
+        """One row per turn, not one per chunk (defect 2).
+
+        The core splits into sentences whenever voice is active, and this used
+        to render a whole Rich Markdown document per sentence, each with its
+        own padding. The first chunk of a turn opens a MarkdownStream; the
+        rest write into it.
+        """
+        text = event.text
+        prose, hedge = split_hedge(text)
+        if prose:
+            self._app.stream_speech(prose)
+        if hedge:
+            # A hedge is a different epistemic claim from the prose it trails,
+            # so it gets the ⚠ rail rather than a restyled span inside it.
+            self._mount(NoticeRow(hedge))
 
     def on_tool_started(self, event: ToolCallStarted) -> None:
-        self._transcript.write(Text(f"→ {event.name}({event.args})", style="dim"))
+        row = ToolRow(event.name, event.args)
+        self._app.track_tool_row(event.name, row)
+        self._mount(row)
+
+    def on_tool_finished(self, event: ToolCallFinished) -> None:
+        """Resolve the row on_tool_started created rather than mounting a
+        second one — the events arrive in pairs on one turn (defect 6)."""
+        row = self._app.claim_tool_row(event.name)
+        if row is None:
+            # A finish with no start: render it rather than drop it, which is
+            # the failure this hook exists to end.
+            self._mount(ToolRow(event.name, {}))
+            return
+        row.resolve(event.result_preview, self._app.tool_elapsed(row))
 
     def on_citation(self, event: Citation) -> None:
         # Two independent routes to the same line, so a terminal without
         # OSC 8 and a machine without $EDITOR each still have one (D2).
         uri = citation_uri(self._app.repo_root, event)
-        label = f"📍 {event.file}:{event.line}"
-        self._transcript.write(
-            Text(label, style=f"green link {uri}" if uri else "green")
-        )
+        label = f"{event.file}:{event.line}" if event.line else event.file
+        self._mount(CitationRow(Text(label, style=f"link {uri}" if uri else "")))
         self._app.record_citation(event)
 
     def on_artifact(self, event: ScreenArtifact) -> None:
         # First real emitter is M14's orientation brief; rendered plainly
         # until a channel needs per-kind treatment.
-        self._transcript.write(Markdown(event.content))
+        self._mount(AssistantRow(event.content))
 
     def on_question(self, event: AskUser) -> None:
-        # Design mode's Socratic question, rendered distinctly (spec: M6).
-        self._transcript.write(Text(f"? {event.question}", style="bold magenta"))
+        # Design mode's Socratic question (spec: M6). Pyrrhon speaking, so the
+        # assistant rail; bold is what marks it as a question needing an answer.
+        # A seventh glyph would break "six glyphs, one column".
+        self._mount(AssistantRow(f"**{event.question}**"))
 
     def on_interrupted(self, event: TruncateSpeech) -> None:
         # Voice barge-in: history was rewritten to what was actually heard.
-        self._transcript.write(Text("⏹ interrupted", style="dim"))
+        self._mount(InterruptRow())
 
 
 class PyrrhonApp(App):
@@ -162,6 +219,13 @@ class PyrrhonApp(App):
         self.mcp = mcp
         self.plugins = plugins or []
         self.last_citation: Citation | None = None
+        # One assistant row and one stream per turn (defect 2), and a FIFO of
+        # unresolved tool rows keyed by name, because the same tool can be in
+        # flight twice on one turn (M10 dispatches in parallel).
+        self._speech_row: AssistantRow | None = None
+        self._speech_stream = None
+        self._pending_tools: dict[str, list[tuple[ToolRow, float]]] = {}
+        self._tool_started_at: dict[ToolRow, float] = {}
         # Injection point, not indirection for its own sake: the pilot has no
         # terminal to hand an editor, so the tests swap this for a recorder.
         self._open_editor = open_in_editor
@@ -204,12 +268,19 @@ class PyrrhonApp(App):
     def compose(self) -> ComposeResult:
         yield Header()
         yield Static(id="splash")
-        yield RichLog(id="transcript", wrap=True, markup=True)
+        # D3: a VerticalScroll of mounted widgets, not a RichLog. A mounted
+        # row can be updated after the fact, which is the one structural
+        # reason a spinner, an elapsed timer and a resolving tool row are
+        # possible at all.
+        yield VerticalScroll(id="transcript")
         yield Input(placeholder="Ask about the repo — or /help", id="prompt")
         yield StatusBar(id="status-bar")
         yield Footer()
 
     def on_mount(self) -> None:
+        # New rows scroll into view on their own; a manual scroll up during
+        # streaming releases the anchor rather than fighting the user.
+        self.query_one("#transcript", VerticalScroll).anchor()
         self.refresh_status()
         self.query_one("#prompt", Input).focus()
         self._show_splash()
@@ -253,7 +324,9 @@ class PyrrhonApp(App):
 
     def action_clear_transcript(self) -> None:
         """ctrl+l: clear the screen, not the session. History is untouched."""
-        self.query_one("#transcript", RichLog).clear()
+        self.query_one("#transcript", VerticalScroll).remove_children()
+        self._speech_row = None
+        self._speech_stream = None
 
     async def action_help(self) -> None:
         """f1 routes through dispatch() so there is one execution path."""
@@ -293,8 +366,9 @@ class PyrrhonApp(App):
         if not text:
             return
         self._clear_splash()
-        transcript = self.query_one("#transcript", RichLog)
-        transcript.write(Text(f"you> {_redact_secret_echo(text)}", style="bold cyan"))
+        self.query_one("#transcript", VerticalScroll).mount(
+            UserRow(_redact_secret_echo(text))
+        )
 
         if await self._run_command(text) is not None:
             return
@@ -324,8 +398,9 @@ class PyrrhonApp(App):
         if response is None:
             return None
         self.last_command_response = response
-        style = "red" if response.startswith("ERROR") else "yellow"
-        self.query_one("#transcript", RichLog).write(Text(response, style=style))
+        self.query_one("#transcript", VerticalScroll).mount(
+            NoticeRow(response, is_error=response.startswith("ERROR"))
+        )
         self.refresh_status()  # /model may have swapped a slot
         return response
 
@@ -339,7 +414,7 @@ class PyrrhonApp(App):
 
     async def _agent_turn(self, user_text: str) -> None:
         """Consume the core event stream inside a worker — the UI never blocks."""
-        transcript = self.query_one("#transcript", RichLog)
+        transcript = self.query_one("#transcript", VerticalScroll)
         prompt = self.query_one("#prompt", Input)
         try:
             async for event in self.session.run_turn(user_text):
@@ -347,11 +422,68 @@ class PyrrhonApp(App):
         except Exception as exc:
             # A failed turn must not kill the session (Textual workers
             # default to exit_on_error=True): show it and hand back the prompt.
-            transcript.write(Text(f"ERROR: turn failed: {exc}", style="red"))
+            transcript.mount(NoticeRow(f"ERROR: turn failed: {exc}", is_error=True))
         finally:
+            # The stream is closed here and nowhere else, so an aborted or
+            # failed turn cannot leak one into the next turn's row.
+            await self._end_speech_stream()
+            self._pending_tools.clear()
             self.refresh_status()  # picks up the turn's latency measurement
             prompt.disabled = False
             prompt.focus()
+
+    # -- streaming prose and tool rows ------------------------------------
+
+    def stream_speech(self, text: str) -> None:
+        """Append prose to this turn's single assistant row.
+
+        The first chunk mounts the row and opens the stream; the rest write
+        into it. MarkdownStream coalesces high-frequency appends, which is
+        what removes defect 2 without the core changing its splitter.
+        """
+        if self._speech_row is None:
+            # Tagged so the turn's prose is distinguishable from an artifact
+            # row: a background ScreenArtifact can land mid-turn, and "one
+            # document per turn" is a claim about the prose, not the screen.
+            self._speech_row = AssistantRow(classes="speech")
+            self.query_one("#transcript", VerticalScroll).mount(self._speech_row)
+            self._speech_stream = Markdown.get_stream(self._speech_row.markdown)
+        self.call_later(self._speech_stream.write, text)
+
+    async def _end_speech_stream(self) -> None:
+        stream, self._speech_stream, self._speech_row = self._speech_stream, None, None
+        if stream is None:
+            return
+        try:
+            await stream.stop()
+        except asyncio.CancelledError:
+            # Not our cancellation. MarkdownStream.stop() cancels its own task
+            # and awaits it; the task suppresses the CancelledError and returns
+            # normally, which is precisely the case where asyncio marks that
+            # task cancelled anyway and re-raises here. Letting it escape the
+            # turn's finally leaves the prompt disabled forever.
+            #
+            # A real abort still gets through: esc cancels *this* task, and a
+            # pending cancellation on it is what cancelling() reports.
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                raise
+
+    def track_tool_row(self, name: str, row: ToolRow) -> None:
+        self._pending_tools.setdefault(name, []).append((row, time.monotonic()))
+
+    def claim_tool_row(self, name: str) -> ToolRow | None:
+        """The oldest unresolved row for this tool. Calls finish in order."""
+        queue = self._pending_tools.get(name)
+        if not queue:
+            return None
+        row, started = queue.pop(0)
+        self._tool_started_at[row] = started
+        return row
+
+    def tool_elapsed(self, row: ToolRow) -> float | None:
+        started = self._tool_started_at.pop(row, None)
+        return None if started is None else time.monotonic() - started
 
 
 def run_tui(repo: str, voice: bool = False, trust_repo: bool = False) -> None:
