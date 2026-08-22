@@ -30,7 +30,14 @@ that must stay true.
 | `pyrrhon/bootstrap.py` | Composition root. `build_agent` wires the tool belt, both LLM slots, the grounding gate, and the system prompt. `start_channel` runs the shared startup sequence. `load_channel_plugins` is the repo trust gate. |
 | `pyrrhon/channels.py` | `EVENT_HOOKS` plus the `EventRenderer` base. One dispatch table for every channel. |
 | `pyrrhon/repl.py` | Text channel (rich). |
-| `pyrrhon/tui/` | Textual channel: transcript, code viewer, status bar. |
+| `pyrrhon/tui/app.py` | Textual channel: App shell, bindings, actions, the turn worker. |
+| `pyrrhon/tui/renderer.py` | The one mapping from core events onto mounted rows. |
+| `pyrrhon/tui/turn.py` | `TurnView` — everything on screen that belongs to one turn, and nothing that outlives it. |
+| `pyrrhon/tui/messages.py` | The transcript's mountable rows and the evidence rail. |
+| `pyrrhon/tui/status.py` | Reactive status bar plus the instruments it renders. |
+| `pyrrhon/tui/theme.py` | The six colours. The only file under `tui/` with a hex value. |
+| `pyrrhon/tui/pyrrhon.tcss` | All layout and styling, by `$token`. |
+| `pyrrhon/tui/palette.py`, `prompt.py`, `editor.py`, `splash.py` | Command palette, multiline prompt, `$EDITOR` launch, startup splash. |
 | `pyrrhon/core/providers/registry.py` | The LLM provider table. Data only; `BUILTIN_PROVIDERS` and the wizard's menu derive from it. |
 | `pyrrhon/core/providers/adapters.py` | The one place `core/` may import pipecat, and only `pipecat.adapters`. Seam only so far. |
 | `pyrrhon/voice/registry.py` | The STT/TTS provider table. Data only; imports no Pipecat. |
@@ -248,6 +255,39 @@ loop is undeniable.
 
 Everything through M15b is implemented and tested, bar the one piece named
 under "Planned next". The parts worth knowing about before you change them:
+
+**The TUI redesign (2026-08-23).** The Textual channel had not been designed
+since M2 and had drifted into a channel that measured far more than it showed.
+It is now one column. The `CodeViewer` is deleted, not hidden (D1): a citation
+is a clickable `📍 path:line` row plus `ctrl+o`, which suspends the app and
+runs `$VISUAL`/`$EDITOR` at the line. The transcript is a `VerticalScroll` of
+mounted rows rather than a `RichLog`, and that one change is what makes every
+progress affordance possible — a `RichLog` line can never be updated, which
+was the structural reason a spinner, a resolving tool row and a streaming
+answer all had no cheap fix.
+
+Three things about it are load-bearing and easy to break. The theme is
+registered in `PyrrhonApp.__init__`, not `on_mount`, because `CSS_PATH` is
+parsed at startup against the *current* theme's variables and a later
+registration leaves every `$token` undefined. `TurnView.start()` is awaited,
+because `Widget.mount()` is asynchronous and an un-awaited working row is not
+yet `is_mounted` when the turn's first event arrives — which silently put the
+first tool row *below* the spinner and left the transcript out of order.
+And `TurnView._end_speech_stream` catches `CancelledError`: Textual's
+`MarkdownStream.stop()` cancels its own task and awaits it, the task
+suppresses the error and returns, and asyncio therefore marks that task
+cancelled and re-raises into the caller — escaping the turn's `finally` it
+stranded the prompt disabled forever. It re-raises only when the current task
+has a pending cancellation of its own, so `esc` still aborts.
+
+The evidence rail is the signature: one gutter column carrying the epistemic
+status of each row, and it is a widget rather than a character prepended to
+the body, which is what keeps it out of copied text and out of `history`.
+Colours are six named values in `theme.py` and nowhere else; a six-digit hex
+anywhere else under `tui/` is a bug a grep catches. `esc` aborts a turn, the
+status bar shows context fill and voice state, and `ctrl+p` searches the
+command registry live, so a plugin's command is findable without anything
+being told about it. The REPL keeps its own rendering on purpose.
 
 **LLM lane and vision (M15b).** LLM providers are rows in
 `core/providers/registry.py`; `BUILTIN_PROVIDERS` and the wizard's catalog are
