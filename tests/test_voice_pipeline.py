@@ -234,3 +234,37 @@ def test_tracing_degrades_when_the_otel_packages_are_absent(monkeypatch):
         telemetry=TelemetrySettings(otel_enabled=True, otlp_endpoint="http://x/v1")
     )
     _setup_tracing(settings)  # must not raise
+
+
+# -- Idle re-engagement wiring -----------------------------------------------
+
+async def test_the_idle_event_reaches_the_bridge():
+    """The half that was missing: UserTurnProcessor carried the timer, but
+    on_user_turn_idle had no handler, so [voice] idle_timeout_sec changed
+    nothing. This drives the event and checks a line comes back out."""
+    from pyrrhon.voice.pipeline import _wire_idle_reengagement
+
+    handlers = []
+
+    class FakeTurnProcessor:
+        def event_handler(self, name):
+            assert name == "on_user_turn_idle"
+
+            def register(fn):
+                handlers.append(fn)
+                return fn
+
+            return register
+
+    class FakeBridge:
+        def __init__(self):
+            self.prompts = 0
+
+        async def speak_idle_prompt(self):
+            self.prompts += 1
+
+    bridge = FakeBridge()
+    _wire_idle_reengagement(FakeTurnProcessor(), bridge)
+    assert len(handlers) == 1
+    await handlers[0](None)
+    assert bridge.prompts == 1

@@ -329,3 +329,56 @@ def test_tool_fillers_cover_the_whole_belt():
     from tests.test_safety import EXPECTED_BELT
 
     assert EXPECTED_BELT <= set(bridge_mod.TOOL_FILLERS)
+
+
+# -- Idle re-engagement ------------------------------------------------------
+#
+# [voice] idle_timeout_sec is off by default. These pin what happens when it
+# is not, because a config key whose handler is missing is a key that lies.
+
+async def test_idle_prompt_speaks_and_then_stops_nagging():
+    """The nag cap is the tuple's length, and it matters: pipecat rearms the
+    idle timer on every BotStoppedSpeakingFrame, so speaking restarts it."""
+    import pyrrhon.voice.bridge as bridge_mod
+
+    bridge, _session, seen = make_bridge([])
+    for _ in range(len(bridge_mod.IDLE_LINES) + 3):
+        await bridge.speak_idle_prompt()
+
+    spoken = [f.text for f in bridge.pushed if isinstance(f, TextFrame)]
+    assert spoken == list(bridge_mod.IDLE_LINES)
+    assert [e.text for e in seen if isinstance(e, SpeechChunk)] == spoken
+
+
+async def test_the_user_speaking_re_arms_the_idle_budget():
+    import pyrrhon.voice.bridge as bridge_mod
+
+    bridge, _session, _seen = make_bridge([LLMReply(text="Sure.")])
+    for _ in range(5):
+        await bridge.speak_idle_prompt()
+    await bridge._handle_frame(transcription("carry on"), DOWN)
+    await bridge._turn_task
+    bridge.pushed.clear()
+
+    await bridge.speak_idle_prompt()
+    spoken = [f.text for f in bridge.pushed if isinstance(f, TextFrame)]
+    assert spoken == [bridge_mod.IDLE_LINES[0]]
+
+
+async def test_no_idle_prompt_while_a_turn_is_running():
+    """Re-engaging over the agent's own answer would be worse than silence."""
+    bridge, _session, _seen = make_bridge([LLMReply(text="Thinking.")])
+    bridge._bot_speaking = True
+    await bridge.speak_idle_prompt()
+    assert not [f for f in bridge.pushed if isinstance(f, TextFrame)]
+
+
+def test_no_idle_line_can_carry_a_citation():
+    """Same static guard as TOOL_FILLERS: these bypass the gate too."""
+    import re
+
+    import pyrrhon.voice.bridge as bridge_mod
+
+    for text in bridge_mod.IDLE_LINES:
+        assert not re.search(r"\S+\.\w+:\d+", text), text
+        assert "{" not in text and "%" not in text, text

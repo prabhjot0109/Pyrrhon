@@ -105,6 +105,27 @@ TOOL_FILLERS = {
 }
 
 
+# Spoken when the user has gone quiet for [voice] idle_timeout_sec (off by
+# default). Distinct from FILLERS above, and the distinction is the whole
+# point: a filler covers an *agent-is-thinking* gap, this covers a
+# *user-has-gone-quiet* one. Pipecat's UserIdleController detects the silence
+# (Layer C); the line itself is Layer A, because an unprompted sentence about
+# the code is a grounding claim like any other.
+#
+# GROUNDING: same rule as TOOL_FILLERS — these bypass the gate, so they are
+# fixed, citation-free strings and interpolate nothing. The same test covers
+# both.
+#
+# The tuple's LENGTH is the nag cap. UserIdleController restarts its timer on
+# every BotStoppedSpeakingFrame, so speaking rearms it: without a cap an
+# unattended terminal would talk to itself forever. Two prompts, then silence
+# until the user actually says something.
+IDLE_LINES = (
+    "Still there? I can keep going, or dig into whichever part you want.",
+    "I'll leave it there — just say the word when you want to pick it up.",
+)
+
+
 def humanize_voice_error(text: str) -> str:
     """Turn a raw pipecat/provider ErrorFrame string into one actionable line.
 
@@ -138,6 +159,9 @@ class PyrrhonBridgeProcessor(FrameProcessor):
         self._bot_speaking = False
         self._spoke_this_turn = False
         self._filler_idx = 0
+        # How many re-engagement lines have been spoken since the user last
+        # said anything. Reset when a transcription starts a turn.
+        self._idle_prompts = 0
         # Name of the most recent tool this turn, so the filler can describe
         # what is actually happening. Reset per turn.
         self._last_tool: str | None = None
@@ -190,10 +214,29 @@ class PyrrhonBridgeProcessor(FrameProcessor):
         turn_running = self._turn_task is not None and not self._turn_task.done()
         return turn_running or self._bot_speaking
 
+    async def speak_idle_prompt(self) -> None:
+        """Re-engage after [voice] idle_timeout_sec of user silence.
+
+        Wired to UserTurnProcessor's on_user_turn_idle in pipeline.py. Silent
+        unless the config opts in, because an agent that speaks unprompted is a
+        personality choice, not a default.
+
+        Ephemeral like the filler: not registered with the PlaybackTracker, so
+        a barge-in never folds it into the assistant message in history. It is
+        an invitation to speak, not an answer.
+        """
+        if self._interruptible() or self._idle_prompts >= len(IDLE_LINES):
+            return
+        text = IDLE_LINES[self._idle_prompts]
+        self._idle_prompts += 1
+        self._on_event(SpeechChunk(text=text))
+        await self.push_frame(TextFrame(text))
+
     def _start_turn(self, text: str) -> None:
         text = text.strip()
         if not text:
             return
+        self._idle_prompts = 0  # the user is back; re-arm the full budget
         if self._turn_task is not None and not self._turn_task.done():
             # Defensive: a transcription raced ahead of its interruption.
             self._turn_task.cancel()

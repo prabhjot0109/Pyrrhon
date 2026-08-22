@@ -122,6 +122,25 @@ def _build_turn_processor(voice: VoiceSettings):
     )
 
 
+def _wire_idle_reengagement(turn, bridge: PyrrhonBridgeProcessor) -> None:
+    """Give the idle timer somewhere to fire.
+
+    UserTurnProcessor carries the timer but emits only an event; without a
+    handler, [voice] idle_timeout_sec is a config key that changes nothing.
+    Registered unconditionally: a timeout of 0 never starts the timer (see
+    pipecat's UserIdleController), so this is inert unless the user opts in.
+
+    The split is the one Phase 5 draws. Detecting the silence is Layer C and
+    Pipecat owns it; deciding what gets said is Layer A and lives in bridge.py
+    next to the tool fillers, because an unprompted sentence is subject to the
+    same grounding rule as any other.
+    """
+
+    @turn.event_handler("on_user_turn_idle")
+    async def _on_user_turn_idle(_processor) -> None:
+        await bridge.speak_idle_prompt()
+
+
 def _build_observers(voice: VoiceSettings) -> list:
     """Pipecat's per-service latency observers.
 
@@ -225,6 +244,7 @@ async def run_voice(
     turn = _build_turn_processor(voice)
     stages = [transport.input(), vad]
     if turn is not None:
+        _wire_idle_reengagement(turn, bridge)
         stages.append(turn)
     stages += [stt, bridge, tts, PlaybackObserver(tracker), transport.output()]
 
