@@ -30,6 +30,10 @@ class ProviderChoice:
     key_env: str | None          # None: keyless (local server / on-device model)
     default_model: str | None    # STT: model id; TTS: default voice; LLM: None
     note: str = ""
+    # What it would take to run this, from availability(). Empty for LLM rows:
+    # an OpenAI-compatible endpoint needs no extra, so the key is the whole
+    # story there and the wizard's own key check already tells it.
+    state: str = ""
 
 
 def llm_choices() -> tuple[ProviderChoice, ...]:
@@ -115,7 +119,17 @@ def _installed(module: str) -> bool:
 
 
 def availability(provider) -> str:
-    """One of: 'ready', 'needs <ENV>', or 'install: <command>'."""
+    """One of: 'ready', 'ready, unverified', 'needs <ENV>', 'install: <cmd>'.
+
+    `ready` is the strongest claim this file makes, so it means all three of
+    installed, keyed, and *smoke-tested against the live service* — the
+    provider.verified flag, which is set from a tier 3 run and nothing else.
+
+    The fourth state exists because Pyrrhon curates more providers than anyone
+    holds keys for. The alternative to shipping a row unverified is shipping
+    fewer rows, and the alternative to labelling it is claiming a readiness
+    nobody checked. Honest beats broad, and this is what makes it honest.
+    """
     runnable = _installed(provider.module) and (
         provider.extra is None or _extra_satisfied(provider.extra)
     )
@@ -125,7 +139,7 @@ def availability(provider) -> str:
         return "install: unavailable"
     if provider.key_env and not os.environ.get(provider.key_env):
         return f"needs {provider.key_env}"
-    return "ready"
+    return "ready" if getattr(provider, "verified", False) else "ready, unverified"
 
 
 def _to_choice(provider) -> ProviderChoice:
@@ -135,6 +149,7 @@ def _to_choice(provider) -> ProviderChoice:
         key_env=provider.key_env,
         default_model=provider.default_voice,
         note=provider.note,
+        state=availability(provider),
     )
 
 

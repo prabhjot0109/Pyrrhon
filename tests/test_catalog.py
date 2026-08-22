@@ -38,10 +38,35 @@ def test_every_choice_has_a_label_and_note():
 # -- availability: Pyrrhon may offer what it cannot run, never imply it can ---
 
 
-def test_keyless_installed_provider_is_ready(monkeypatch):
+def test_keyless_installed_smoke_tested_provider_is_ready(monkeypatch):
     piper = find("tts", "piper")
     monkeypatch.setattr("pyrrhon.config.catalog._installed", lambda module: True)
+    assert piper.verified, "piper is the keyless default; it has to be tier 3 green"
     assert availability(piper) == "ready"
+
+
+def test_a_row_no_tier_3_run_has_touched_says_unverified(monkeypatch):
+    """The spec's answer to curating 20 rows we cannot all live-test.
+
+    Installed and keyed is not the same as known to work: only tier 3 catches a
+    retired model id, so a row without one says so rather than borrowing the
+    confidence of the rows that have one.
+    """
+    inworld = find("tts", "inworld")
+    monkeypatch.setattr("pyrrhon.config.catalog._installed", lambda module: True)
+    monkeypatch.setattr("pyrrhon.config.catalog._extra_satisfied", lambda extra: True)
+    monkeypatch.setenv("INWORLD_API_KEY", "k")
+    assert not inworld.verified
+    assert availability(inworld) == "ready, unverified"
+
+
+def test_verified_is_never_claimed_for_a_row_that_cannot_run(monkeypatch):
+    """Install state outranks it: a smoke test that passed on someone else's
+    machine says nothing about whether the extra is present on this one."""
+    groq = find("tts", "groq")
+    assert groq.verified
+    monkeypatch.setattr("pyrrhon.config.catalog._installed", lambda module: False)
+    assert availability(groq).startswith("install:")
 
 
 def test_uninstalled_provider_names_the_command(monkeypatch):

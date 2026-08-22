@@ -41,8 +41,17 @@ def needs_setup(home: Path | None = None) -> bool:
 
 
 def _key_status(choice: ProviderChoice, stored: dict[str, str]) -> str:
+    """What the menu says about one row: the install state first, then the key.
+
+    choice.state is set for voice rows only, and it is what stops the wizard
+    offering a provider whose extra is absent as though a stored key were the
+    last thing missing. availability() cannot see credentials.toml, so a key
+    the wizard itself has stored still beats its "needs KEY" verdict here.
+    """
+    if choice.state and choice.state.startswith("install:"):
+        return choice.state
     if choice.key_env is None:
-        return "no key needed"
+        return choice.state or "no key needed"
     if os.environ.get(choice.key_env):
         return f"{choice.key_env} found in env"
     if choice.key_env in stored:
