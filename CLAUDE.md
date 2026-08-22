@@ -105,11 +105,41 @@ model can see is unknowable from here.
 Voice providers are a row in `VOICE_PROVIDERS` in `pyrrhon/voice/registry.py`
 — no code, and no catalog edit either, since `stt_choices()`/`tts_choices()` are
 derived from that table. `tests/test_voice_registry.py` verifies the class
-exists in the installed pipecat without importing it (tier 1), and that the
-extra is either bundled or surfaced as an install command (tier 2). Add no
-default model: where pipecat or the provider supplies one, pass nothing and
-inherit it. Tier 3 (`tests/test_voice_live.py -m live`) is the only tier that
-proves the thing actually works; run it before a release.
+exists in the installed pipecat without importing it (tier 1), that the class
+declares a `Settings` (tier 1 again, see below), and that the extra is either
+bundled or surfaced as an install command (tier 2). Add no default model: where
+pipecat or the provider supplies one, pass nothing and inherit it.
+
+The row carries **no kwarg-name columns, and must not grow them again.** Model
+and voice reach a service as `settings=Cls.Settings(model=…, voice=…)`, whose
+field names pipecat made uniform in 1.7.0; the old `model_kwarg`/`voice_kwarg`
+pair existed only to record that pipecat once disagreed with itself, and that
+disagreement is gone. `factory._settings` builds one sparse delta, which a
+service merges over its own store — so "only send what was configured, and
+inherit the rest" survived the migration unchanged. The three in-repo shims
+(`voice/gemini.py`, `voice/huggingface.py`) take `settings=` too, which is what
+leaves exactly one construction path.
+
+Set `verified=` only from a tier 3 run. Tier 3
+(`tests/test_voice_live.py -m live`) is the only tier that proves the thing
+actually works: it pushes one real utterance through each provider inside
+Pipecat's own `run_test` harness, and the STT half transcribes speech that Piper
+synthesized in the same session. It reads keys from `~/.pyrrhon/credentials.toml`
+as well as the environment, and borrows an account-specific voice or model id
+from your `[voice]` config when it names the same provider. Run it before a
+release and record the results in the M15a plan. `catalog.availability()`
+renders a row without that flag as `ready, unverified` rather than `ready`,
+which is what makes curating more providers than we hold keys for honest.
+
+`availability()` decides *runnable* by asking the module what it imports —
+`find_spec` over the full dotted paths in its source, never an import. Two
+things about that are load-bearing. It asks the **module**, not pipecat's
+extra metadata, because an extra is coarser than a row: `pipecat-ai[deepgram]`
+covers an STT service that needs the vendor SDK and a TTS service that is plain
+HTTP, and the metadata question told users to install something Deepgram TTS
+does not need. And it checks the **full dotted path**, because `google` is a
+namespace package — a root-only check reports Gemini TTS ready when it cannot
+import, which is the original lie wearing a new hat.
 
 Any OpenAI-compatible LLM endpoint still needs no code at all: users declare it
 under `[providers.<name>]`.
@@ -228,8 +258,16 @@ suggest a builtin, never aim it at a provider it declared. An image has no
 lines, so the evidence ledger records the path only, and deliberately does not
 mine read_image's output: a `path:line` inside a vision model's prose was never
 displayed to anyone. `core/providers/adapters.py` is the only place
-`pyrrhon/core/` may import pipecat, and only `pipecat.adapters`; it is a seam
-whose `chat`/`stream` still raise, and `create_llm` never returns one.
+`pyrrhon/core/` may reach pipecat, and only `pipecat.adapters`; it is a seam
+whose `chat`/`stream` still raise, and `create_llm` never returns one. Note the
+shape of that exception before you re-check the layering rule: the module is
+named as a *string* on the provider row (`native_adapter`) and imported through
+`importlib`, so `grep -rn "^\s*\(from\|import\) pipecat" pyrrhon/core/ pyrrhon/config/`
+still prints nothing — but a bare `grep -rn "pipecat"` now matches those strings
+and reads like a break. `tests/test_adapter_driver.py` is the enforcing check.
+`load_adapter` degrades with an actionable message rather than a bare
+`ModuleNotFoundError`, because an adapter carries no *frame* dependency but does
+import the provider's own SDK: anthropic's needs `anthropic` installed.
 
 **Voice integration (M15a).** The STT/TTS ladder is gone: providers are rows in
 `voice/registry.py` and built generically by `voice/factory.py`. Smart turn
@@ -237,7 +275,13 @@ detection (`LocalSmartTurnAnalyzerV3` inside `UserTurnProcessor`) is on by
 default with `[voice] turn_detection = "vad"` as the fallback; both modes name
 their stop strategy explicitly, because `UserTurnStrategies` defaults to smart
 turn when told nothing. RNNoise filters the mic and Pipecat's per-service
-latency observers are on. Verified citations are stripped from speech and
+latency observers are on. `[voice] idle_timeout_sec` (off by default) is wired
+end to end: Pipecat's `UserIdleController` detects the silence and `bridge.py`
+supplies the line, from `IDLE_LINES` — which is a nag *cap*, not a rotation,
+because the controller rearms its timer on every `BotStoppedSpeakingFrame`, so
+an uncapped agent would talk to itself. Those lines bypass the gate like the
+tool fillers, so the same static guard forbids a `path:line` in either.
+Verified citations are stripped from speech and
 delivered as `Citation` events, which the TUI renders as a clickable
 `📍 path:line` line and the code viewer follows — see the delivery contract
 above. `telemetry.otlp_endpoint` is privileged config, and
@@ -287,31 +331,42 @@ the prompt forbidding claims about unloaded code) so the egress gate becomes a
 cheap safety net rather than the mechanism. That is what would make S2S viable
 later; it is M16 work, not a licence to weaken the gate now.
 
-**Planned next.** Spec:
+**Planned next. M15 is closed; M16 is the next thing to start.** Spec:
 `docs/superpowers/specs/2026-08-19-pyrrhon-m15-pipecat-integration-design.md`.
-M15a and M15b are both done on branch `m15`. What remains:
+M15a and M15b are both done on branch `m15`, and the 2026-08-22 pass closed the
+three gaps that were left in Phase 3's own honesty claim: tier 3 pushes a real
+utterance and covers STT, `[voice] idle_timeout_sec` has a handler, and
+`availability()` distinguishes `ready` from `ready, unverified`.
 
-1. **M15b — LLM lane and vision** — done on `m15` (tasks 1-8). What is
-   deliberately NOT done is the native-provider work behind the adapter seam:
-   translating Pyrrhon's `list[dict]` history into Pipecat's `LLMContext` needs
-   designing against the real adapter, and the plan's own check-in point parks
-   it. Until then `AdapterLLM.chat`/`stream` raise and Anthropic and Gemini are
-   reached through their OpenAI-compatible endpoints, which is why the
-   anthropic row's note says prompt caching is unavailable there.
+One thing is deliberately NOT done, and it is not a blocker: the
+native-provider work behind the adapter seam. Translating Pyrrhon's
+`list[dict]` history into Pipecat's `LLMContext` needs designing against the
+real adapter, and the M15b plan's own check-in point parks it. Until then
+`AdapterLLM.chat`/`stream` raise and Anthropic and Gemini are reached through
+their OpenAI-compatible endpoints, which is why the anthropic row's note says
+prompt caching is unavailable there. **Do not fold this into M16.** It is an
+LLM-lane feature with its own design question; M16's job is the harness, and
+the seam exists precisely so the harness never has to know which driver it
+holds.
 
-Then **M16 — the harness**: agent loop, aggressive compaction, long sessions,
-large-codebase tool strategy, system prompt. That is the moat and it gets its
-own spec; M15 exists to make the seam thin enough that M16 never thinks about
-audio.
+Next is **M16 — the harness**: agent loop, aggressive compaction, long
+sessions, large-codebase tool strategy, system prompt. That is the moat and it
+gets its own spec; M15 exists to make the seam thin enough that M16 never
+thinks about audio. Note the one piece of M16 the M15 spec already names: the
+S2S paragraph above describes moving verification upstream, which is M16 work
+and the thing that would eventually unblock Gemini Live.
 
 Deferred on purpose, with triggers recorded in the M15a plan: the
-`settings=X.Settings(...)` migration and the `SoundfileMixer` thinking bed
-(until someone decides what it sounds like). **The migration's trigger has
-already fired** — 1.7.0 emits `DeprecationWarning: The 'model' parameter is
-deprecated. Use settings=X.Settings(model=...)` in the test output today. It is
-cheap now by construction: every service is built in one function
-(`factory._build`), so it is that function plus a `settings_cls` column, not one
-edit per row.
+`SoundfileMixer` thinking bed, until someone decides what it should sound like.
+`bridge.py`'s filler watchdog already covers the silence it would fill, so
+nothing is broken while it waits.
+
+**The `settings=X.Settings(...)` migration is done** (2026-08-22), and it was a
+subtraction. The spec predicted `factory._build` plus a `settings_cls` column;
+in fact pipecat 1.7.0 made the field names uniform, so `model_kwarg` and
+`voice_kwarg` were deleted and no column was added. Nothing Pyrrhon calls is
+deprecated any more — the three warnings still in the test output all come from
+inside pipecat.
 
 Earlier entry points (`jarvis.py`, `main.py`) were removed. Do not treat their
 git history as the intended design.

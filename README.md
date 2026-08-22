@@ -96,23 +96,44 @@ Pyrrhon standing context about you or the repo. `/init` scaffolds one.
 
 ```toml
 [voice]
-stt_provider = "groq"          # groq | openai | gemini | huggingface | deepgram | whisper-local (no key)
-tts_provider = "cartesia"      # openai (default) | groq | gemini | huggingface | cartesia | elevenlabs | deepgram | piper (local)
+stt_provider = "groq"          # see the table below
+tts_provider = "cartesia"      # openai is the default
 tts_voice = "<voice-id>"       # OpenAI/Groq voice name, Gemini voice (Kore/Puck/...), Cartesia/ElevenLabs id, or Deepgram Aura voice
 tts_model = "sonic-2"          # optional provider-specific model (for huggingface TTS, the HF model id)
+turn_detection = "smart"       # semantic end-of-turn; "vad" is the fixed-silence fallback
+idle_timeout_sec = 0           # seconds of your silence before it re-engages; 0 is off
 # tts_url = "http://localhost:5000"   # piper HTTP-server mode only (default is in-process)
 ```
 
-| Task | Cloud (API key)                                                                   | Local (keyless)                                                          |
-| ---- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| LLM  | Groq, OpenAI, Gemini, DeepSeek, Cerebras, OpenRouter, Hugging Face                | Ollama, LM Studio                                                        |
-| STT  | Groq Whisper, OpenAI, Gemini, Hugging Face, Deepgram                              | whisper-local (faster-whisper: tiny through large-v3, distil, any HF id) |
-| TTS  | OpenAI, Groq (Orpheus), Gemini, Hugging Face, Cartesia, ElevenLabs, Deepgram Aura | Piper (in-process, downloads voices on demand)                           |
+| Task | Cloud (API key)                                                                                        | Local (keyless)                                                          |
+| ---- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| LLM  | Groq, OpenAI, Anthropic, Gemini, DeepSeek, Cerebras, OpenRouter, Hugging Face                          | Ollama, LM Studio                                                        |
+| STT  | Groq Whisper, OpenAI, Deepgram, Cartesia, AssemblyAI, Gladia, Gemini, Hugging Face                     | whisper-local (faster-whisper: tiny through large-v3, distil, any HF id), Moonshine |
+| TTS  | OpenAI, Groq, Cartesia, ElevenLabs, Deepgram Aura, Rime, Inworld, Gemini, Hugging Face                 | Piper (in-process, downloads voices on demand), Kokoro                   |
 
 OpenAI TTS is the zero-setup default. For real-time conversation, Cartesia and
 ElevenLabs are noticeably snappier, roughly 100 to 300ms to first audio against
 400ms and up. A fully local, keyless stack also works: `whisper-local` for STT,
 `piper` for TTS, and Ollama or LM Studio for the LLM.
+
+**Pyrrhon will offer you a provider it cannot currently run. It will never
+imply that it can.** `/settings stt|tts` and the setup wizard label every row
+with what it would actually take:
+
+```
+/settings tts
+  piper          [ready]  free, on-device, no key and no server
+  groq           [ready]  hosted TTS on your Groq key; needs an explicit voice id
+  openai         [ready, unverified]  no extra key if you already use OpenAI
+  cartesia       [needs CARTESIA_API_KEY]  lowest latency; needs a voice id from your account
+  kokoro         [install: uv add "pipecat-ai[kokoro]"]  free, on-device, ONNX
+```
+
+`ready, unverified` is the honest one: the provider is installed and keyed, but
+nobody has run a real utterance through it. Pyrrhon curates more providers than
+any one person holds keys for, so a row earns plain `ready` only after
+`pytest tests/test_voice_live.py -m live` has actually made it speak or
+transcribe. Honest beats broad.
 
 Gemini Live speech-to-speech is deliberately absent. It generates speech
 directly from audio, which skips the agent loop and the grounding gate that
