@@ -39,8 +39,16 @@ def test_every_choice_has_a_label_and_note():
 
 
 def test_keyless_installed_smoke_tested_provider_is_ready(monkeypatch):
+    """Both halves of runnable are faked, because piper's are not ambient.
+
+    `pipecat.services.piper.tts` imports the `piper` package, which ships in the
+    voice extra and not in the base dependency CI installs. Leaving the real
+    _dependencies_present in place made this a test of the developer's
+    environment rather than of availability()'s state machine.
+    """
     piper = find("tts", "piper")
     monkeypatch.setattr("pyrrhon.config.catalog._installed", lambda module: True)
+    monkeypatch.setattr("pyrrhon.config.catalog._dependencies_present", lambda m: True)
     assert piper.verified, "piper is the keyless default; it has to be tier 3 green"
     assert availability(piper) == "ready"
 
@@ -103,7 +111,10 @@ def test_runnability_is_read_from_what_the_module_itself_imports():
     """
     from pyrrhon.config.catalog import _dependencies_present
 
-    assert _dependencies_present("pipecat.services.piper.tts") is True
+    # The deepgram pair, and only it, carries that claim without also asserting
+    # which extras happen to be installed. aiohttp, loguru and websockets are
+    # unconditional pipecat-ai requirements, so the TTS half is runnable off the
+    # base dependency alone, in CI as well as under the voice extra.
     assert _dependencies_present("pipecat.services.deepgram.tts") is True
     assert _dependencies_present("pipecat.services.deepgram.stt") is False
     assert _dependencies_present("pipecat.services.nowhere.at_all") is False
