@@ -38,6 +38,10 @@ _UNIMPLEMENTED = (
 )
 
 
+class AdapterUnavailableError(RuntimeError):
+    """The named adapter module cannot be imported on this machine."""
+
+
 class AdapterLLM:
     """A native-API driver behind the agent loop's duck-typed LLM interface.
 
@@ -53,14 +57,28 @@ class AdapterLLM:
         self._adapter_module = adapter_module
         self._adapter: ModuleType | None = None
 
-    def _load_adapter(self) -> ModuleType | None:
+    def load_adapter(self) -> ModuleType | None:
         """Import the adapter on first use, never at module import.
 
         By string, from LLMProvider.native_adapter, so pyrrhon/core carries no
         static pipecat dependency and stays importable without it installed.
+
+        Pipecat's adapters carry no *frame* dependency, which is why they are
+        the half of Phase 6 worth adopting — but they do import the provider's
+        own SDK, so anthropic_adapter needs `anthropic` installed and gemini's
+        needs `google-genai`. That is the same shape voice/factory._load
+        handles, and it gets the same answer: name the install command instead
+        of letting a bare ModuleNotFoundError reach the caller.
         """
         if self._adapter is None and self._adapter_module:
-            self._adapter = importlib.import_module(self._adapter_module)
+            try:
+                self._adapter = importlib.import_module(self._adapter_module)
+            except ImportError as exc:
+                raise AdapterUnavailableError(
+                    f"{self._adapter_module} needs a package that is not "
+                    f"installed ({exc}). Install it, or stay on the provider's "
+                    "OpenAI-compatible endpoint, which create_llm uses today."
+                ) from exc
         return self._adapter
 
     async def chat(
