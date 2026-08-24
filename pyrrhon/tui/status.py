@@ -24,8 +24,14 @@ VOICE_OFF = "off"
 
 
 class StatusBar(Static):
-    """One line: mode, models, context fill, last latency, voice state."""
+    """One line: repo, mode, models, context fill, last latency, voice state.
 
+    The repo name arrived here when the Header was deleted. It is state, not
+    identity, and a value shown in two places is a value you have to check
+    twice.
+    """
+
+    repo: reactive[str] = reactive("")
     mode: reactive[str] = reactive("understand")
     fast_model: reactive[str] = reactive("")
     deep_model: reactive[str] = reactive("")
@@ -44,7 +50,13 @@ class StatusBar(Static):
         if self.latency_ms is not None:
             # Spec "live latency": last turn's user text -> first SpeechChunk.
             parts.append(f"{self.latency_ms:.0f} ms")
-        line = Text(" · ".join(parts), style=MUTED)
+        line = Text()
+        if self.repo:
+            # The one field that is not a setting, so it leads and it is the
+            # only one that is not muted.
+            line.append(self.repo, style=VOICE)
+            line.append("  ", style=MUTED)
+        line.append(" · ".join(parts), style=MUTED)
         if self.voice_state != VOICE_OFF:
             line.append(" · ", style=MUTED)
             line.append(f"🎙 {self.voice_state}", style=VOICE)
@@ -59,6 +71,7 @@ class StatusBar(Static):
 def sync(
     bar: StatusBar,
     *,
+    repo: str,
     mode: str,
     fast_model: str,
     deep_model: str,
@@ -73,6 +86,7 @@ def sync(
     deciding how they read are one job. Each assignment is a reactive write,
     so only the fields that actually changed repaint (defect 14).
     """
+    bar.repo = repo
     bar.mode = mode
     bar.fast_model = fast_model
     bar.deep_model = deep_model

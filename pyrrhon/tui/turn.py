@@ -51,6 +51,16 @@ class TurnView:
         return self._app.query_one("#transcript", VerticalScroll)
 
     @property
+    def _joiner(self) -> str:
+        """What separates two chunks of one turn's prose.
+
+        Read off the agent rather than threaded through the event, because the
+        agent is already the one that chose the splitter (`loop.py`, streaming
+        turn) and a second copy of that decision is a second thing to drift.
+        """
+        return " " if self._app.agent.voice_active else "\n\n"
+
+    @property
     def speaking(self) -> bool:
         """True while prose is actually being produced. The status bar's
         difference between listening and speaking."""
@@ -71,6 +81,7 @@ class TurnView:
         self._started = time.monotonic()
         self.working_row = WorkingRow()
         await self._transcript.mount(self.working_row)
+        self._transcript.scroll_end(animate=False)
         self._timer = self._app.set_interval(0.1, self._tick)
 
     async def finish(self) -> None:
@@ -113,6 +124,18 @@ class TurnView:
         """
         if self._speech_stream is None and self._speech_row is not None:
             return  # the turn is over; a late chunk has nowhere to go
+        if self._said:
+            # The core hands over one *unit* per chunk and joins history with
+            # the matching separator: a sentence and a space when voice is
+            # active, a markdown block and a blank line otherwise. This joined
+            # with nothing, so a paragraph fused with the list that followed
+            # it — "...formats output.- `helpers.py` holds the formatting" as
+            # one run-on line, with every list, heading and table after the
+            # first block swallowed the same way. _pop_blocks strips each
+            # block, so the separator cannot be recovered downstream; it has
+            # to be put back here, by the only code that knows the chunks are
+            # being concatenated at all.
+            text = self._joiner + text
         if self._speech_row is None:
             # Tagged so the turn's prose is distinguishable from an artifact
             # row: a background ScreenArtifact can land mid-turn, and "one
@@ -194,10 +217,10 @@ class TurnView:
         turn has already finished and the row belongs at the end.
         """
         working = self.working_row
-        if working is not None and working.is_mounted:
-            self._transcript.mount(row, before=working)
-        else:
-            self._transcript.mount(row)
+        before = working if working is not None and working.is_mounted else None
+        # Through the App, so a row mounted mid-turn scrolls into view on the
+        # same rule as every other row.
+        self._app.mount_row(row, before=before)
 
     def set_working_label(self, label: str) -> None:
         if self.working_row is not None:

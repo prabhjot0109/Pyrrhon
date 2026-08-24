@@ -213,3 +213,86 @@ async def test_a_long_artifact_arrives_folded(sample_repo: Path):
 
     short = artifact_row("Just a sentence.")
     assert isinstance(short, AssistantRow), "a short artifact still reads inline"
+
+
+# -- the joiner, the scroll offset, and the row a command answer wears ------
+
+
+async def test_a_list_after_a_paragraph_survives_the_chunk_boundary(sample_repo: Path):
+    """The core splits text into markdown *blocks* and strips each one.
+
+    `loop.py:_pop_blocks` cuts at a blank line and hands over the block with
+    the blank line gone, joining history with "\n\n" to put it back. The TUI
+    concatenated the chunks with nothing, so the separator vanished on screen
+    only: a paragraph fused with the list that followed it and rendered as one
+    run-on line, taking every heading, table and list after the first block
+    with it. The document is what this asserts, because that is what the
+    reader sees.
+    """
+    body = "A paragraph here.\n\n- first item\n- second item\n"
+    llm = StreamingFakeLLM([(list(body), LLMReply(text=body))])
+    agent = build_agent(sample_repo, llm=llm, home=sample_repo.parent)
+    assert not agent.voice_active, "the text splitter is the one under test"
+    app = PyrrhonApp(repo_root=sample_repo, agent=agent)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await submit(app, pilot, "describe it")
+        await pilot.pause()
+        row = app.query_one("AssistantRow.speech")
+        source = row.markdown.source
+        assert "A paragraph here." in source
+        assert "\n\n- first item" in source, (
+            f"the block separator was lost: {source!r}"
+        )
+
+
+async def test_the_transcript_reads_from_the_top(sample_repo: Path):
+    """VerticalScroll.anchor() left a negative scroll offset here.
+
+    Its scroll_end runs before the layout that would bound it, and the offset
+    it settles on is never revised — so the transcript sat at
+    scroll_y = -(viewport height) and every row rendered bottom-aligned under
+    a screen-high blank gap. Short content must start at the top.
+    """
+    from textual.containers import VerticalScroll
+
+    app, _ = make_app([], sample_repo)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await submit(app, pilot, "/help")
+        await pilot.pause()
+        transcript = app.query_one("#transcript", VerticalScroll)
+        assert transcript.scroll_offset.y == 0, "a short transcript never scrolls"
+        first = transcript.children[0]
+        assert first.region.y == transcript.region.y, (
+            "the first row sits at the top of the transcript, not the bottom"
+        )
+
+
+async def test_a_command_answer_is_not_dressed_as_a_warning(sample_repo: Path):
+    """`/help` came back as a NoticeRow — the ⚠ rail in hedge amber, which is
+    the styling that means "Pyrrhon could not verify this". Listing the
+    command table carries no such doubt; a failure still does."""
+    from pyrrhon.tui.messages import CommandRow, NoticeRow
+
+    app, _ = make_app([], sample_repo)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await submit(app, pilot, "/help")
+        await pilot.pause()
+        assert len(list(app.query(CommandRow))) == 1
+        assert not list(app.query(NoticeRow)), "nothing here is a warning"
+
+        await submit(app, pilot, "/model nonsense")
+        await pilot.pause()
+        assert len(list(app.query(NoticeRow))) == 1, "a failure still warns"
+
+
+async def test_exit_asks_the_app_to_leave(sample_repo: Path):
+    """/exit is a row in the command table, so it reaches the TUI through the
+    same dispatch every other command does."""
+    app, _ = make_app([], sample_repo)
+    asked: list[int] = []
+    app.request_exit = lambda: asked.append(1)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await submit(app, pilot, "/exit")
+        await pilot.pause()
+        assert asked == [1]
+        assert "Leaving" in app.last_command_response

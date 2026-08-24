@@ -266,7 +266,7 @@ progress affordance possible — a `RichLog` line can never be updated, which
 was the structural reason a spinner, a resolving tool row and a streaming
 answer all had no cheap fix.
 
-Five things about it are load-bearing and easy to break, each one a bug that
+Eight things about it are load-bearing and easy to break, each one a bug that
 looked like a style choice until it bit.
 
 The theme is registered in `PyrrhonApp.__init__`, not `on_mount`, because
@@ -305,20 +305,86 @@ schedule and the run wrote into a stopped stream and raised outright.
 One CSS rule is in the same category: the rail is `height: auto`, never `1fr`.
 A fr unit inside an `auto`-height row is circular, and Textual resolved it
 against the viewport instead of the sibling — every row rendered eighteen
-lines tall, which is the other half of the blank-gap symptom.
+lines tall, which was one part of the blank-gap symptom.
+
+`PyrrhonApp.mount_row` follows the transcript explicitly and
+`VerticalScroll.anchor()` is not called, which is the *last* part of that same
+symptom and outlived both fixes above. `anchor()` runs its `scroll_end` with
+`immediate=True`, i.e. before the layout that would bound it, and never
+revises the offset it settles on: the transcript sat at
+`scroll_y = -(viewport height)` for the whole session, so every row rendered
+bottom-aligned under a screen-high gap. `max_scroll_y` reads 0 the whole time,
+which is why the offset never looks wrong from inside the widget. Following on
+mount keeps what the anchor was for, and a user who has scrolled up is left
+alone — the check runs *before* the mount, because mounting is what moves
+`max_scroll_y` underneath it.
+
+`TurnView.stream_speech` joins chunks with the separator the core split on:
+`" "` for voice, `"\n\n"` for text, read off `agent.voice_active`. The core
+hands over one *unit* per chunk — `_pop_blocks` strips each markdown block
+and rejoins history with a blank line — so concatenating with nothing fused
+a paragraph into the list that followed it and swallowed every heading, table
+and list after the first block. It cannot be recovered downstream; the joiner
+has to be reapplied by the code that concatenates.
+
+**No horizontal margin on any direct child of the screen's column.** Textual's
+vertical layout narrows *every sibling* to accommodate one child's horizontal
+margin, so a 1-column inset on the prompt silently shrank the transcript to
+118 of 120. `test_layout_is_one_full_width_column` is the check.
 
 The evidence rail is the signature: one gutter column carrying the epistemic
 status of each row, and it is a widget rather than a character prepended to
 the body, which is what keeps it out of copied text and out of `history`.
-Colours are six named values in `theme.py` and nowhere else; a six-digit hex
-anywhere else under `tui/` is a bug a grep catches. `esc` aborts a turn, the
-status bar shows context fill and voice state, and both `ctrl+p` and typing a
-bare `/` search the command registry live, so a plugin's command is findable
-without anything being told about it. The inline `/` menu overrides the
-redesign spec, which ruled it out; the rejected *dependency* stays rejected,
-since it is Textual's own `OptionList`. `esc` has one precedence chain —
-close the menu, else clear the prompt, else stop the turn — because esc means
-"undo the innermost thing I just started".
+
+The rail carries an **epistemic ladder**, and that is what picks the hues:
+green verified, amber hedged, red faulted. Green-amber-red is the one sequence
+every reader can already rank, so the rail reads before anything is explained
+— which the old blue/teal pair could never do, because blue and teal have no
+agreed order between them. That frees the accent (`branding.FACE`, terracotta)
+to mean one thing: *you*. The wordmark, the rail on a turn you took, the
+microphone and the focus ring are all it. The ground is true black rather than
+the blue-shifted near-black that existed only to sit in the same family as a
+blue accent. Colours are six named values in `theme.py` and nowhere else; a
+six-digit hex anywhere else under `tui/` is a bug a grep catches.
+
+There is no `Header`: it spent a row restating the title bar, and the repo
+name is state, so it sits in the status line with everything else that is.
+`esc` aborts a turn, the status bar shows repo, models, context fill and voice
+state, and typing a bare `/` or pressing `ctrl+p` searches the command
+registry live, so a plugin's command is findable without anything being told
+about it. **Do not bind `ctrl+p`.** The Footer advertises the palette from
+`App.COMMAND_PALETTE_BINDING`, in a slot of its own that a binding does not
+override, so declaring it printed `^p commands` twice on one line — and
+`active_bindings` cannot see the collision, because it is keyed by key and the
+two entries share one.
+
+A command's answer is a `CommandRow`, not a `NoticeRow`. `NoticeRow` is the
+⚠ rail in hedge amber, which means "Pyrrhon could not verify this"; `/help`
+wore it for listing the command table. Failures still take it.
+
+`/exit` and `/quit` are rows in the command table, so `/help`, the inline menu
+and the palette all know them. The REPL used to match both names against its
+own input string *before* dispatch, which is why they appeared in no list and
+the TUI had none at all. A handler returns a string and never raises, so
+leaving is a request — `ctx.ui.request_exit()`, duck-typed the way `/code`
+already treats `last_citation`.
+
+The inline `/` menu overrides the redesign spec, which ruled it out; the
+rejected *dependency* stays rejected, since it is Textual's own `OptionList`.
+`esc` has one precedence chain — close the menu, else clear the prompt, else
+stop the turn — because esc means "undo the innermost thing I just started".
+
+The splash is mounted *inside* the transcript. As a sibling it owned a fixed
+slice of the column, so clearing it resized the scroll view under an offset
+computed against the old geometry and the conversation jumped; inside, it is
+an ordinary row.
+
+`pyrrhon/tui/app.py` carries **no** per-file `F401` ignore. It had one, for
+the command-registration block that already carries its own `noqa`, and the
+blanket ignore silenced the whole file: seventeen dead imports accumulated
+behind it, including the entire core event vocabulary the module stopped
+touching when `renderer.py` was split out. Only `repl.py` is listed in
+`per-file-ignores` now.
 
 A long `ScreenArtifact` arrives folded. M14's orientation brief is a hundred
 lines of symbol counts on a real repo, and it used to land on top of the

@@ -1,4 +1,4 @@
-"""Built-in slash commands: /init, /model, /code.
+"""Built-in slash commands: /init, /model, /code, /exit.
 
 Importing this module registers them (the @command decorator writes into
 the registry table); channels do:
@@ -68,3 +68,26 @@ def code_command(args: str, ctx: CommandContext) -> str:
     except OSError as exc:
         return f"ERROR: could not launch VS Code: {exc}"
     return f"Opened {citation.file}:{citation.line or 1} in VS Code."
+
+
+@command("quit", "Leave Pyrrhon")
+@command("exit", "Leave Pyrrhon")
+def exit_command(args: str, ctx: CommandContext) -> str:
+    """Registered, rather than intercepted by each channel's read loop.
+
+    The REPL matched the two names against its own input string before
+    dispatch ever ran, so the one table that drives `/help`, the inline `/`
+    menu and the command palette had never heard of them — and the TUI, which
+    has no read loop to intercept anything, simply had no way out but a
+    control key. One row here gives both channels the command, and gives it a
+    line in every list that claims to enumerate the commands.
+
+    A handler returns a string and never raises, so it asks the channel to
+    stop rather than stopping it: `ctx.ui` is duck-typed, exactly as `/code`
+    already treats `last_citation`.
+    """
+    request_exit = getattr(ctx.ui, "request_exit", None)
+    if request_exit is None:
+        return "ERROR: this channel has no way to exit — press ctrl+c."
+    request_exit()
+    return "Leaving. Bye."

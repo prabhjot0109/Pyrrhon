@@ -78,7 +78,8 @@ class UserRow(Row):
 
     def __init__(self, text: str, spoken: bool = False, **kwargs) -> None:
         super().__init__(**kwargs)
-        # No "you>" label. The teal ▌ rail already says whose turn this is, and
+        # No "you>" label. The ▌ rail already says whose turn this is, in the
+        # one colour the product reserves for you, and
         # a prefix that repeats the rail is the ornament the spec rules out.
         # 🎙 stays, because typed and spoken are a real distinction.
         self._body = Static(f"🎙 {text}" if spoken else text, classes="body user-body")
@@ -178,6 +179,27 @@ class NoticeRow(Row):
         self._body = Static(text, classes="body notice-body")
         if is_error:
             self.add_class("failed")
+
+    def body(self) -> Static:
+        return self._body
+
+
+class CommandRow(Row):
+    """A slash command's answer.
+
+    Machinery, so it wears the tool row's glyph and the muted rail rather than
+    a seventh glyph of its own. It went out as a NoticeRow, which is the row
+    that means "Pyrrhon could not verify this" — so `/help` and `/plugins`
+    arrived under a warning sign in hedge amber, claiming a doubt that has
+    nothing to do with listing the command table.
+    """
+
+    GLYPH = "┊"
+    RAIL = "rail-muted"
+
+    def __init__(self, text: str, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._body = Static(text, classes="body tool-body")
 
     def body(self) -> Static:
         return self._body

@@ -15,44 +15,26 @@ Screen {
     background: $background;
 }
 
+/* -- the transcript and its rows ---------------------------------------- */
+
 #transcript {
     height: 1fr;
     padding: 0 1;
     background: $background;
-}
-
-StatusBar {
-    height: 1;
-    background: $panel;
-    color: $muted;
-    padding: 0 1;
-}
-
-#prompt {
-    border: tall $panel;
-    margin-top: 1;
-    background: $panel;
-    /* Grows with the text and stops; a prompt must never eat the transcript. */
-    height: auto;
-    max-height: 8;
-}
-
-#prompt:focus {
-    /* evidence is the focus ring as well as the verified rail: one blue,
-     * meaning "this is the thing you are working with". */
-    border: tall $evidence;
+    scrollbar-size-vertical: 1;
+    scrollbar-background: $background;
+    scrollbar-background-hover: $background;
+    scrollbar-background-active: $background;
+    scrollbar-color: $panel;
+    scrollbar-color-hover: $muted;
+    scrollbar-color-active: $voice;
 }
 
 #splash {
     height: auto;
-    padding: 1 1 0 1;
+    width: 1fr;
+    padding: 1 0;
     background: $background;
-}
-
-/* -- the transcript and its rows ---------------------------------------- */
-
-#transcript {
-    scrollbar-size-vertical: 1;
 }
 
 .row {
@@ -118,6 +100,14 @@ UserRow {
     padding: 0;
 }
 
+/* A fenced block is the one place prose earns a panel: it is quoted material,
+ * and on a black ground it needs an edge to read as quoted. */
+.row MarkdownFence {
+    margin: 1 0;
+    padding: 0 1;
+    background: $panel;
+}
+
 /* A folded brief. Collapsible brings its own chrome; the row owns spacing. */
 .brief-body {
     height: auto;
@@ -131,19 +121,66 @@ UserRow {
     padding: 0;
 }
 
+/* -- the input ---------------------------------------------------------- */
+
+#prompt {
+    /* Round, and on the page rather than on a panel. A filled grey box reads
+     * as a dialog widget; the border alone is enough to say "type here", and
+     * it doubles as the focus indicator. */
+    border: round $panel;
+    background: $background;
+    margin-top: 1;
+    /* Grows with the text and stops; a prompt must never eat the transcript. */
+    height: auto;
+    max-height: 10;
+}
+
+#prompt:focus {
+    /* One accent, and it means "you": the rail on your turns, the microphone,
+     * and the ring around the thing you are typing into. */
+    border: round $voice;
+}
+
+StatusBar {
+    height: 1;
+    background: $background;
+    color: $muted;
+    padding: 0 2;
+}
+
+Footer {
+    background: $background;
+    color: $muted;
+}
+
+FooterKey {
+    background: $background;
+}
+
+FooterKey .footer-key--key {
+    color: $voice;
+    background: $background;
+}
+
+FooterKey .footer-key--description {
+    color: $muted;
+    background: $background;
+}
+
 /* Slash-command completion. Above the prompt, never over the transcript:
  * an overlay that hides what you are asking about is the wrong trade. */
 #completion {
     height: auto;
-    max-height: 8;
+    max-height: 10;
     border: none;
+    padding: 0 1;
     background: $panel;
     color: $muted;
     scrollbar-size-vertical: 1;
 }
 
 #completion > .option-list--option-highlighted {
-    background: $evidence;
+    background: $voice;
     color: $background;
     text-style: bold;
 }

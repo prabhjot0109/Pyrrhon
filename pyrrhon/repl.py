@@ -54,6 +54,13 @@ class ConsoleUI:
     def __init__(self, console: Console):
         self._console = console
         self.last_citation: Citation | None = None
+        # Set by /exit and /quit, read once per iteration of the read loop.
+        # A command handler returns a string and never raises, so leaving is
+        # a flag rather than an exception.
+        self.exiting = False
+
+    def request_exit(self) -> None:
+        self.exiting = True
 
     def notify(self, text: str) -> None:
         self._console.print(text)
@@ -111,7 +118,7 @@ def run_repl(repo: str, voice: bool = False, trust_repo: bool = False) -> None:
 
         console.print(banner())  # pre-styled Text; an outer style would flatten it
         console.print(
-            f"Discussing [cyan]{agent.repo_root.name}[/cyan]. Commands: /help, /quit"
+            f"Discussing [cyan]{agent.repo_root.name}[/cyan]. Commands: /help, /exit"
         )
         if plugins:
             names = ", ".join(
@@ -168,11 +175,14 @@ async def _repl_loop(
             break
         if not user:
             continue
-        if user in {"/quit", "/exit"}:
-            break
         response = await dispatch(user, ctx)
         if response is not None:
             console.print(response)
+            # /exit and /quit are rows in the command table now, not names
+            # this loop matches before dispatch — which is what puts them in
+            # /help and in the TUI's menu.
+            if ui.exiting:
+                break
             continue
         await _turn(session, user, console, ui)
         if session.last_turn_latency_ms is not None:

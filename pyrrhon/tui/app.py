@@ -9,16 +9,13 @@ the same loop carries audio (spec: real-time discipline).
 
 from __future__ import annotations
 
-import asyncio
-import time
 from pathlib import Path
 
-from rich.text import Text
 from textual import on
 from textual.app import App, ComposeResult, SuspendNotSupported
 from textual.binding import Binding
 from textual.containers import VerticalScroll
-from textual.widgets import Footer, Header, Markdown, Static, TextArea
+from textual.widgets import Footer, Static, TextArea
 
 from pyrrhon.bootstrap import (
     orient_in_background,
@@ -26,7 +23,6 @@ from pyrrhon.bootstrap import (
     warm_index_in_background,
     warm_llm_connection_in_background,
 )
-from pyrrhon.channels import EventRenderer
 from pyrrhon.commands import (  # noqa: F401 — registers commands
     builtin,
     debug_cmd,
@@ -39,27 +35,15 @@ from pyrrhon.commands import (  # noqa: F401 — registers commands
 from pyrrhon.commands.registry import CommandContext, dispatch
 from pyrrhon.config.settings import load_settings
 from pyrrhon.core.agent.loop import Agent
-from pyrrhon.core.citation_link import citation_uri
 from pyrrhon.core.context import history_tokens
-from pyrrhon.core.events import (
-    AskUser,
-    Citation,
-    ScreenArtifact,
-    SpeechChunk,
-    ToolCallFinished,
-    ToolCallStarted,
-    Transcription,
-    TruncateSpeech,
-    VoiceNotice,
-)
-from pyrrhon.core.grounding.gate import HEDGE, LINE_HEDGE, LINE_UNSEEN_HEDGE
+from pyrrhon.core.events import Citation
 from pyrrhon.core.mcp import MCPManager
 from pyrrhon.core.providers.llm import FallbackLLM
 from pyrrhon.core.session import Session
 from pyrrhon.tui import status
 from pyrrhon.tui.completion import CommandMenu, matches
 from pyrrhon.tui.editor import open_in_editor
-from pyrrhon.tui.messages import InterruptRow, NoticeRow, UserRow
+from pyrrhon.tui.messages import CommandRow, InterruptRow, NoticeRow, UserRow
 from pyrrhon.tui.palette import PyrrhonCommands
 from pyrrhon.tui.prompt import Prompt
 from pyrrhon.tui.renderer import TuiRenderer
@@ -81,8 +65,6 @@ def _redact_secret_echo(text: str) -> str:
     return text
 
 
-
-
 class PyrrhonApp(App):
     TITLE = "Pyrrhon"
 
@@ -91,12 +73,15 @@ class PyrrhonApp(App):
 
     # Every binding carries a description because that string is what Footer
     # renders; a binding with none is a key nothing on screen advertises.
+    #
+    # ctrl+p is deliberately absent. Textual binds the command palette itself
+    # and the Footer advertises it from that binding, so declaring a second
+    # one printed "^p commands" twice on the same line.
     BINDINGS = [
         # priority, because the prompt has focus for the whole session and
         # would otherwise swallow escape before the app ever sees it.
         Binding("escape", "abort_turn", "stop", priority=True),
         Binding("ctrl+o", "open_citation", "open citation"),
-        Binding("ctrl+p", "command_palette", "commands"),
         Binding("ctrl+l", "clear_transcript", "clear"),
         Binding("f1", "help", "help"),
         # Textual maps ctrl+c to help_quit, which tells you to press ctrl+q.
@@ -179,8 +164,10 @@ class PyrrhonApp(App):
         return dict(TOKENS)
 
     def compose(self) -> ComposeResult:
-        yield Header()
-        yield Static(id="splash")
+        # No Header. It spent a row restating the title bar and the repo name,
+        # and the repo name is a piece of state, so it belongs on the one line
+        # that already carries state.
+        #
         # D3: a VerticalScroll of mounted widgets, not a RichLog. A mounted
         # row can be updated after the fact, which is the one structural
         # reason a spinner, an elapsed timer and a resolving tool row are
@@ -192,9 +179,6 @@ class PyrrhonApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        # New rows scroll into view on their own; a manual scroll up during
-        # streaming releases the anchor rather than fighting the user.
-        self.query_one("#transcript", VerticalScroll).anchor()
         self.refresh_status()
         prompt = self.query_one("#prompt", Prompt)
         menu = self.query_one("#completion", CommandMenu)
@@ -212,8 +196,15 @@ class PyrrhonApp(App):
             self.notify(self.voice.start())
 
     def _show_splash(self) -> None:
-        self.query_one("#splash", Static).update(
-            splash_text(self.repo_root, self.size.width)
+        """The banner, mounted *inside* the transcript.
+
+        As a sibling of the transcript it owned a fixed slice of the column,
+        so removing it resized the scroll view under a scroll offset computed
+        against the old geometry — the conversation jumped. Inside, it is an
+        ordinary row: it scrolls, and clearing it costs the transcript nothing.
+        """
+        self.query_one("#transcript", VerticalScroll).mount(
+            Static(splash_text(self.repo_root, self.size.width), id="splash")
         )
 
     def _clear_splash(self) -> None:
@@ -221,9 +212,44 @@ class PyrrhonApp(App):
         for node in self.query("#splash"):
             node.remove()
 
+    def mount_row(self, row, before=None) -> None:
+        """Mount a transcript row, keeping the newest content in view.
+
+        Not `VerticalScroll.anchor()`, which is what this replaces. Its
+        scroll_end runs `immediate=True`, i.e. before the layout that would
+        tell it how far it may scroll, and the offset it settles on is never
+        revised: the transcript sat at scroll_y = -(viewport height) for the
+        whole session. Every row still rendered, but bottom-aligned under a
+        screen-high blank gap — the "enormous gap under the question" that had
+        already been chased through MarkdownStream and a `1fr` rail, and whose
+        last cause was this.
+
+        Following explicitly keeps what the anchor was for. A user who has
+        scrolled up is left where they are, and the check runs *before* the
+        mount because mounting is what moves max_scroll_y underneath it.
+        """
+        transcript = self.query_one("#transcript", VerticalScroll)
+        following = transcript.scroll_offset.y >= transcript.max_scroll_y
+        if before is None:
+            transcript.mount(row)
+        else:
+            transcript.mount(row, before=before)
+        if following:
+            # After the refresh, so max_scroll_y accounts for the new row.
+            transcript.call_after_refresh(transcript.scroll_end, animate=False)
+
     def record_citation(self, citation: Citation) -> None:
         """Remember the most recent citation; ctrl+o and /code both read it."""
         self.last_citation = citation
+
+    def request_exit(self) -> None:
+        """`/exit` and `/quit`, from the one command table both channels read.
+
+        Deferred rather than immediate: dispatch() is still mid-flight and its
+        caller mounts the response afterwards, so tearing the app down here
+        would render "Goodbye." into a screen that no longer exists.
+        """
+        self.call_later(self.exit)
 
     def action_clear_transcript(self) -> None:
         """ctrl+l: clear the screen, not the session. History is untouched."""
@@ -253,7 +279,7 @@ class PyrrhonApp(App):
             prompt.clear()
             return
         self.session.abort_current_turn()
-        self.query_one("#transcript", VerticalScroll).mount(InterruptRow())
+        self.mount_row(InterruptRow())
 
     def action_open_citation(self) -> None:
         """ctrl+o: the keyboard half of D2's two routes to a cited line."""
@@ -274,11 +300,13 @@ class PyrrhonApp(App):
             )
 
     def refresh_status(self) -> None:
-        # Header carries identity, the status line carries state. The mode was
-        # in both, and a value shown twice is a value you have to check twice.
+        # The status line carries every piece of state, now including the repo
+        # name that used to sit in a Header of its own. sub_title still gets
+        # set, because that is what names the terminal window.
         self.sub_title = self.repo_root.name
         status.sync(
             self.query_one(StatusBar),
+            repo=self.repo_root.name,
             mode=self.session.mode,
             fast_model=getattr(self.agent.llm, "model", "unknown"),
             deep_model=getattr(self.agent.deep_llm, "model", ""),
@@ -319,9 +347,7 @@ class PyrrhonApp(App):
             return
         self._clear_splash()
         self.query_one("#completion", CommandMenu).hide()
-        self.query_one("#transcript", VerticalScroll).mount(
-            UserRow(_redact_secret_echo(text))
-        )
+        self.mount_row(UserRow(_redact_secret_echo(text)))
 
         if await self.run_command(text) is not None:
             return
@@ -351,9 +377,11 @@ class PyrrhonApp(App):
         if response is None:
             return None
         self.last_command_response = response
-        self.query_one("#transcript", VerticalScroll).mount(
-            NoticeRow(response, is_error=response.startswith("ERROR"))
-        )
+        failed = response.startswith("ERROR")
+        # A command's answer is machinery, not a claim about the code. It went
+        # out as a NoticeRow, which meant `/help` arrived under the ⚠ rail in
+        # hedge amber — the styling that means "Pyrrhon could not verify this".
+        self.mount_row(NoticeRow(response, is_error=True) if failed else CommandRow(response))
         self.refresh_status()  # /model may have swapped a slot
         return response
 
@@ -367,7 +395,6 @@ class PyrrhonApp(App):
 
     async def _agent_turn(self, user_text: str) -> None:
         """Consume the core event stream inside a worker — the UI never blocks."""
-        transcript = self.query_one("#transcript", VerticalScroll)
         prompt = self.query_one("#prompt", Prompt)
         await self.turn.start()
         try:
@@ -376,7 +403,7 @@ class PyrrhonApp(App):
         except Exception as exc:
             # A failed turn must not kill the session (Textual workers
             # default to exit_on_error=True): show it and hand back the prompt.
-            transcript.mount(NoticeRow(f"ERROR: turn failed: {exc}", is_error=True))
+            self.mount_row(NoticeRow(f"ERROR: turn failed: {exc}", is_error=True))
         finally:
             # The stream is closed here and nowhere else, so an aborted or
             # failed turn cannot leak one into the next turn's row.

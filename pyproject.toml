@@ -91,8 +91,14 @@ select = ["F", "I", "B", "ASYNC"]
 [tool.ruff.lint.per-file-ignores]
 # Channel modules import command packages purely for their registration
 # side effect; F401 is the intended shape, already marked with noqa.
+#
+# repl.py alone, and only because two of its warm-up locals are held solely to
+# keep a task alive. tui/app.py used to be listed here too, and the blanket
+# ignore silenced the whole file: seventeen dead imports accumulated behind it,
+# including the entire core event vocabulary the module stopped touching when
+# renderer.py was split out. The registration block carries its own `noqa`, so
+# the file needs no exemption of its own.
 "pyrrhon/repl.py" = ["F401"]
-"pyrrhon/tui/app.py" = ["F401"]
 
 [tool.mypy]
 python_version = "3.12"

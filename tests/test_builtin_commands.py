@@ -90,3 +90,45 @@ async def test_code_missing_cli_is_error(monkeypatch):
     ctx = make_ctx()
     ctx.ui.last_citation = Citation(file="app.py", line=1)
     assert (await dispatch("/code", ctx)).startswith("ERROR: VS Code CLI")
+
+
+async def test_exit_and_quit_are_rows_in_the_table(tmp_path: Path):
+    """Both names used to be matched by the REPL's read loop before dispatch
+    ever saw them, so the one table that drives /help, the inline menu and the
+    palette had never heard of either — and the TUI, with no read loop to
+    intercept anything, had no /exit at all."""
+    from pyrrhon.commands.registry import all_commands
+
+    names = {cmd.name for cmd in all_commands()}
+    assert {"exit", "quit"} <= names
+    assert "/exit" in await dispatch("/help", make_ctx(tmp_path))
+
+
+async def test_exit_asks_the_channel_to_leave(tmp_path: Path):
+    """A handler returns a string and never raises, so leaving is a request to
+    the channel rather than something the command does itself."""
+    ctx = make_ctx(tmp_path)
+    ctx.ui.exiting = False
+    ctx.ui.request_exit = lambda: setattr(ctx.ui, "exiting", True)
+    assert "Leaving" in await dispatch("/exit", ctx)
+    assert ctx.ui.exiting
+
+
+async def test_exit_says_so_when_the_channel_cannot_leave(tmp_path: Path):
+    """A channel with no way out gets an actionable error, not a silent no-op."""
+    response = await dispatch("/quit", make_ctx(tmp_path))
+    assert response.startswith("ERROR")
+    assert "ctrl+c" in response
+
+
+def test_the_repl_ui_can_be_asked_to_leave():
+    """The read loop reads this flag once per iteration; ConsoleUI is what
+    turns the command's request into something that loop can see."""
+    from rich.console import Console
+
+    from pyrrhon.repl import ConsoleUI
+
+    ui = ConsoleUI(Console())
+    assert not ui.exiting
+    ui.request_exit()
+    assert ui.exiting

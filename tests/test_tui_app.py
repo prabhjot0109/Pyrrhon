@@ -199,3 +199,28 @@ async def test_a_pasted_key_is_still_masked_in_the_echo(sample_repo: Path):
         text = _transcript_text(app)
         assert "super-secret-value" not in text
         assert "****" in text
+
+
+async def test_the_footer_advertises_each_action_once(sample_repo: Path):
+    """The Footer renders the command palette in a slot of its own.
+
+    That slot comes from App.COMMAND_PALETTE_BINDING, not from the binding
+    list, so declaring ctrl+p ourselves did not override it — it added a
+    second entry, and the footer read "^p commands ... ^p commands" on one
+    line. active_bindings cannot see the collision, because it is keyed by key
+    and the two entries share one; the shape of the mistake is what to assert.
+
+    Overriding a key Textual binds through the normal list stays fine, and
+    ctrl+c does exactly that: one key renders once.
+    """
+    app = make_app(sample_repo)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        ours = [binding for binding in PyrrhonApp.BINDINGS if binding.show]
+        keys = {binding.key for binding in ours}
+        assert PyrrhonApp.COMMAND_PALETTE_BINDING not in keys, (
+            "the Footer advertises the palette on its own; a binding is a duplicate"
+        )
+        labels = [binding.description for binding in ours]
+        duplicates = {text for text in labels if labels.count(text) > 1}
+        assert not duplicates, f"the footer would say these twice: {duplicates}"

@@ -17,8 +17,16 @@ from rich.text import Text
 
 from pyrrhon import __version__
 
-FACE = "#305eff"  # The letter faces, a rich blue. Public because tui/theme.py
-                  # inherits it rather than repeating the hex (D6).
+# The letter faces. Public because tui/theme.py inherits it rather than
+# repeating the hex (D6), where it is the product's one accent: the wordmark,
+# the rail on a turn you took, and the focus ring are all this colour.
+#
+# Warm rather than blue, and on true black rather than a blue-shifted near
+# black. Blue was reading as chrome — a terminal agent that looks like a
+# dialog box — and it also collided with the rail's job, since the rail now
+# carries an epistemic ladder (green verified, amber hedged, red faulted) and
+# had no spare hue for "this is you".
+FACE = "#d97757"
 _SHADOW = "bold white"
 _SHADOW_GLYPHS = frozenset("═║╔╗╚╝")
 
