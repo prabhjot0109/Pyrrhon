@@ -14,6 +14,8 @@ is not one.
 
 from pathlib import Path
 
+import pytest
+from textual.containers import VerticalScroll
 from textual.widgets import Markdown
 
 from pyrrhon.bootstrap import build_agent
@@ -205,3 +207,35 @@ async def test_a_turn_finished_still_closes_its_own_turn(sample_repo: Path):
         await pilot.pause()
         assert not app.turn.speaking
         assert not list(app.query(WorkingRow))
+
+
+@pytest.mark.parametrize("size", [(80, 24), (200, 50)])
+async def test_a_spoken_session_reads_the_same_at_either_terminal_size(
+    sample_repo: Path, size: tuple[int, int]
+):
+    """The Definition-of-Done box that was never ticked, made durable.
+
+    The TUI redesign's DoD asked for the channel to be driven by hand at 80x24
+    and at 200x50 *with voice on*, and it never was — which is the whole
+    reason three defects shipped green. A hand-drive is a one-time answer to a
+    question that comes back on every change, so the geometries are pinned
+    here as well.
+    """
+    app = make_app(sample_repo)
+    async with app.run_test(size=size) as pilot:
+        for n in (1, 2):
+            app._on_voice_event(Transcription(text=f"Question {n}?"))
+            app._on_voice_event(SpeechChunk(text=f"Answer {n}."))
+            await pilot.pause()
+            app._on_voice_event(TurnFinished())
+            await pilot.pause()
+
+        rows = speech_rows(app)
+        assert len(rows) == 2
+        assert not app.turn.speaking, "the spinner and the status bar recovered"
+
+        transcript = app.query_one("#transcript", VerticalScroll)
+        # D1 again, under voice: no sibling pane, and no horizontal margin on
+        # a child of the column silently narrowing the transcript.
+        assert transcript.outer_size.width == size[0]
+        assert transcript.scroll_offset.x == 0, "the column never scrolls sideways"
