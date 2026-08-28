@@ -160,7 +160,19 @@ class TuiRenderer(EventRenderer):
         # A seventh glyph would break "six glyphs, one column".
         self._mount(AssistantRow(f"**{event.question}**"))
 
-    def on_interrupted(self, event: TruncateSpeech) -> None:
-        # Voice barge-in: history was rewritten to what was actually heard.
+    async def on_interrupted(self, event: TruncateSpeech) -> None:
+        """Voice barge-in: history was rewritten to what was actually heard.
+
+        And the turn ends here, because that is what the user just did. The
+        core has already truncated the assistant message to the prose that was
+        actually played; leaving the view open left the spinner turning and
+        the status bar saying "speaking" until the next utterance rotated it,
+        which is a screen claiming Pyrrhon is still talking over a user who
+        interrupted precisely because they wanted it to stop.
+
+        The row is mounted first, so the marker lands under the prose it cut
+        off rather than under the spinner that is about to be removed.
+        """
         self._mount(InterruptRow())
+        await self._app.end_turn()
 

@@ -17,8 +17,9 @@ from pathlib import Path
 from textual.widgets import Markdown
 
 from pyrrhon.bootstrap import build_agent
-from pyrrhon.core.events import SpeechChunk, Transcription
+from pyrrhon.core.events import SpeechChunk, Transcription, TruncateSpeech
 from pyrrhon.tui.app import PyrrhonApp
+from pyrrhon.tui.messages import WorkingRow
 from tests.helpers import FakeLLM
 
 
@@ -99,3 +100,46 @@ async def test_the_user_row_sits_above_its_own_answer(sample_repo: Path):
         assert joined.index("First question") < joined.index("First answer")
         assert joined.index("First answer") < joined.index("Second question")
         assert joined.index("Second question") < joined.index("Second answer")
+
+
+async def test_barge_in_ends_the_turn_it_interrupted(sample_repo: Path):
+    """Defect B. The row-splitting half of this is already handled by the
+    rotation on the *next* utterance, so what is left is the interval in
+    between: from the interruption until the user speaks again, the spinner
+    was still turning and the status bar still said Pyrrhon was speaking.
+
+    A barge-in is the user ending the turn. Nothing about it is pending.
+    """
+    app = make_app(sample_repo)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app._on_voice_event(Transcription(text="How does this work?"))
+        app._on_voice_event(SpeechChunk(text="Looking for the right files."))
+        await pilot.pause()
+        assert app.turn.speaking, "prose is in flight"
+
+        app._on_voice_event(TruncateSpeech(played_text="Looking for the right"))
+        await pilot.pause()
+
+        assert not app.turn.speaking, "the turn ended when the user cut in"
+        assert not list(app.query(WorkingRow)), "nothing is still working"
+        assert list(app.query("InterruptRow")), "the interruption is still shown"
+
+
+async def test_the_answer_after_a_barge_in_starts_a_new_row(sample_repo: Path):
+    """And the prose that was cut off keeps only what was said before it."""
+    app = make_app(sample_repo)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app._on_voice_event(Transcription(text="How does this work?"))
+        app._on_voice_event(SpeechChunk(text="Looking for the right files."))
+        await pilot.pause()
+        app._on_voice_event(TruncateSpeech(played_text="Looking for the right"))
+        await pilot.pause()
+
+        app._on_voice_event(Transcription(text="Why is that?"))
+        app._on_voice_event(SpeechChunk(text="Because there is no index."))
+        await pilot.pause()
+        await close_last_turn(app, pilot)
+
+        rows = speech_rows(app)
+        assert len(rows) == 2, f"barge-in must seal the row, got {len(rows)}"
+        assert "no index" not in rows[0].markdown.source
