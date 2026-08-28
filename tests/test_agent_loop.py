@@ -74,3 +74,38 @@ async def test_tool_budget_produces_honest_bailout():
     events = await collect(agent, [], "loop forever")
     speech = [e for e in events if isinstance(e, SpeechChunk)]
     assert "tool budget" in speech[-1].text
+
+
+async def test_a_bad_argument_error_names_the_accepted_parameters(sample_repo):
+    """The model can only correct itself against names it is told.
+
+    Seen in a real session: the schema says start_line/end_line, the model
+    sent line_start/line_end, and what came back was Python's raw TypeError —
+    which says what was *not* accepted and nothing about what would be. The
+    next attempt was another guess.
+    """
+    from pyrrhon.core.tools.base import run_tool
+    from pyrrhon.core.tools.repo import ReadFileTool
+
+    tools = {"read_file": ReadFileTool(sample_repo)}
+    result = await run_tool(tools, "read_file", {"path": "a.py", "line_start": 1})
+
+    assert result.startswith("ERROR: bad arguments for read_file:")
+    assert "start_line" in result
+    assert "end_line" in result
+    assert "path" in result
+
+
+async def test_a_good_call_is_unaffected(sample_repo):
+    from pyrrhon.core.tools.base import run_tool
+    from pyrrhon.core.tools.repo import ReadFileTool
+
+    tools = {"read_file": ReadFileTool(sample_repo)}
+    result = await run_tool(tools, "read_file", {"path": "utils/helpers.py"})
+    assert not result.startswith("ERROR")
+
+
+async def test_an_unknown_tool_is_still_named():
+    from pyrrhon.core.tools.base import run_tool
+
+    assert await run_tool({}, "nope", {}) == "ERROR: no tool named 'nope'."

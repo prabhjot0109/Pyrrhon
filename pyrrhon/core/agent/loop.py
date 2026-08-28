@@ -56,7 +56,7 @@ from pyrrhon.core.providers.llm import (
     InvalidToolCallError,
 )
 from pyrrhon.core.telemetry import RoundTrace, TurnTrace
-from pyrrhon.core.tools.base import Tool
+from pyrrhon.core.tools.base import Tool, run_tool
 
 logger = logging.getLogger("pyrrhon.agent")
 
@@ -779,10 +779,4 @@ class Agent:
                 return
 
     async def _run_tool(self, name: str, args: dict) -> str:
-        tool = self.tools.get(name)
-        if tool is None:
-            return f"ERROR: no tool named '{name}'."
-        try:
-            return await tool.run(**args)
-        except TypeError as exc:
-            return f"ERROR: bad arguments for {name}: {exc}"
+        return await run_tool(self.tools, name, args)

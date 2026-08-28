@@ -19,7 +19,7 @@ from pyrrhon.core.agent.guards import (
     run_tool_round,
 )
 from pyrrhon.core.agent.prompts import DEEP_AGENT_PROMPT, DEEP_SYSTEM_PROMPT
-from pyrrhon.core.tools.base import Tool
+from pyrrhon.core.tools.base import Tool, run_tool
 
 DEEP_MAX_ROUNDS = 12
 
@@ -94,10 +94,4 @@ class ThinkDeeperTool(Tool):
             return f"ERROR: deep model call failed: {exc}"
 
     async def _run_tool(self, name: str, args: dict) -> str:
-        tool = self.tools.get(name)
-        if tool is None:
-            return f"ERROR: no tool named '{name}'."
-        try:
-            return await tool.run(**args)
-        except TypeError as exc:
-            return f"ERROR: bad arguments for {name}: {exc}"
+        return await run_tool(self.tools, name, args)
