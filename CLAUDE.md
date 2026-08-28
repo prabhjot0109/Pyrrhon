@@ -332,6 +332,59 @@ vertical layout narrows *every sibling* to accommodate one child's horizontal
 margin, so a 1-column inset on the prompt silently shrank the transcript to
 118 of 120. `test_layout_is_one_full_width_column` is the check.
 
+**The turn boundary (2026-08-28).** `begin_turn`/`end_turn` on the App are
+the one bracket both channels use. `TurnView` is created once and used to be
+bracketed only inside `_agent_turn`, which is reached only from the typed
+prompt — so a spoken turn, which enters through
+`VoiceController -> _on_voice_event -> TuiRenderer`, crossed no boundary at
+all. Every spoken answer after the first was appended to the first one's row.
+
+A `Transcription` rotates it, because a spoken turn is started by the bridge
+and reaches the screen only as events, so the user speaking is the one signal
+both paths agree marks a new turn. `TurnFinished` closes it: `voice/bridge.py`
+emits one from `_run_turn`'s `finally`, which is every exit path including the
+cancellation a barge-in causes — without it a spoken turn's spinner never
+stopped and the status bar said `speaking` for the rest of the session.
+
+Three things about it are load-bearing.
+
+The boundary is **awaited**, not deferred, and that is why `EventRenderer`
+grew `render_awaited` beside `render` — same table, but an `async def` hook is
+awaited rather than left as a coroutine nobody ran, and `render` says so out
+loud if an async hook is reached through the sync door. The voice path already
+defers every event with `call_later`; a sync hook deferring its own async work
+schedules a *second* callback, which lands behind the events that arrived
+after it, so the rotation for turn two would have run after turn two's own
+answer. Textual dispatches queued messages one at a time and `invoke` awaits
+an async callback to completion, so one deferral per event is ordered where
+two are not. `call_next` does not rescue it: `_flush_next_callbacks` runs only
+once the queue is already empty.
+
+The end-of-turn signal races the next utterance, and the two halves of that
+race are fixed in the two places that have the knowledge. `_start_turn` and
+`_on_interruption` both cancel a turn task **without awaiting it**, so a
+superseded turn's `finally` runs after its replacement has begun: only the
+bridge knows which task is live, so it reports only when
+`self._turn_task is asyncio.current_task()`. And a spoken turn can end after
+something else has taken the screen — a question typed while voice is running
+is the plain case — so `TuiRenderer` remembers which generation the utterance
+opened and closes *that* one. Reading `turn.generation` when the report
+arrives is no guard at all: it always matches.
+
+`orient_in_background` is handed `self._renderer.render`, not
+`_render_event`. The brief is a `ScreenArtifact` whose hook is a plain row
+mount, and that task calls its callback synchronously from outside the message
+pump; `_render_event` is async now and would have become a coroutine nobody
+awaited.
+
+One thing found while doing this and deliberately not fixed, because it is a
+session concern and not a screen one: `_start_turn`'s defensive path cannot
+actually start a replacement turn. It cancels its predecessor and calls
+`abort_current_turn()`, but `Session.run_turn` refuses while `_current` is
+merely cancelled and not yet `done()`, so the replacement raises
+`RuntimeError: A turn is already running`. Reachable only when a transcription
+races ahead of its own interruption. M16.
+
 The evidence rail is the signature: one gutter column carrying the epistemic
 status of each row, and it is a widget rather than a character prepended to
 the body, which is what keeps it out of copied text and out of `history`.
