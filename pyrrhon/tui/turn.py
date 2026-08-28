@@ -29,6 +29,10 @@ class TurnView:
 
     def __init__(self, app: "PyrrhonApp") -> None:
         self._app = app
+        # Which turn this is. finish() takes the generation it means to close,
+        # so an end-of-turn signal that arrives after the next utterance has
+        # already rotated the view cannot tear down the wrong turn.
+        self.generation = 0
         self.working_row: WorkingRow | None = None
         self._speech_row: AssistantRow | None = None
         self._speech_stream = None
@@ -78,15 +82,25 @@ class TurnView:
         the turn instead of the top. Awaiting the mount is what makes the
         transcript read in the order the events arrived.
         """
+        self.generation += 1
         self._started = time.monotonic()
         self.working_row = WorkingRow()
         await self._transcript.mount(self.working_row)
         self._transcript.scroll_end(animate=False)
         self._timer = self._app.set_interval(0.1, self._tick)
 
-    async def finish(self) -> None:
+    async def finish(self, generation: int | None = None) -> None:
         """Every exit path, including abort. A stranded spinner claims
-        Pyrrhon is still working when it is not."""
+        Pyrrhon is still working when it is not.
+
+        `generation` is the turn the caller believes it is closing. The voice
+        path's end-of-turn signal is a callback racing the next utterance, so
+        a late one must not close the turn that has already replaced it. A
+        caller that genuinely owns the turn — the typed path's `finally` —
+        passes nothing and closes whatever is open.
+        """
+        if generation is not None and generation != self.generation:
+            return
         if self._timer is not None:
             self._timer.stop()
             self._timer = None

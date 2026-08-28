@@ -191,7 +191,10 @@ class PyrrhonApp(App):
         # self so the tasks aren't GC'd mid-flight.
         self._warm_task = warm_index_in_background(self.agent)
         self._warm_conn_task = warm_llm_connection_in_background(self.agent)
-        self._orient_task = orient_in_background(self.agent, self._render_event)
+        # The renderer directly, not `_render_event`: the brief is a
+        # ScreenArtifact, whose hook is a plain row mount, and the orientation
+        # task calls its `render` synchronously from outside the message pump.
+        self._orient_task = orient_in_background(self.agent, self._renderer.render)
         if self._start_voice:
             self.notify(self.voice.start())
 
@@ -241,6 +244,23 @@ class PyrrhonApp(App):
     def record_citation(self, citation: Citation) -> None:
         """Remember the most recent citation; ctrl+o and /code both read it."""
         self.last_citation = citation
+
+    async def begin_turn(self) -> None:
+        """Open a turn, closing any that is still open.
+
+        Both channels arrive here, and that is the point. The typed path
+        brackets its own turn in `_agent_turn`; the voice path has no such
+        bracket, because a spoken turn is started by the bridge and reaches
+        the screen only as events. Rotating on the way in means the boundary
+        is enforced by the one thing both paths agree marks a new turn — the
+        user saying something.
+        """
+        await self.turn.finish()
+        await self.turn.start()
+
+    async def end_turn(self, generation: int | None = None) -> None:
+        """Close a turn, if it is still the turn the caller meant."""
+        await self.turn.finish(generation)
 
     def request_exit(self) -> None:
         """`/exit` and `/quit`, from the one command table both channels read.
@@ -385,21 +405,26 @@ class PyrrhonApp(App):
         self.refresh_status()  # /model may have swapped a slot
         return response
 
-    def _render_event(self, event) -> None:
-        """Render one core event into the panes — agent turns and the M3
-        voice bridge (via VoiceController's on_event) both land here.
+    async def _render_event(self, event) -> None:
+        """Render one core event — agent turns and the M3 voice bridge (via
+        VoiceController's on_event) both land here.
 
-        Kept as a bound method because three callers pass it around as a plain
-        callable (the voice bridge, the orientation task, and _agent_turn)."""
-        self._renderer.render(event)
+        Awaited, because a hook may have to move the turn boundary before the
+        row it mounts makes sense, and both halves of that are async. This is
+        also what keeps the voice path in arrival order: Textual dispatches
+        queued messages one at a time and `invoke` awaits an async callback to
+        completion, so one `call_later` per event is ordered — while a sync
+        hook deferring its own work with a *second* `call_later` was not.
+        """
+        await self._renderer.render_awaited(event)
 
     async def _agent_turn(self, user_text: str) -> None:
         """Consume the core event stream inside a worker — the UI never blocks."""
         prompt = self.query_one("#prompt", Prompt)
-        await self.turn.start()
+        await self.begin_turn()
         try:
             async for event in self.session.run_turn(user_text):
-                self._render_event(event)
+                await self._render_event(event)
         except Exception as exc:
             # A failed turn must not kill the session (Textual workers
             # default to exit_on_error=True): show it and hand back the prompt.
@@ -410,7 +435,10 @@ class PyrrhonApp(App):
             # CancelledError is a BaseException, so the broad `except
             # Exception` above cannot swallow an abort; it lands here, which
             # is what makes esc leave the prompt usable.
-            await self.turn.finish()
+            #
+            # Unguarded, unlike the voice path's: this `finally` genuinely
+            # owns the turn it opened, so it closes whatever is open.
+            await self.end_turn()
             self.refresh_status()  # picks up the turn's latency measurement
             prompt.disabled = False
             prompt.focus()

@@ -77,9 +77,25 @@ class TuiRenderer(EventRenderer):
         # the column without every hook knowing about it.
         self._app.turn.mount(row)
 
-    def on_transcription(self, event: Transcription) -> None:
-        # What STT heard, on the same rail as a typed turn so voice and text
-        # read the same in the transcript. The 🎙 marks it as spoken input.
+    async def on_transcription(self, event: Transcription) -> None:
+        """What STT heard, and the turn boundary for the voice path.
+
+        On the same rail as a typed turn so voice and text read the same in
+        the transcript; the 🎙 marks it as spoken input.
+
+        A spoken turn is started by the bridge, which cannot reach the screen
+        except through events, so this is the one place the previous turn is
+        sealed. Without it every spoken answer after the first was appended to
+        the first one's row — one paragraph holding an answer, a tool filler,
+        an apology and a later answer, with the user rows below it empty.
+
+        Awaited (see `EventRenderer.render_awaited`) rather than deferred: the
+        rotation has to happen before the events that arrived behind this one,
+        and a second `call_later` would land after them. The row is mounted
+        after the rotation, so it lands under the previous turn's prose rather
+        than inside it.
+        """
+        await self._app.begin_turn()
         self._mount(UserRow(event.text, spoken=True))
 
     def on_voice_notice(self, event: VoiceNotice) -> None:

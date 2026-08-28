@@ -102,10 +102,12 @@ async def test_a_three_sentence_answer_is_one_document(sample_repo: Path):
     chunks: list[str] = []
     original = app._render_event
 
-    def counting(event):
+    # Async, because _render_event is: a hook may have to move the turn
+    # boundary before the row it mounts makes sense, and the caller awaits it.
+    async def counting(event):
         if isinstance(event, SpeechChunk):
             chunks.append(event.text)
-        original(event)
+        await original(event)
 
     app._render_event = counting
 
