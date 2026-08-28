@@ -17,7 +17,12 @@ from pathlib import Path
 from textual.widgets import Markdown
 
 from pyrrhon.bootstrap import build_agent
-from pyrrhon.core.events import SpeechChunk, Transcription, TruncateSpeech
+from pyrrhon.core.events import (
+    SpeechChunk,
+    Transcription,
+    TruncateSpeech,
+    TurnFinished,
+)
 from pyrrhon.tui.app import PyrrhonApp
 from pyrrhon.tui.messages import WorkingRow
 from tests.helpers import FakeLLM
@@ -143,3 +148,60 @@ async def test_the_answer_after_a_barge_in_starts_a_new_row(sample_repo: Path):
         rows = speech_rows(app)
         assert len(rows) == 2, f"barge-in must seal the row, got {len(rows)}"
         assert "no index" not in rows[0].markdown.source
+
+
+async def test_the_status_bar_stops_saying_speaking(sample_repo: Path):
+    """Defect C: turn.speaking is `self._speech_stream is not None`, and
+    nothing on the voice path ever cleared it — so the status bar read
+    "speaking" for the rest of the session after the first spoken answer."""
+    app = make_app(sample_repo)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app._on_voice_event(Transcription(text="Are you listening?"))
+        app._on_voice_event(SpeechChunk(text="Absolutely."))
+        await pilot.pause()
+        assert app.turn.speaking, "prose is in flight"
+
+        app._on_voice_event(TurnFinished())
+        await pilot.pause()
+        assert not app.turn.speaking, "the turn is over"
+        assert not list(app.query(WorkingRow)), "and the spinner stopped"
+
+
+async def test_a_late_turn_finished_cannot_close_the_turn_that_replaced_it(
+    sample_repo: Path,
+):
+    """The generation guard.
+
+    The bridge cancels a turn without awaiting it (`_start_turn`,
+    `_on_interruption`), so a spoken turn's end-of-turn report can arrive
+    after something else has already opened a turn on screen — a typed
+    question while voice is running is the plain case. Reading the *current*
+    generation when the report arrives would be no guard at all, so the
+    renderer remembers which turn the utterance opened and closes that one.
+    """
+    app = make_app(sample_repo)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app._on_voice_event(Transcription(text="A spoken question?"))
+        app._on_voice_event(SpeechChunk(text="A spoken answer."))
+        await pilot.pause()
+        spoken = app.turn.generation
+
+        # The turn is replaced — what a typed turn's begin_turn() does.
+        await app.begin_turn()
+        assert app.turn.generation != spoken, "a new turn is on screen"
+
+        app._on_voice_event(TurnFinished())
+        await pilot.pause()
+        assert list(app.query(WorkingRow)), "the newer turn is still working"
+
+
+async def test_a_turn_finished_still_closes_its_own_turn(sample_repo: Path):
+    """The other half of the guard: it must not refuse the normal case."""
+    app = make_app(sample_repo)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app._on_voice_event(Transcription(text="A question?"))
+        app._on_voice_event(SpeechChunk(text="An answer."))
+        app._on_voice_event(TurnFinished())
+        await pilot.pause()
+        assert not app.turn.speaking
+        assert not list(app.query(WorkingRow))

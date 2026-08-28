@@ -24,6 +24,7 @@ from pyrrhon.core.events import (
     ToolCallStarted,
     Transcription,
     TruncateSpeech,
+    TurnFinished,
     VoiceNotice,
 )
 from pyrrhon.core.grounding.gate import HEDGE, LINE_HEDGE, LINE_UNSEEN_HEDGE
@@ -67,6 +68,10 @@ class TuiRenderer(EventRenderer):
 
     def __init__(self, app: "PyrrhonApp"):
         self._app = app
+        # Which turn the last utterance opened. TurnFinished carries no
+        # payload — "which turn" is deliberately the consumer's bookkeeping —
+        # so this is where the answer is kept.
+        self._spoken_generation: int | None = None
 
     @property
     def _transcript(self) -> VerticalScroll:
@@ -96,6 +101,7 @@ class TuiRenderer(EventRenderer):
         than inside it.
         """
         await self._app.begin_turn()
+        self._spoken_generation = self._app.turn.generation
         self._mount(UserRow(event.text, spoken=True))
 
     def on_voice_notice(self, event: VoiceNotice) -> None:
@@ -175,4 +181,19 @@ class TuiRenderer(EventRenderer):
         """
         self._mount(InterruptRow())
         await self._app.end_turn()
+
+    async def on_turn_finished(self, event: TurnFinished) -> None:
+        """The bridge reporting that a spoken turn is over.
+
+        It closes the turn the *utterance* opened, not whatever happens to be
+        open now. Reading the current generation here would be no guard at
+        all — it always matches. A spoken turn can end after something else
+        has taken the screen: the plainest case is a question typed while
+        voice is running, which opens a turn of its own that this report has
+        nothing to say about.
+        """
+        generation, self._spoken_generation = self._spoken_generation, None
+        if generation is None:
+            return  # nothing spoken yet; not ours to close
+        await self._app.end_turn(generation)
 

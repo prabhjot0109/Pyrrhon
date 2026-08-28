@@ -21,6 +21,7 @@ from pyrrhon.core.events import (
     SpeechChunk,
     Transcription,
     TruncateSpeech,
+    TurnFinished,
     VoiceNotice,
 )
 from pyrrhon.core.providers.llm import LLMReply, ToolCall
@@ -382,3 +383,71 @@ def test_no_idle_line_can_carry_a_citation():
     for text in bridge_mod.IDLE_LINES:
         assert not re.search(r"\S+\.\w+:\d+", text), text
         assert "{" not in text and "%" not in text, text
+
+
+async def test_the_bridge_reports_the_end_of_a_turn():
+    """A screen channel cannot see the turn task, so without this its spinner
+    never stops and its status bar keeps saying Pyrrhon is speaking."""
+    bridge, session, seen = make_bridge([LLMReply(text="alpha beta")])
+    await bridge._handle_frame(transcription("a question"), DOWN)
+    await asyncio.wait_for(bridge._turn_task, timeout=2)
+
+    assert isinstance(seen[-1], TurnFinished), (
+        f"the end of the turn is reported last, got {seen[-1]!r}"
+    )
+    assert sum(isinstance(e, TurnFinished) for e in seen) == 1
+
+
+async def test_a_cancelled_turn_still_reports_its_end():
+    """Barge-in cancels the turn task outright. That is the exit path where a
+    stranded spinner is most visible, so it is the one that must report."""
+    slow = SlowEchoTool()
+    bridge, session, seen = make_bridge(
+        [LLMReply(tool_calls=(ToolCall(id="c1", name="slow_echo", arguments={}),))],
+        tools=[slow],
+    )
+    await bridge._handle_frame(transcription("take your time"), DOWN)
+    await asyncio.wait_for(slow.started.wait(), timeout=2)
+
+    await bridge._handle_frame(VADUserStartedSpeakingFrame(), DOWN)
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    assert any(isinstance(e, TurnFinished) for e in seen), (
+        "a turn killed by barge-in still ended"
+    )
+
+
+async def test_a_superseded_turn_does_not_report_the_end_of_the_live_one():
+    """_start_turn cancels its predecessor without awaiting it, so the old
+    turn's `finally` runs after the new one is already the turn in flight.
+    Reporting there tells a screen channel that the turn it is *currently*
+    showing has ended, and its spinner stops mid-answer.
+
+    The supersede is staged by hand rather than by pushing a second
+    transcription: `_start_turn`'s own defensive path cannot actually start a
+    replacement, because `Session.run_turn` refuses while `_current` is
+    merely cancelled and not yet done. That is a separate, pre-existing bug
+    and not what this pins.
+    """
+    slow = SlowEchoTool()
+    bridge, session, seen = make_bridge(
+        [LLMReply(tool_calls=(ToolCall(id="c1", name="slow_echo", arguments={}),))],
+        tools=[slow],
+    )
+    await bridge._handle_frame(transcription("take your time"), DOWN)
+    await asyncio.wait_for(slow.started.wait(), timeout=2)
+    superseded = bridge._turn_task
+
+    replacement = asyncio.create_task(asyncio.sleep(30))
+    bridge._turn_task = replacement
+    superseded.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await superseded
+
+    assert not any(isinstance(e, TurnFinished) for e in seen), (
+        "the superseded turn reported the end of the turn that replaced it"
+    )
+    replacement.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await replacement

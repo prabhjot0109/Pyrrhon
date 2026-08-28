@@ -93,6 +93,21 @@ class TruncateSpeech:
     played_text: str
 
 
+@dataclass(frozen=True)
+class TurnFinished:
+    """The turn is over, however it ended.
+
+    Emitted by whoever drove the turn, on every exit path including
+    cancellation. A screen channel uses it to stop the spinner and to stop
+    claiming the agent is still speaking; a channel that shows neither
+    ignores it.
+
+    It carries no payload. "Which turn" is the consumer's bookkeeping, not the
+    core's — the TUI counts generations and refuses a signal that arrives
+    after the next utterance has already rotated the view.
+    """
+
+
 Event = (
     SpeechChunk
     | ScreenArtifact
@@ -103,4 +118,5 @@ Event = (
     | Transcription
     | VoiceNotice
     | TruncateSpeech
+    | TurnFinished
 )

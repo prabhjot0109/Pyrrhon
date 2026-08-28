@@ -30,6 +30,7 @@ from pyrrhon.core.events import (
     ToolCallStarted,
     Transcription,
     TruncateSpeech,
+    TurnFinished,
     VoiceNotice,
 )
 
@@ -47,6 +48,7 @@ EVENT_HOOKS: dict[type, str] = {
     Transcription: "on_transcription",
     VoiceNotice: "on_voice_notice",
     TruncateSpeech: "on_interrupted",
+    TurnFinished: "on_turn_finished",
 }
 
 
@@ -113,3 +115,4 @@ class EventRenderer:
     def on_transcription(self, event: Transcription) -> None: ...
     def on_voice_notice(self, event: VoiceNotice) -> None: ...
     def on_interrupted(self, event: TruncateSpeech) -> None: ...
+    def on_turn_finished(self, event: TurnFinished) -> None: ...

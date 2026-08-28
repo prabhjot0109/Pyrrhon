@@ -55,6 +55,7 @@ from pyrrhon.core.events import (
     ToolCallStarted,
     Transcription,
     TruncateSpeech,
+    TurnFinished,
     VoiceNotice,
 )
 from pyrrhon.core.session import Session
@@ -271,6 +272,21 @@ class PyrrhonBridgeProcessor(FrameProcessor):
             filler.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await filler
+            # Every exit path, barge-in included — which is the point of
+            # putting it here rather than beside the frame below. A cancelled
+            # turn never reaches that line, and a turn killed by barge-in is
+            # exactly when a stranded spinner is most visible. A screen
+            # channel cannot see this task, so this is the only way it learns
+            # the turn is over.
+            #
+            # Unless this turn has already been replaced. _start_turn cancels
+            # its predecessor and does *not* await it, so a superseded turn's
+            # finally runs after the next turn has begun — and its report
+            # would name the turn the screen is currently showing. Only the
+            # bridge knows which task is the live one, so the check belongs
+            # here rather than in whoever is listening.
+            if self._turn_task is asyncio.current_task():
+                self._on_event(TurnFinished())
         await self.push_frame(LLMFullResponseEndFrame())
 
     async def _filler_watchdog(self) -> None:
