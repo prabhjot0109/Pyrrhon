@@ -103,8 +103,9 @@ class TurnFinished:
     ignores it.
 
     It carries no payload. "Which turn" is the consumer's bookkeeping, not the
-    core's — the TUI counts generations and refuses a signal that arrives
-    after the next utterance has already rotated the view.
+    core's: the TUI numbers its turns and remembers which one the utterance
+    opened, so a report that arrives after something else has taken the screen
+    closes nothing.
     """
 
 
