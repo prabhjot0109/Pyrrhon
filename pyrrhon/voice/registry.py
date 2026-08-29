@@ -76,6 +76,7 @@ VOICE_PROVIDERS: tuple[VoiceProvider, ...] = (
         module="pipecat.services.deepgram.stt", cls="DeepgramSTTService",
         key_env="DEEPGRAM_API_KEY", extra="deepgram",
         note="streaming STT, very low latency",
+        verified=True,  # tier 3, 2026-08-29
     ),
     VoiceProvider(
         id="cartesia", kind="stt", label="Cartesia",

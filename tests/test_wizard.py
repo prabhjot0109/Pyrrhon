@@ -160,3 +160,60 @@ def test_ensure_configured_respects_a_no(tmp_path, monkeypatch):
     monkeypatch.setattr(wizard_mod, "run_wizard",
                         lambda home: (_ for _ in ()).throw(AssertionError("ran anyway")))
     wizard_mod.ensure_configured(home=tmp_path, ask=lambda prompt: "n")
+
+
+def test_switching_provider_drops_the_previous_provider_s_model_and_voice(tmp_path):
+    """A rerun must not leave one provider's ids pointed at another provider.
+
+    Piper's voice id reached Deepgram as its `model` query param and the
+    handshake came back HTTP 400; Groq's whisper id reached Deepgram's
+    listen socket and came back 405. Both survived because the old writer
+    merged the previous [voice] table and only overwrote a detail key when
+    the NEW provider happened to carry a catalog default — Deepgram carries
+    neither, so the stale ids rode through the switch.
+    """
+    pyrrhon_dir = tmp_path / ".pyrrhon"
+    pyrrhon_dir.mkdir()
+    (pyrrhon_dir / "config.toml").write_text(
+        "[voice]\n"
+        'stt_provider = "groq"\n'
+        'tts_provider = "piper"\n'
+        'stt_model = "whisper-large-v3-turbo"\n'
+        'tts_voice = "en_US-lessac-medium"\n'
+        "chars_per_sec = 12.5\n",
+        encoding="utf-8",
+    )
+    run_wizard(
+        home=tmp_path,
+        console=QuietConsole(),
+        input_fn=scripted(
+            pick(llm_choices(), "groq"), "openai/gpt-oss-120b", "y",
+            pick(stt_choices(), "deepgram"),
+            pick(tts_choices(), "deepgram"),
+            "y",
+        ),
+        getpass_fn=scripted("gsk-abc", "dg-abc"),
+    )
+    voice = tomllib.loads((pyrrhon_dir / "config.toml").read_text())["voice"]
+    assert voice["stt_provider"] == "deepgram"
+    assert voice["tts_provider"] == "deepgram"
+    assert "stt_model" not in voice
+    assert "tts_voice" not in voice
+    # Knobs the wizard never asks about are not its to clear.
+    assert voice["chars_per_sec"] == 12.5
+
+
+def test_a_provider_with_a_default_voice_still_pins_it(tmp_path):
+    run_wizard(
+        home=tmp_path,
+        console=QuietConsole(),
+        input_fn=scripted(
+            pick(llm_choices(), "groq"), "openai/gpt-oss-120b", "y",
+            pick(stt_choices(), "groq"),
+            pick(tts_choices(), "piper"),
+            "y",
+        ),
+        getpass_fn=scripted("gsk-abc"),
+    )
+    voice = tomllib.loads((tmp_path / ".pyrrhon" / "config.toml").read_text())["voice"]
+    assert voice["tts_voice"] == "en_US-lessac-medium"

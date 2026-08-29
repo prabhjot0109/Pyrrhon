@@ -22,13 +22,14 @@ Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 git clone https://github.com/prabhjot0109/Pyrrhon && cd Pyrrhon
-uv sync                  # text + TUI
-uv sync --extra voice    # plus the audio stack, for --voice
+uv sync                  # text, TUI, and voice
 ```
 
-The audio stack is an optional extra. Text and TUI never import it, so a plain
-`uv sync` stays small. Running `--voice` without it prints what to install and
-continues in text mode.
+One command installs everything, every speech provider included. Nothing in the
+provider menu needs a second install step. The cost is a larger environment,
+since on-device turn detection and the local speech engines bring their own
+model runtimes. Text and TUI still never import the audio stack at runtime, and
+`--voice` degrades to text mode with a readable reason if it cannot start.
 
 ## Usage
 

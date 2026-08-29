@@ -162,6 +162,14 @@ async def test_stt_provider_transcribes_one_utterance(provider, speech_audio):
     two in-repo shims) transcribe on VADUserStoppedSpeakingFrame; streaming
     services ignore the brackets and answer as the audio arrives, which is what
     the trailing sleep waits for.
+
+    The LEADING sleep is the one that is easy to delete and must not be. A
+    streaming service opens its socket from StartFrame, and Deepgram's
+    _connect() only launches that handshake as a background task — its
+    run_stt drops audio while _connection is still None. run_test delivers
+    all 2.6 seconds in about three milliseconds, so without a pause the whole
+    utterance lands before the socket exists and the service is failed for
+    something no microphone could ever do to it.
     """
     settings = _live_settings(provider)
     try:
@@ -189,6 +197,7 @@ async def test_stt_provider_transcribes_one_utterance(provider, speech_audio):
     downstream, _ = await run_test(
         service,
         frames_to_send=[
+            SleepFrame(2.0),
             VADUserStartedSpeakingFrame(),
             *audio_frames,
             VADUserStoppedSpeakingFrame(),

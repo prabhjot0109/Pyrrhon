@@ -16,7 +16,18 @@ dependencies = [
     "huggingface-hub>=1.22.0",
     "mcp>=1.10,<2",
     "openai>=2.44.0",
-    "pipecat-ai[groq,openai,silero]>=1.7.0",
+    # Every extra the voice table names, plus the audio stack itself. This is
+    # one line rather than a `voice` extra on purpose: a provider you have to
+    # run a second command to reach is not a provider Pyrrhon ships, and the
+    # menu that offers it is lying. `install: uv add ...` in
+    # config/catalog.py:availability() is now unreachable for a bundled row
+    # and stays only for a plugin-supplied one.
+    # tests/test_voice_registry.py::test_tier2_every_table_row_ships_installed
+    # is what keeps this list in step with pyrrhon/voice/registry.py.
+    # The cost is torch and torchaudio (local-smart-turn, on by default) plus
+    # the on-device engines, which a text-only user now also pays for. That
+    # is the deliberate trade: one `uv sync` reaches every row in the table.
+    "pipecat-ai[assemblyai,cartesia,deepgram,elevenlabs,gladia,google,groq,inworld,kokoro,local,local-smart-turn,moonshine,openai,piper,rime,rnnoise,silero,whisper]>=1.7.0",
     "pydantic>=2.12.5",
     "pyyaml>=6.0.3",
     "rich>=14.3.1",
@@ -30,17 +41,6 @@ dependencies = [
     "tree-sitter>=0.25.2,<0.26",
     "tree-sitter-language-pack>=1.12.2",
 ]
-
-[project.optional-dependencies]
-# The audio stack plus the providers and capabilities that ship ON by default.
-# Text and TUI channels never import it, and voice/factory.py degrades with an
-# actionable message when it is missing — a path that could not be reached
-# while this was a hard dependency.
-#
-# local-smart-turn and rnnoise are here rather than opt-in because Task 8 and
-# Task 9 enable both by default, and a default that needs an extra command is
-# not a default.
-voice = ["pipecat-ai[local,piper,local-smart-turn,rnnoise]>=1.7.0"]
 
 [project.scripts]
 pyrrhon = "pyrrhon.cli:main"

@@ -60,7 +60,9 @@ def _load(provider: VoiceProvider):
         if provider.extra:
             raise VoiceUnavailableError(
                 f"{provider.label} needs an extra that is not installed ({exc}). "
-                f'Run: uv add "pipecat-ai[{provider.extra}]" — staying in text mode.'
+                "Run: uv sync (every bundled provider comes with it); if this "
+                f'persists, uv add "pipecat-ai[{provider.extra}]" — staying in '
+                "text mode."
             ) from exc
         raise VoiceUnavailableError(
             f"{provider.label} is unavailable ({exc}) — staying in text mode."

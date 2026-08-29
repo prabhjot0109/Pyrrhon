@@ -5,18 +5,17 @@ plugin-consent prompt), so it works over SSH and never fights Textual for
 the screen. Navigation: a number picks, Enter accepts the default, 'b'
 steps back a section, Ctrl-C aborts without writing. Keys are read with
 getpass (never echoed) and stored via pyrrhon.config.credentials — never
-in config.toml. Rerunning is safe: config.toml is merged (other sections
-survive; hand-written comments do not — the file header says so).
+in config.toml. Rerunning is safe and converges: sections the wizard does
+not own survive, and every key it does own is rewritten from the answers
+(hand-written comments do not survive — the file header says so).
 """
 
 from __future__ import annotations
 
 import getpass
 import os
-import tomllib
 from pathlib import Path
 
-import tomli_w
 from rich.console import Console
 
 from pyrrhon.config.catalog import (
@@ -26,6 +25,7 @@ from pyrrhon.config.catalog import (
     tts_choices,
 )
 from pyrrhon.config.credentials import read_credentials, save_credentials
+from pyrrhon.config.settings import patch_config
 
 
 class _Back(Exception):
@@ -176,28 +176,38 @@ def run_wizard(home: Path | None = None, console: Console | None = None,
 
 
 def _write_config(home: Path, state: dict) -> None:
-    path = home / ".pyrrhon" / "config.toml"
-    existing: dict = {}
-    if path.is_file():
-        with path.open("rb") as f:
-            existing = tomllib.load(f)
-    existing["fast"] = {"provider": state["llm"].id, "model": state["llm_model"]}
+    """Write the wizard's answers, converging rather than accumulating.
+
+    Every key the wizard owns is written on every run, `None` included —
+    patch_config drops a None, which is what makes a rerun idempotent. The
+    hand-rolled merge this replaced set a detail key only when the NEWLY
+    picked provider carried a catalog default, so switching to one that
+    carries none (Deepgram) left the previous provider's id in place. Piper's
+    voice reached Deepgram's speak socket as its `model` query param and the
+    handshake came back HTTP 400; Groq's whisper id reached the listen socket
+    and came back 405. Neither client could have caught it — the id is only
+    wrong relative to a provider, and nothing downstream knows which provider
+    wrote it.
+
+    Keys the wizard never asks about (chars_per_sec, turn_detection, and the
+    rest of [voice]) are not named here, so patch_config leaves them alone.
+    """
+    updates: dict[str, dict] = {
+        "fast": {"provider": state["llm"].id, "model": state["llm_model"]}
+    }
     if state.get("voice_on"):
-        voice = existing.get("voice", {})
-        voice["stt_provider"] = state["stt"].id
-        voice["tts_provider"] = state["tts"].id
-        # Only pin models/voices the catalog actually defaults — otherwise let
-        # the registry's per-provider fallback (Task 2) apply.
-        if state["stt"].default_model:
-            voice["stt_model"] = state["stt"].default_model
-        if state["tts"].default_model:
-            voice["tts_voice"] = state["tts"].default_model
-        existing["voice"] = voice
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("wb") as f:
-        f.write(b"# Managed by `pyrrhon --setup` (rerunning merges sections,"
-                b" comments are not preserved).\n")
-        tomli_w.dump(existing, f)
+        updates["voice"] = {
+            "stt_provider": state["stt"].id,
+            "tts_provider": state["tts"].id,
+            # default_model is the catalog's per-kind default: an STT model id
+            # or a TTS voice. None means "this provider has none" — clear the
+            # key and let the provider's own default apply.
+            "stt_model": state["stt"].default_model,
+            "tts_voice": state["tts"].default_model,
+            # Never set by the wizard, and provider-scoped like the two above.
+            "tts_model": None,
+        }
+    patch_config(updates, home=home)
 
 
 def ensure_configured(home: Path | None = None, ask=None) -> None:

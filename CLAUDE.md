@@ -168,7 +168,7 @@ Uses [uv](https://docs.astral.sh/uv/) for dependencies and environments. Python
 3.12 or newer, pinned in `.python-version` and `pyproject.toml`.
 
 ```bash
-uv sync                        # install; add --extra voice for the audio stack
+uv sync                        # install everything, audio stack included
 uv add <package>               # add a dependency
 
 uv run pyrrhon [repo-path]     # Textual TUI (default channel)
@@ -185,9 +185,24 @@ uv run python -m pyrrhon.evals.grounding evals/grounding.yaml   # needs an API k
 ```
 
 The text and TUI channels need one LLM key (`GROQ_API_KEY` by default, or
-configure another provider). Voice additionally needs `OPENAI_API_KEY` and
-`uv sync --extra voice`. Inside the TUI, `/voice on|off` toggles the pipeline
-and `/debug-history` dumps the session history.
+configure another provider). Voice needs a key for whichever STT/TTS rows you
+pick and nothing else — there is no `--extra voice` any more, because a
+provider the menu offers and one command cannot start is a menu that lies. Every
+extra in `pyrrhon/voice/registry.py` is in the base `pipecat-ai[...]` line, and
+`tests/test_voice_registry.py::test_tier2_every_table_row_ships_installed`
+fails if a new row outruns it. Inside the TUI, `/voice on|off` toggles the
+pipeline and `/debug-history` dumps the session history.
+
+A provider-scoped id is only wrong relative to a provider, so nothing in the
+client can validate `[voice] stt_model` or `tts_voice` — a Piper voice sent to
+Deepgram's speak socket comes back as a bare HTTP 400 at the websocket
+handshake. Two things keep that from recurring. `config/wizard.py:_write_config`
+goes through `patch_config` and writes every key it owns on every run, `None`
+included, so a rerun converges instead of carrying the previous provider's ids
+through a switch. And `voice/bridge.py:_handshake_hint` turns a rejected
+handshake into the config key that caused it, reading `key_env` back off the
+registry row rather than deriving it from the class name (`HF_TOKEN`, not the
+`HUGGINGFACE_API_KEY` string surgery would invent).
 
 Keep ruff and mypy clean. Both gate CI, and the ruff rule set is deliberately
 narrow (`F`, `I`, `B`, `ASYNC`) so that real findings are not buried under style

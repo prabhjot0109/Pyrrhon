@@ -103,7 +103,26 @@ def test_a_present_module_with_an_unsatisfied_extra_is_not_ready(monkeypatch):
     assert availability(kokoro) == 'install: uv add "pipecat-ai[kokoro]"'
 
 
-def test_runnability_is_read_from_what_the_module_itself_imports():
+def _probe(monkeypatch, tmp_path, name: str, source: str) -> str:
+    """Write `source` as an importable module and return its name.
+
+    The two tests below used to make their point with real provider modules
+    (`pipecat.services.deepgram.stt`, `...google.tts`) and an `is False` on
+    each. That asserted which extras happened to be absent from the machine
+    running pytest, so bundling those extras turned a green suite red without
+    anything being wrong. _dependencies_present is a pure function of a
+    module's imports and the installed set; a synthetic module pins the
+    function and nothing else.
+    """
+    import importlib
+
+    (tmp_path / f"{name}.py").write_text(source, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    return name
+
+
+def test_runnability_is_read_from_what_the_module_itself_imports(monkeypatch, tmp_path):
     """Not from what pipecat says the extra pulls in — an extra is coarser than
     a row. `pipecat-ai[deepgram]` covers a TTS service that is plain HTTP and an
     STT service that needs the vendor SDK, and the metadata question marked the
@@ -111,25 +130,39 @@ def test_runnability_is_read_from_what_the_module_itself_imports():
     """
     from pyrrhon.config.catalog import _dependencies_present
 
-    # The deepgram pair, and only it, carries that claim without also asserting
-    # which extras happen to be installed. aiohttp, loguru and websockets are
-    # unconditional pipecat-ai requirements, so the TTS half is runnable off the
-    # base dependency alone, in CI as well as under the voice extra.
-    assert _dependencies_present("pipecat.services.deepgram.tts") is True
-    assert _dependencies_present("pipecat.services.deepgram.stt") is False
+    plain = _probe(
+        monkeypatch, tmp_path, "_probe_plain_http",
+        "import aiohttp\nimport os\nimport pipecat.frames\n",
+    )
+    vendor = _probe(
+        monkeypatch, tmp_path, "_probe_vendor_sdk",
+        "from vendor_sdk_nobody_installs import Client\nimport pipecat.frames\n",
+    )
+    assert _dependencies_present(plain) is True
+    assert _dependencies_present(vendor) is False
     assert _dependencies_present("pipecat.services.nowhere.at_all") is False
 
 
-def test_a_namespace_package_is_not_mistaken_for_an_installed_one():
+def test_a_namespace_package_is_not_mistaken_for_an_installed_one(monkeypatch, tmp_path):
     """The trap that would have reintroduced the exact lie availability()
     prevents: `google` is a namespace package, so find_spec("google") succeeds
     on a machine with nothing under it. Gemini TTS imports `google.api_core`,
     and only the full dotted path tells the truth about it.
     """
-    from pyrrhon.config.catalog import _dependencies_present, _toplevel_imports
+    from pyrrhon.config.catalog import (
+        _dependencies_present,
+        _installed,
+        _toplevel_imports,
+    )
 
     source = "from google.api_core import x\nimport os\nimport pipecat.frames\n"
     assert _toplevel_imports(source) == {"google.api_core"}, (
         "root-only would have said {'google'}, and stdlib/pipecat must drop out"
     )
-    assert _dependencies_present("pipecat.services.google.tts") is False
+    # The root resolves whether or not anything is under it. That is the trap.
+    assert _installed("google") is True
+    absent = _probe(
+        monkeypatch, tmp_path, "_probe_namespace_child",
+        "from google.no_such_submodule import x\n",
+    )
+    assert _dependencies_present(absent) is False

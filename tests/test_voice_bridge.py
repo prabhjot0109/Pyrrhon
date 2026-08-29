@@ -451,3 +451,31 @@ async def test_a_superseded_turn_does_not_report_the_end_of_the_live_one():
     replacement.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await replacement
+
+
+def test_a_rejected_handshake_names_the_config_key_that_caused_it():
+    """HTTP 400 at the websocket handshake means the id, not the key.
+
+    The id in [voice] is only wrong relative to a provider, so nothing in the
+    client can validate it — a Piper voice reached Deepgram's speak socket as
+    its `model` query param and came back 400. The raw frame said only
+    "server rejected WebSocket connection: HTTP 400", which points nowhere.
+    """
+    tts = humanize_voice_error(
+        "DeepgramTTSService#0 error: server rejected WebSocket connection: HTTP 400"
+    )
+    assert "tts_voice" in tts
+    assert "/settings tts deepgram" in tts
+
+    stt = humanize_voice_error(
+        "DeepgramSTTService#0 error: server rejected WebSocket connection: HTTP 405"
+    )
+    assert "stt_model" in stt
+    assert "/settings stt deepgram" in stt
+
+    # An auth rejection is a different fix, and must not be blamed on the id.
+    auth = humanize_voice_error(
+        "CartesiaTTSService#0 error: server rejected WebSocket connection: HTTP 401"
+    )
+    assert "CARTESIA_API_KEY" in auth
+    assert "tts_voice" not in auth

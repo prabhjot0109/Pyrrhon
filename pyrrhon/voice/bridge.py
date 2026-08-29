@@ -127,12 +127,63 @@ IDLE_LINES = (
 )
 
 
+# A pipecat service names itself "<Provider><KIND>Service#0" in its error
+# frames, and every registry id is that prefix lowercased — the one exception,
+# whisper-local, is on-device and never opens a socket to be rejected. Reading
+# the row back is what lets the hint name a real key_env (HF_TOKEN, not the
+# HUGGINGFACE_API_KEY that string surgery would have invented).
+_SERVICE = re.compile(r"(\w+?)(STT|TTS)Service")
+_HANDSHAKE = re.compile(r"rejected WebSocket connection: HTTP (\d+)")
+# Authentication and billing. Everything else at handshake time is the id in
+# the query string, because that is all the client sent.
+_AUTH_CODES = {"401", "402", "403"}
+
+
+def _handshake_hint(text: str) -> str | None:
+    """One actionable line for a rejected websocket handshake, or None."""
+    from pyrrhon.voice.registry import find
+
+    rejection = _HANDSHAKE.search(text)
+    service = _SERVICE.search(text)
+    if not rejection or not service:
+        return None
+    code = rejection.group(1)
+    kind = service.group(2).lower()
+    provider = find(kind, service.group(1).lower())
+    label = provider.label if provider else service.group(1)
+
+    if code in _AUTH_CODES:
+        if provider is None or provider.key_env is None:
+            return f"{label} refused the connection (HTTP {code}) — check your account."
+        return (
+            f"{label} refused the connection (HTTP {code}). That is the key, not "
+            f"the model: set {provider.key_env} with "
+            f"/settings key {provider.key_env} <value>, then /voice off and "
+            "/voice on."
+        )
+
+    setting = "stt_model" if kind == "stt" else "tts_voice"
+    if provider is None:
+        return (
+            f"{label} rejected the connection (HTTP {code}) — [voice] {setting} "
+            "is not an id it knows."
+        )
+    return (
+        f"{label} rejected the connection (HTTP {code}). That is the id, not the "
+        f"key: [voice] {setting} is not one {label} knows, which usually means "
+        f"it was left over from a different provider. Run "
+        f"/settings {kind} {provider.id} to fall back to its own default, or "
+        f"/settings {kind} {provider.id} <id> to name one."
+    )
+
+
 def humanize_voice_error(text: str) -> str:
     """Turn a raw pipecat/provider ErrorFrame string into one actionable line.
 
-    The common case here is a Groq hosted TTS/STT model gated behind a
-    one-time terms click — the raw 400 buries an accept-terms URL inside a
-    JSON blob. Pull it out and tell the user exactly what to do."""
+    Two cases earn a translation. A Groq hosted model gated behind a one-time
+    terms click buries an accept-terms URL inside a JSON blob; pull it out. And
+    a websocket handshake rejection carries only a status code, which points at
+    nothing — see _handshake_hint for why the config key is the answer."""
     if "terms acceptance" in text or "model_terms_required" in text:
         match = re.search(r"https?://\S+", text)
         link = match.group(0).rstrip("'\".,)") if match else "https://console.groq.com"
@@ -141,6 +192,9 @@ def humanize_voice_error(text: str) -> str:
             "accept, then run /voice off and /voice on again "
             "(or switch TTS with /settings tts <provider>)."
         )
+    hint = _handshake_hint(text)
+    if hint is not None:
+        return hint
     return f"Voice pipeline error: {text}"
 
 

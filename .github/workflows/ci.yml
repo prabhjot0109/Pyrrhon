@@ -18,13 +18,15 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      # No --all-extras: the `voice` extra is pipecat-ai[local], whose PyAudio
-      # needs portaudio.h to compile — absent on the runner. Installing it would
-      # buy nothing. Nothing under tests/ imports PyAudio or the local transport;
-      # the pipecat the tests do import comes from the base dependency
-      # (pipecat-ai[groq,openai,silero]). Syncing without the extra is also the
-      # environment most users have, and the one voice/pipeline.py's lazy import
-      # is written to degrade in.
+      # PyAudio ships no manylinux wheel and compiles against portaudio.h, so
+      # the runner needs the headers. It used to sit behind the `voice` extra
+      # that CI skipped; folding that extra into the base dependencies is what
+      # makes this step necessary, and installing the real environment is the
+      # point — CI now checks what a user actually gets from `uv sync`.
+      - run: sudo apt-get update && sudo apt-get install -y portaudio19-dev
+      # Slower than it was: local-smart-turn brings torch. setup-uv's cache
+      # carries it between runs, and the alternative is a CI environment no
+      # user has.
       - run: uv sync --dev
       - run: uv run ruff check .
       - run: uv run mypy pyrrhon/core

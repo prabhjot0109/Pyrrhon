@@ -11,7 +11,7 @@ const steps = [
   {
     label: "Install",
     command: `git clone ${REPO_URL}\ncd Pyrrhon && uv sync`,
-    note: "Python 3.12+ and uv. Add --extra voice for the audio stack.",
+    note: "Python 3.12+ and uv. One command; the audio stack and every speech provider come with it.",
   },
   {
     label: "Point it at a repo",

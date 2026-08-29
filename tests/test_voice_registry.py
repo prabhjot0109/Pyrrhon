@@ -134,18 +134,25 @@ def _declared_extras() -> set[str]:
     return {e.strip() for e in extras}
 
 
-def test_tier2_bundled_providers_have_their_extra_declared():
-    """Providers we ship ON by default must be installable by `uv sync --extra voice`."""
-    bundled = {("tts", "piper"), ("stt", "groq"), ("stt", "openai"), ("tts", "openai")}
+def test_tier2_every_table_row_ships_installed():
+    """A row in the menu must be runnable after one `uv sync`, with no extra.
+
+    This used to check a hand-listed set of four "bundled" providers, which
+    was the honest test while the rest lived behind `--extra voice`. There is
+    no such distinction now: every extra the table names is in the base
+    dependency line, so the check is over the whole table. Adding a row with
+    a new extra fails here until pyproject.toml catches up, which is the
+    point — a menu entry Pyrrhon cannot start is the failure mode.
+    """
     declared = _declared_extras()
-    for kind, pid in bundled:
-        provider = find(kind, pid)
-        assert provider is not None, f"{kind}/{pid} missing from the table"
-        if provider.extra:
-            assert provider.extra in declared, (
-                f"{kind}/{pid} ships on by default but its extra "
-                f"'{provider.extra}' is not in pyproject.toml"
-            )
+    for provider in (*VOICE_PROVIDERS, PIPER_HTTP):
+        if not provider.extra:
+            continue
+        assert provider.extra in declared, (
+            f"{provider.kind}/{provider.id} is offered in the menu but its "
+            f"extra '{provider.extra}' is not in pyproject.toml's "
+            "pipecat-ai[...] line"
+        )
 
 
 def test_tier2_optional_providers_name_an_extra_users_can_install():
