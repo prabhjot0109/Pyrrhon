@@ -1,27 +1,34 @@
 import Link from "next/link"
+
 import { Button } from "@/components/ui/button"
-import { REPO_URL } from "@/lib/site"
+import { CommandBlock } from "@/components/command-block"
+import { INSTALL_ALTERNATIVES, INSTALL_COMMAND, PACKAGE, REPO_URL, SITE } from "@/lib/site"
 
 /**
- * How to run it, on its own, after the cards. A real sequence, so the numbers
- * carry information rather than decoration.
+ * How to get it and how to run it, as a real sequence, so the numbers carry
+ * information rather than decoration.
+ *
+ * The headline command installs the published package. The clone-and-sync
+ * route it replaced is still here at the bottom, because it is the right one
+ * for contributors and the wrong one for everybody else — asking a visitor to
+ * clone a repo to try a CLI is a barrier, not a feature.
  */
 
 const steps = [
   {
-    label: "Install",
-    command: `git clone ${REPO_URL}\ncd Pyrrhon && uv sync`,
-    note: "Python 3.12+ and uv. One command; the audio stack and every speech provider come with it.",
+    label: "Install it",
+    command: INSTALL_COMMAND,
+    note: "Python 3.12 or newer. The audio stack and every speech provider come with it, so there is no second command and no optional extra to remember.",
+  },
+  {
+    label: "Give it a key",
+    command: "export GROQ_API_KEY=...",
+    note: "Or run `pyrrhon` with no config and the setup wizard walks you through picking a provider. Point it at Ollama and nothing leaves your machine.",
   },
   {
     label: "Point it at a repo",
-    command: "uv run pyrrhon .          # terminal UI\nuv run pyrrhon --voice .  # and talk to it",
-    note: "Set GROQ_API_KEY first, or configure another provider. Voice also uses OPENAI_API_KEY.",
-  },
-  {
-    label: "Ask",
-    command: '"Where does the retry logic live?"',
-    note: "Talk over it any time — barge-in cuts the audio mid-sentence.",
+    command: `${PACKAGE} .          # terminal UI\n${PACKAGE} --voice .  # and talk to it`,
+    note: "Then ask it something. \u201cWhere does the retry logic live?\u201d Talk over it any time; barge-in cuts the audio mid-sentence.",
   },
 ]
 
@@ -29,39 +36,81 @@ export function InstallSection() {
   return (
     <section
       id="install-section"
-      className="w-full scroll-mt-20 px-5 py-24 md:py-32 flex flex-col items-center"
+      className="section-rule flex w-full scroll-mt-24 flex-col items-center px-5 py-24 md:py-32"
     >
-      <div className="w-full max-w-[720px]">
-        <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-muted-foreground/55">Install</p>
-        <h2 className="mt-5 text-foreground text-4xl md:text-5xl font-semibold leading-[1.1] tracking-tight">
-          Three commands.
-        </h2>
-        <p className="mt-6 max-w-[52ch] text-muted-foreground text-lg leading-relaxed text-pretty">
-          It runs on your machine and calls your provider directly. There is no account and no server in between.
+      <div className="w-full max-w-[760px]">
+        <p className="font-mono text-eyebrow uppercase text-muted-foreground">Install</p>
+        <h2 className="font-display text-display-lg mt-5 text-foreground">One command.</h2>
+        <p className="text-body-lg mt-6 max-w-[54ch] text-pretty text-muted-foreground">
+          It runs on your machine and calls your provider directly. There is no account, no signup and no server in
+          between.
         </p>
 
-        <ol className="mt-12 flex flex-col gap-4">
+        <div className="mt-9 max-w-[440px]">
+          <CommandBlock command={INSTALL_COMMAND} size="hero" />
+        </div>
+
+        <ol className="mt-12 flex flex-col gap-3">
           {steps.map((step, i) => (
-            <li key={step.label} className="rounded-xl border border-border bg-foreground/[0.03] overflow-hidden">
+            <li key={step.label} className="overflow-hidden rounded-2xl border border-border bg-foreground/[0.03]">
               <div className="flex items-baseline gap-3 px-5 pt-4">
-                <span className="font-mono text-xs text-muted-foreground/55 select-none">{`0${i + 1}`}</span>
-                <span className="text-foreground text-sm font-medium">{step.label}</span>
+                <span className="select-none font-mono text-xs font-semibold text-muted-foreground">{`0${i + 1}`}</span>
+                <span className="font-display text-display-2xs text-foreground">{step.label}</span>
               </div>
-              <pre className="px-5 py-4 font-mono text-xs md:text-[13px] leading-relaxed text-foreground/85 overflow-x-auto">
+              <pre className="overflow-x-auto px-5 py-4 font-mono text-xs font-medium leading-relaxed text-foreground/90 sm:text-[13.5px]">
                 {step.command}
               </pre>
-              <p className="px-5 pb-4 text-xs text-muted-foreground/70 leading-relaxed">{step.note}</p>
+              <p className="text-body-xs px-5 pb-4 text-muted-foreground">{step.note}</p>
             </li>
           ))}
         </ol>
 
-        <div className="mt-10 flex flex-col sm:flex-row sm:items-center gap-4">
+        <div className="mt-12 rounded-2xl border border-border bg-foreground/[0.03] p-6 md:p-7">
+          <p className="font-display text-display-xs text-foreground">Prefer something else?</p>
+          <p className="text-body-sm mt-2 max-w-[58ch] text-pretty text-muted-foreground">
+            <code className="font-mono text-[0.92em] text-foreground/90">uv tool install</code> is the recommendation
+            because Pyrrhon is an application rather than a library: it wants its own environment with the{" "}
+            <code className="font-mono text-[0.92em] text-foreground/90">{PACKAGE}</code> binary on your PATH. Any of
+            these work.
+          </p>
+          <dl className="mt-6 flex flex-col gap-4">
+            {INSTALL_ALTERNATIVES.map((alt) => (
+              <div key={alt.tool} className="flex flex-col gap-2">
+                <CommandBlock command={alt.command} />
+                <dd className="text-body-xs pl-1 text-muted-foreground">{alt.note}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+
+        <div className="mt-6 rounded-2xl border border-border bg-foreground/[0.03] p-6 md:p-7">
+          <p className="font-display text-display-xs text-foreground">Working on Pyrrhon itself?</p>
+          <p className="text-body-sm mt-2 max-w-[58ch] text-pretty text-muted-foreground">
+            Clone it and let uv build the environment from the lockfile. That is the only route that gets you the test
+            suite and the evals.
+          </p>
+          {/* Full width, unlike the others. This command is long enough that a
+              440px box cut it off mid-URL, which reads as a broken link even
+              though the box scrolls. */}
+          <div className="mt-4">
+            <CommandBlock command={`git clone ${REPO_URL} && cd Pyrrhon && uv sync`} />
+          </div>
+        </div>
+
+        <div className="mt-10 flex flex-col gap-4 sm:flex-row sm:items-center">
           <Link href={REPO_URL} target="_blank" rel="noopener noreferrer">
-            <Button className="bg-secondary text-secondary-foreground hover:bg-secondary/90 px-8 py-3 rounded-full font-medium text-base shadow-lg ring-1 ring-white/10">
+            <Button className="rounded-full bg-secondary px-8 py-3 text-base font-medium text-secondary-foreground shadow-lg ring-1 ring-foreground/10 hover:bg-secondary/90">
               View on GitHub
             </Button>
           </Link>
-          <span className="text-sm text-muted-foreground/70">Free and open source.</span>
+          <Link
+            href={SITE.pypi}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-body-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+          >
+            {PACKAGE} on PyPI &rarr;
+          </Link>
         </div>
       </div>
     </section>

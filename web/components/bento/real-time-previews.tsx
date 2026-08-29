@@ -79,7 +79,7 @@ const RealtimeCodingPreviews: React.FC = () => {
         >
           <div
             style={{
-              fontFamily: "'Geist Mono', 'SF Mono', Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+              fontFamily: "var(--font-geist-mono), 'Geist Mono', 'SF Mono', Monaco, monospace",
               fontSize: "10.279px",
               lineHeight: "15.814px",
               letterSpacing: "-0.3163px",
@@ -136,46 +136,11 @@ const RealtimeCodingPreviews: React.FC = () => {
             background: "var(--realtime-background-preview)", // Applied solid background here
           }}
         >
-          {/* Download Button - Exact positioning from Figma */}
-          <div
-            style={{
-              position: "absolute",
-              top: "calc(50% + 0.001px)",
-              left: "calc(50% - 71.501px)",
-              transform: "translate(-50%, -50%)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "7.907px",
-              background: "var(--realtime-primary-color)",
-              color: "var(--realtime-text-preview)",
-              border: "none",
-              cursor: "pointer",
-              fontWeight: 500,
-              whiteSpace: "nowrap",
-              transition: "all 0.2s ease",
-              padding: "6.326px 12.651px",
-              borderRadius: "11.07px",
-              boxShadow:
-                "0px 52.186px 14.233px rgba(0, 0, 0, 0), 0px 33.209px 12.651px rgba(0, 0, 0, 0.01), 0px 18.977px 11.07px rgba(0, 0, 0, 0.05), 0px 7.907px 7.907px rgba(0, 0, 0, 0.09), 0px 1.581px 4.744px rgba(0, 0, 0, 0.1)",
-              boxSizing: "border-box",
-            }}
-          >
-            <div
-              style={{
-                fontFamily: "'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-                fontSize: "20.558px",
-                lineHeight: "31.628px",
-                letterSpacing: "-0.6326px",
-                fontWeight: 500,
-                color: "var(--realtime-text-preview)", // Changed to use theme variable
-                textAlign: "left",
-                whiteSpace: "pre",
-              }}
-            >
-              Download for macOS
-            </div>
-          </div>
+          {/*
+            The template floated a "Download for macOS" pill in the middle of this
+            panel. Removed rather than relabelled. This card is about barge-in, and
+            the pill sat on top of the code showing it.
+          */}
         </div>
       </div>
 

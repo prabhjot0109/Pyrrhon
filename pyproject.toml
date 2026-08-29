@@ -8,6 +8,29 @@ version = "0.1.0"
 description = "A voice-first senior-engineer agent for understanding and designing software."
 readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Prabhjot Singh" }]
+keywords = [
+    "voice",
+    "agent",
+    "codebase",
+    "llm",
+    "terminal",
+    "tui",
+    "code-comprehension",
+    "grounding",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Documentation",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+
 dependencies = [
     "ddgs>=9.14.4",
     "google-genai>=2.10.0",
@@ -44,6 +67,15 @@ dependencies = [
 
 [project.scripts]
 pyrrhon = "pyrrhon.cli:main"
+
+# Rendered as the sidebar links on the PyPI project page. `Homepage` is what
+# `pip show` reports, so it points at the repo rather than the marketing site:
+# somebody reading `pip show` output wants the source.
+[project.urls]
+Homepage = "https://github.com/prabhjot0109/Pyrrhon"
+Source = "https://github.com/prabhjot0109/Pyrrhon"
+Issues = "https://github.com/prabhjot0109/Pyrrhon/issues"
+Changelog = "https://github.com/prabhjot0109/Pyrrhon/releases"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

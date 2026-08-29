@@ -222,9 +222,9 @@ const ParallelCodingAgents: React.FC<ParallelCodingAgentsProps> = ({ className =
             >
               <div
                 style={{
-                  fontFamily: "'Inter', sans-serif",
-                  fontWeight: 400,
-                  fontSize: "10.823px",
+                  fontFamily: "var(--font-syne), var(--font-geist-sans), system-ui, sans-serif",
+                  fontWeight: 600,
+                  fontSize: "11px",
                   lineHeight: "17.316px",
                   color: "var(--pca-text-primary)",
                   whiteSpace: "pre",
@@ -235,10 +235,10 @@ const ParallelCodingAgents: React.FC<ParallelCodingAgentsProps> = ({ className =
               </div>
               <div
                 style={{
-                  fontFamily: "'Inter', sans-serif",
+                  fontFamily: "var(--font-geist-mono), ui-monospace, monospace",
                   fontWeight: 400,
-                  fontSize: "10.823px",
-                  lineHeight: "17.316px",
+                  fontSize: "10px",
+                  lineHeight: "16px",
                   color: "var(--pca-text-secondary)",
                   whiteSpace: index === 1 ? "nowrap" : "pre",
                   overflow: index === 1 ? "hidden" : "visible",

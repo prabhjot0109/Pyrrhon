@@ -2,7 +2,7 @@ import type React from "react"
 
 import GroundedCitations from "./bento/ai-code-reviews"
 import BargeIn from "./bento/real-time-previews"
-import CodebaseMap from "./bento/one-click-integrations-illustration"
+import CodebaseMap from "./bento/language-coverage"
 import ProviderPicker from "./bento/provider-picker"
 import DeepSubagents from "./bento/parallel-agents"
 import SpecOutput from "./bento/spec-output"
@@ -13,29 +13,21 @@ interface BentoCardProps {
   Component: React.ComponentType
 }
 
+/**
+ * The card ground used to be a literal `rgba(231, 236, 235, 0.08)` with a
+ * `border-white/20` on top, which is the one thing globals.css says not to do:
+ * both were brighter than every other surface on the page and neither moved
+ * when the palette did. They resolve through the tokens now.
+ */
 const BentoCard = ({ title, description, Component }: BentoCardProps) => (
-  <div className="overflow-hidden rounded-2xl border border-white/20 flex flex-col justify-start items-start relative">
-    {/* Background with blur effect */}
-    <div
-      className="absolute inset-0 rounded-2xl"
-      style={{
-        background: "rgba(231, 236, 235, 0.08)",
-        backdropFilter: "blur(4px)",
-        WebkitBackdropFilter: "blur(4px)",
-      }}
-    />
-    {/* Additional subtle gradient overlay */}
-    <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent rounded-2xl" />
+  <div className="group relative flex flex-col items-start justify-start overflow-hidden rounded-2xl border border-border bg-foreground/[0.03] transition-colors duration-300 hover:border-foreground/20">
+    <div className="pointer-events-none absolute inset-0 rounded-2xl bg-gradient-to-br from-foreground/[0.04] to-transparent" />
 
-    <div className="self-stretch p-6 flex flex-col justify-start items-start gap-2 relative z-10">
-      <div className="self-stretch flex flex-col justify-start items-start gap-1.5">
-        <p className="self-stretch text-foreground text-lg font-normal leading-7">
-          {title} <br />
-          <span className="text-muted-foreground">{description}</span>
-        </p>
-      </div>
+    <div className="relative z-10 flex flex-col items-start justify-start gap-2 self-stretch p-6">
+      <h3 className="font-display text-display-xs self-stretch text-balance text-foreground">{title}</h3>
+      <p className="text-body-sm self-stretch text-pretty text-muted-foreground">{description}</p>
     </div>
-    <div className="self-stretch h-72 relative -mt-0.5 z-10">
+    <div className="relative z-10 -mt-0.5 h-72 self-stretch">
       <Component />
     </div>
   </div>
@@ -81,20 +73,26 @@ export function BentoSection() {
   ]
 
   return (
-    <section className="w-full px-5 flex flex-col justify-center items-center overflow-visible bg-transparent">
-      {/* No decorative glow: the dither is the hero's, and everything down
-          here sits on the flat --background on purpose. */}
-      <div className="w-full py-8 md:py-16 relative flex flex-col justify-start items-start gap-6">
-        <div className="self-stretch py-8 md:py-14 flex flex-col justify-center items-center gap-2 z-10">
-          <div className="flex flex-col justify-start items-center gap-4">
-            <h2 className="w-full max-w-[655px] text-center text-foreground text-4xl md:text-6xl font-semibold leading-tight md:leading-[66px]">
-              It can point at everything it says
-            </h2>
-            <p className="w-full max-w-[600px] text-center text-muted-foreground text-lg md:text-xl font-medium leading-relaxed">
-              A confident hallucination spoken out loud is the worst thing a voice agent can do. Pyrrhon is built so
-              that it can&apos;t.
-            </p>
-          </div>
+    <section className="section-rule flex w-full flex-col items-center justify-center overflow-visible bg-transparent px-5 py-24 md:py-32">
+      {/*
+        No decorative glow: the dither is the hero's, and everything down here
+        sits on the flat --background on purpose.
+
+        One vertical rhythm for every section: py-24 md:py-32 on the section
+        and nothing else below it. This one used to stack three paddings — the
+        section, the inner wrapper and the heading block — for up to 232px of
+        dead space above the eyebrow.
+      */}
+      <div className="relative flex w-full flex-col items-start justify-start gap-6">
+        <div className="z-10 flex flex-col items-center justify-center gap-4 self-stretch pb-10 md:pb-14">
+          <p className="font-mono text-eyebrow uppercase text-muted-foreground">How it works</p>
+          <h2 className="font-display text-display-lg w-full max-w-[760px] text-balance text-center text-foreground">
+            It can point at everything it says
+          </h2>
+          <p className="text-body-lg w-full max-w-[620px] text-pretty text-center text-muted-foreground">
+            A confident hallucination spoken out loud is the worst thing a voice agent can do. Pyrrhon is built so that
+            it can&apos;t.
+          </p>
         </div>
         <div className="self-stretch grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 z-10">
           {cards.map((card) => (

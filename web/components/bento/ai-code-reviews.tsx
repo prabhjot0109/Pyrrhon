@@ -75,7 +75,7 @@ const AiCodeReviews: React.FC = () => {
         >
           <div
             style={{
-              fontFamily: "'Geist Mono', 'SF Mono', Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+              fontFamily: "var(--font-geist-mono), 'Geist Mono', 'SF Mono', Monaco, monospace",
               fontSize: "9.562px",
               lineHeight: "14.711px",
               letterSpacing: "-0.2942px",
@@ -87,7 +87,7 @@ const AiCodeReviews: React.FC = () => {
           >
             {SNIPPET.map((line, i) => (
               <p key={i} style={{ margin: 0, whiteSpace: "pre-wrap", fontWeight: 400 }}>
-                {line || " "}
+                {line || " "}
               </p>
             ))}
           </div>
@@ -146,7 +146,7 @@ const AiCodeReviews: React.FC = () => {
           />
           <div
             style={{
-              fontFamily: "'Geist Mono', 'SF Mono', Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+              fontFamily: "var(--font-geist-mono), 'Geist Mono', 'SF Mono', Monaco, monospace",
               fontSize: "10.279px",
               lineHeight: "15.814px",
               letterSpacing: "-0.3163px",
@@ -164,50 +164,12 @@ const AiCodeReviews: React.FC = () => {
               </p>
             ))}
           </div>
-          <button
-            style={{
-              position: "absolute",
-              top: "calc(50% + 29.745px)",
-              right: "20px",
-              transform: "translateY(-50%)",
-              zIndex: 3,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "3.953px",
-              background: "var(--ai-primary-color)",
-              color: "var(--ai-text-dark)",
-              border: "none",
-              cursor: "pointer",
-              fontWeight: 500,
-              whiteSpace: "nowrap",
-              transition: "all 0.2s ease",
-              padding: "3.163px 6.326px",
-              borderRadius: "5.535px",
-              fontSize: "10.279px",
-              lineHeight: "15.814px",
-              letterSpacing: "-0.3163px",
-              boxShadow:
-                "0px 26.093px 7.116px rgba(0, 0, 0, 0), 0px 16.605px 6.326px rgba(0, 0, 0, 0.01), 0px 9.488px 5.535px rgba(0, 0, 0, 0.05), 0px 3.953px 3.953px rgba(0, 0, 0, 0.09), 0px 0.791px 2.372px rgba(0, 0, 0, 0.1)",
-            }}
-          >
-            <span
-              style={{
-                fontFamily: "'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-                fontWeight: 500,
-              }}
-            >
-              Apply changes
-            </span>
-            <span
-              style={{
-                fontFamily: "'SF Pro', -apple-system, BlinkMacSystemFont, system-ui, sans-serif",
-                fontWeight: 500,
-              }}
-            >
-              ⌘Y
-            </span>
-          </button>
+          {/*
+            The template floated an "Apply changes ⌘Y" pill over this snippet.
+            Removed rather than relabelled. It obscured the code it was meant to
+            illustrate, and it advertised the one thing Pyrrhon deliberately
+            cannot do: there is no file-editing tool on the belt.
+          */}
         </div>
       </div>
     </div>

@@ -20,7 +20,7 @@ const ProviderPicker: React.FC<ProviderPickerProps> = ({ className = "" }) => {
     { name: "lmstudio", local: true },
   ]
 
-  const mono = "'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace"
+  const mono = "var(--font-geist-mono), 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace"
 
   return (
     <div

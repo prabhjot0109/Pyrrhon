@@ -27,8 +27,9 @@ export function FooterSection() {
       ],
     },
     {
-      heading: "Get involved",
+      heading: "Install",
       links: [
+        { label: `${SITE.name} on PyPI`, href: SITE.pypi },
         { label: "Issues", href: SITE.links.issues },
         { label: "Discussions", href: `${SITE.repo}/discussions` },
       ],
@@ -36,20 +37,20 @@ export function FooterSection() {
   ]
 
   return (
-    <footer className="w-full max-w-[1320px] mx-auto px-5 flex flex-col md:flex-row justify-between items-start gap-8 md:gap-0 py-10 md:py-[70px]">
+    <footer className="section-rule mx-auto flex w-full max-w-[1320px] flex-col items-start justify-between gap-8 px-5 py-12 md:flex-row md:gap-0 md:py-[70px]">
       {/* Left Section: Logo, Description, Social Links */}
-      <div className="flex flex-col justify-start items-start gap-8 p-4 md:p-8">
+      <div className="flex flex-col justify-start items-start gap-6 p-4 md:p-8">
         <div className="flex gap-3 items-stretch justify-center">
-          <div className="text-center text-foreground text-xl font-semibold leading-4">{SITE.name}</div>
+          <div className="font-display text-wordmark text-foreground">{SITE.name}</div>
         </div>
-        <p className="text-foreground/90 text-sm font-medium leading-[18px] text-left max-w-[260px]">{SITE.tagline}</p>
+        <p className="text-body-sm max-w-[280px] text-left text-muted-foreground">{SITE.tagline}</p>
         <div className="flex justify-start items-start gap-3">
           <a
             href={SITE.repo}
             target="_blank"
             rel="noopener noreferrer"
             aria-label="GitHub"
-            className="w-4 h-4 flex items-center justify-center"
+            className="w-5 h-5 flex items-center justify-center"
           >
             <GithubMark className="w-full h-full text-muted-foreground hover:text-foreground transition-colors" />
           </a>
@@ -58,16 +59,16 @@ export function FooterSection() {
       {/* Right Section: link columns */}
       <div className="grid grid-cols-2 gap-8 md:gap-12 p-4 md:p-8 w-full md:w-auto">
         {columns.map((column) => (
-          <div key={column.heading} className="flex flex-col justify-start items-start gap-3">
-            <h3 className="text-muted-foreground text-sm font-medium leading-5">{column.heading}</h3>
-            <div className="flex flex-col justify-end items-start gap-2">
+          <div key={column.heading} className="flex flex-col justify-start items-start gap-4">
+            <h3 className="font-mono text-eyebrow uppercase text-muted-foreground">{column.heading}</h3>
+            <div className="flex flex-col justify-end items-start gap-2.5">
               {column.links.map((link) => (
                 <a
                   key={link.label}
                   href={link.href}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-foreground text-sm font-normal leading-5 hover:underline"
+                  className="text-body-sm text-muted-foreground transition-colors hover:text-foreground"
                 >
                   {link.label}
                 </a>

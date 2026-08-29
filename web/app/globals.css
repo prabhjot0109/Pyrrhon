@@ -2,8 +2,19 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+  .text-pretty {
+    text-wrap: pretty;
+  }
+}
+
 @layer base {
   :root {
+    --font-display: var(--font-syne);
+
     /*
       Monochrome. Every colour in the site resolves through these variables,
       so the palette is changed here and nowhere else — the SVG gradients in
@@ -12,16 +23,25 @@
       Hue is 0 and saturation is 0 across the board on purpose: the dithered
       background is greyscale, and any residual tint in the UI reads as a
       mistake next to it.
+
+      Every token is a bare `H S% L%` triple, and none of them carries its own
+      alpha. That is a hard rule, not a formatting preference. Tailwind turns
+      a `hsl(var(--x))` colour into `hsl(var(--x) / <alpha-value>)` so that
+      `/60` works, so a token that already ends in `/ 0.62` compiles to
+      `hsl(0 0% 93% / 0.62 / 0.6)` — two slashes, a parse error, and the
+      browser drops the declaration and inherits the parent colour instead.
+      Eight `text-muted-foreground/NN` call sites were silently rendering at
+      full foreground brightness for exactly this reason, which is what
+      flattened the page's visual hierarchy. Opacity belongs to the utility,
+      never to the token.
     */
     --background: 0 0% 4%; /* #0a0a0a */
     --foreground: 0 0% 93%; /* #ededed */
 
     --muted: 0 0% 15%; /* #262626 */
-    --muted-foreground: 0 0% 93% / 0.62;
-    --muted-foreground-light: 0 0% 93% / 0.42;
-    --muted-foreground-dark: 0 0% 93% / 0.52;
+    --muted-foreground: 0 0% 59%; /* was 93% at 0.62 alpha over the ground */
 
-    --card: 0 0% 100% / 0.02;
+    --card: 0 0% 6%;
     --card-foreground: 0 0% 93%;
 
     --popover: 0 0% 6%;
@@ -40,10 +60,7 @@
     --accent: 0 0% 24%;
     --accent-foreground: 0 0% 96%;
 
-    --border: 0 0% 100% / 0.10;
-    --border-light: 0 0% 0% / 0.1;
-    --border-dark: 0 0% 0% / 0.05;
-
+    --border: 0 0% 14%; /* was 100% at 0.10 alpha over the ground */
     --ring: 0 0% 80%;
 
     --radius: 0.5rem;
@@ -54,8 +71,14 @@
   * {
     @apply border-border;
   }
+  html {
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    scroll-behavior: smooth;
+  }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground font-sans;
     /*
       Horizontal clipping lives here, not on a wrapper div. `overflow-x: hidden`
       on an in-page element forces its overflow-y to compute to `auto`, turning
@@ -64,5 +87,75 @@
       page keeps exactly one scrollbar.
     */
     overflow-x: hidden;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  /*
+    Syne is the display face everywhere, and it wants `font-optical-sizing`
+    off: it is a variable font whose optical axis Chrome will otherwise nudge,
+    which fights the tracking baked into the `display-*` steps in
+    tailwind.config.ts. The Geist feature settings are cleared here too —
+    they are alternate-glyph flags for Geist and mean nothing to Syne.
+  */
+  h1, h2, h3, h4, h5, h6, .font-display, .font-syne {
+    font-family: var(--font-syne), var(--font-geist-sans), system-ui, sans-serif;
+    font-feature-settings: normal;
+    font-optical-sizing: none;
+  }
+
+  /* One visible focus treatment for every interactive element, rather than
+     the browser default outline that the dark ground swallows. */
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring) / 0.7);
+    outline-offset: 3px;
+    border-radius: 4px;
+  }
+
+  ::selection {
+    background: hsl(var(--foreground) / 0.16);
+    color: hsl(var(--foreground));
+  }
+}
+
+@layer utilities {
+  /*
+    The hairline that separates a section from the one above it. A gradient
+    rather than a flat `border-t`, so it fades out at the gutters instead of
+    stopping dead against the page edge.
+  */
+  .section-rule {
+    position: relative;
+  }
+  .section-rule::before {
+    content: "";
+    position: absolute;
+    inset-inline: 1.25rem;
+    top: 0;
+    height: 1px;
+    background: linear-gradient(
+      to right,
+      transparent,
+      hsl(var(--foreground) / 0.14) 20%,
+      hsl(var(--foreground) / 0.14) 80%,
+      transparent
+    );
+  }
+}
+
+/*
+  Motion is decoration on this page: the framer-motion reveals, the dither
+  canvas and the accordion all carry no information the static layout lacks.
+  Honour the OS setting rather than animating anyway.
+*/
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

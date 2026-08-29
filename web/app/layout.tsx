@@ -1,11 +1,27 @@
 import type { Metadata } from 'next'
-import { Geist, Geist_Mono } from 'next/font/google'
+import { Geist, Geist_Mono, Syne } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
 import { SITE } from '@/lib/site'
 import './globals.css'
 
-const _geist = Geist({ subsets: ["latin"] });
-const _geistMono = Geist_Mono({ subsets: ["latin"] });
+const geist = Geist({
+  subsets: ['latin'],
+  variable: '--font-geist-sans',
+  display: 'swap',
+})
+
+const geistMono = Geist_Mono({
+  subsets: ['latin'],
+  variable: '--font-geist-mono',
+  display: 'swap',
+})
+
+const syne = Syne({
+  subsets: ['latin'],
+  variable: '--font-syne',
+  display: 'swap',
+  weight: ['400', '500', '600', '700', '800'],
+})
 
 const description =
   'A voice-first engineering agent that runs in your terminal. Every claim it makes about your code cites a real file:line, or it says it does not know. Free and open source.'
@@ -60,8 +76,11 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en" className="dark">
-      <body className="font-sans antialiased">
+    <html
+      lang="en"
+      className={`dark ${geist.variable} ${geistMono.variable} ${syne.variable}`}
+    >
+      <body className="font-sans antialiased selection:bg-foreground/15 selection:text-foreground text-foreground bg-background">
         {/*
           The dithered canvas used to live here, spanning the document. It now
           belongs to the hero wrapper in app/page.tsx, which is the only place
