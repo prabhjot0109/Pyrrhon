@@ -15,9 +15,12 @@ guarantees:
 | 401 / 403 | `credentials` |
 | 5xx, timeouts, connection | `outage` |
 
-String matching survives only as a *tiebreaker inside 400*, which is the one
-status genuinely ambiguous between "your tools are wrong" and "your prompt is
-too long".
+String matching survives as a *tiebreaker inside 400*, which is the one status
+genuinely ambiguous between "your tools are wrong" and "your prompt is too
+long" — and, unavoidably, for a mid-stream failure, which has no status at all
+because the response was already a 200 when the SSE body carried an `error`
+event. `APIStatusError` is a SUBCLASS of `APIError`, so `except APIStatusError`
+silently missed that shape; it was observed live against Groq.
 
 Layer B: this module names openai and httpx types so that `core/agent/` never
 has to. `classify` returns `None` for anything it does not recognise, and the
@@ -33,7 +36,7 @@ from datetime import datetime, timezone
 from typing import Literal, Mapping
 
 import httpx
-from openai import APIConnectionError, APIStatusError
+from openai import APIConnectionError, APIError, APIStatusError
 
 FaultKind = Literal[
     "tool_validation", "too_large", "rate_limited", "credentials", "outage"
@@ -82,14 +85,21 @@ class ProviderFault:
     status_code: int | None = None
 
 
-def _is_tool_validation(exc: APIStatusError) -> bool:
+def _is_tool_validation(exc: APIError) -> bool:
     if getattr(exc, "code", None) == "tool_use_failed":
         return True
     text = str(exc)
-    return "not in request.tools" in text or "Tool call validation failed" in text
+    return (
+        "not in request.tools" in text
+        or "Tool call validation failed" in text
+        # Groq, when gpt-oss reaches for a built-in on a request that carried
+        # no `tools` array at all — which is every turn `needs_tools()`
+        # withholds the belt from, so a greeting can trip it.
+        or "but model called a tool" in text
+    )
 
 
-def _is_too_large(exc: APIStatusError) -> bool:
+def _is_too_large(exc: APIError) -> bool:
     if getattr(exc, "code", None) in ("context_length_exceeded", "string_above_max_length"):
         return True
     text = str(exc).lower()
@@ -179,4 +189,19 @@ def classify(exc: BaseException) -> ProviderFault | None:
         return None
     if isinstance(exc, (APIConnectionError, httpx.ConnectError, httpx.TimeoutException)):
         return ProviderFault("outage", str(exc))
+    if isinstance(exc, APIError):
+        # No status to key on: the request succeeded with a 200 and the SSE
+        # body carried an `error` event instead, which the SDK raises as a
+        # bare APIError. Observed live — Groq answers a gpt-oss built-in tool
+        # call this way, and because APIStatusError is a SUBCLASS of APIError
+        # rather than the other way round, `except APIStatusError` never saw
+        # it and the turn died with the generic provider message.
+        #
+        # Prose is all there is here, so this is the one branch where the
+        # tiebreakers run without a status behind them.
+        if _is_tool_validation(exc):
+            return ProviderFault("tool_validation", str(exc))
+        if _is_too_large(exc):
+            return ProviderFault("too_large", str(exc))
+        return None
     return None

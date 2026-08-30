@@ -367,3 +367,58 @@ async def test_preconnect_warms_the_configured_base_url(mock_llm):
     llm = mock_llm(handler)
     await llm.preconnect()
     assert reached and reached[0].startswith(PROVIDER_BASE_URL)
+
+
+# --- A failure with no status at all ----------------------------------------
+#
+# The SDK raises a bare APIError when a 200 response's SSE body carries an
+# `error` event. APIStatusError is a SUBCLASS of APIError, so the narrower
+# `except` never saw this and the turn died with PROVIDER_ERROR_MESSAGE.
+# Observed live against Groq while verifying M16a.
+
+from openai import APIError  # noqa: E402
+
+
+def _mid_stream(message: str, body=None) -> APIError:
+    return APIError(message, request=REQUEST, body=body)
+
+
+def test_a_mid_stream_tool_refusal_is_recoverable():
+    """Groq's answer when gpt-oss reaches for a built-in on a request that
+    carried no `tools` array — which is every turn `needs_tools()` withholds
+    the belt from, so a greeting can trip it."""
+    fault = classify(_mid_stream("Tool choice is none, but model called a tool"))
+    assert fault is not None and fault.kind == "tool_validation"
+    assert fault.status_code is None
+
+
+def test_a_mid_stream_size_refusal_is_recoverable():
+    fault = classify(_mid_stream("Please reduce the length of the messages"))
+    assert fault is not None and fault.kind == "too_large"
+
+
+def test_an_unrecognised_mid_stream_error_still_classifies_as_nothing():
+    assert classify(_mid_stream("something else went wrong")) is None
+
+
+@pytest.mark.parametrize("drive", [_drive_chat, _drive_stream])
+async def test_the_client_raises_typed_from_a_mid_stream_error(mock_llm, drive):
+    """End to end: the SSE body carries an error and the client must still
+    produce InvalidToolCallError rather than letting a bare APIError through."""
+    payload = json.dumps(
+        {"error": {"message": "Tool choice is none, but model called a tool"}}
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if json.loads(request.content).get("stream"):
+            return httpx.Response(
+                200,
+                content=f"data: {payload}\n\ndata: [DONE]\n\n".encode(),
+                headers={"content-type": "text/event-stream"},
+            )
+        # The whole-reply path cannot receive this shape, so drive it through
+        # the same taxonomy by raising what the SDK would.
+        return httpx.Response(400, json={"error": {"message": "Tool call validation failed"}})
+
+    with pytest.raises(InvalidToolCallError):
+        await drive(mock_llm(handler))

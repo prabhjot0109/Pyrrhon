@@ -13,7 +13,7 @@ import os
 from dataclasses import dataclass
 
 import httpx
-from openai import APIConnectionError, APIStatusError, AsyncOpenAI
+from openai import APIConnectionError, APIError, APIStatusError, AsyncOpenAI
 
 from pyrrhon.config.settings import ModelSlot, Settings
 from pyrrhon.core.context import history_tokens
@@ -131,7 +131,7 @@ class OpenAICompatLLM:
             api_key=api_key, base_url=base_url, max_retries=max_retries
         )
 
-    def _raise_if_typed(self, exc: APIStatusError, messages: list[dict]) -> None:
+    def _raise_if_typed(self, exc: APIError, messages: list[dict]) -> None:
         """Re-raise a provider failure as a typed error the agent loop recovers
         from, or return so the caller re-raises it verbatim.
 
@@ -225,7 +225,7 @@ class OpenAICompatLLM:
                 return await self._client.chat.completions.with_raw_response.create(
                     **kwargs
                 )
-            except APIStatusError as exc:
+            except APIError as exc:
                 fault = classify(exc)
                 delay = (fault.retry_after or DEFAULT_RATE_LIMIT_WAIT) if fault else 0.0
                 if (
@@ -331,7 +331,7 @@ class OpenAICompatLLM:
                         slot["name"] = tc.function.name
                     if tc.function and tc.function.arguments:
                         slot["args"] += tc.function.arguments
-        except APIStatusError as exc:
+        except APIError as exc:
             self._raise_if_typed(exc, messages)
             raise
         calls = tuple(
