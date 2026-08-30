@@ -89,13 +89,15 @@ async def test_the_head_is_what_costs_the_turn_budget(store):
     assert guard.spent == len(clipped)
 
 
-async def test_close_removes_everything_it_wrote(store, tmp_path):
+async def test_close_removes_every_result_it_wrote(store, tmp_path):
     guard = ToolGuard(max_result_chars=10, store=store)
     await guard.clip("x" * 60)
     written = tmp_path / ".pyrrhon" / "results"
-    assert any(written.iterdir())
+    assert list(written.rglob("*.txt"))
     store.close()
-    assert not any(written.iterdir())
+    assert not list(written.rglob("*.txt"))
+    # The .gitignore outlives the session on purpose: the next one writes here.
+    assert (written / ".gitignore").is_file()
 
 
 async def test_close_is_idempotent(store):
@@ -161,3 +163,27 @@ def test_a_call_that_is_not_a_page_is_attributed_to_itself(store):
     assert attribute(call, store) == ("grep", {"pattern": "def "})
     assert attribute(_Call("read_result", {"result_id": "nope"}), store)[0] == "read_result"
     assert attribute(_Call("read_result", {"result_id": "r1"}), None)[0] == "read_result"
+
+
+def test_a_page_fits_under_the_per_call_cap():
+    """Otherwise the model pages through pages.
+
+    A `read_result` window comes back through `ToolGuard.clip` like any other
+    tool result, so a page sized AT the per-call cap is persisted itself and
+    the pointer at its end names a second stored result. The margin has to
+    cover the header and the continuation pointer too, which is why this is
+    an inequality with room in it rather than an equality.
+    """
+    from pyrrhon.core.agent.guards import MAX_TOOL_RESULT_CHARS
+    from pyrrhon.core.tools.results import PAGE_CHARS
+
+    assert PAGE_CHARS + 500 <= MAX_TOOL_RESULT_CHARS
+
+
+async def test_the_store_hides_itself_from_git(store, tmp_path):
+    """`.pyrrhon/` is not ignored — memory.md and trusted are meant to be
+    committable. Derived session scratch is not, and turning `git status` into
+    noise is not a thing to ask the user to fix in their own .gitignore."""
+    guard = ToolGuard(max_result_chars=10, store=store)
+    await guard.clip("x" * 60)
+    assert (tmp_path / ".pyrrhon" / "results" / ".gitignore").read_text() == "*\n"

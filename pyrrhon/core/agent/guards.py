@@ -29,6 +29,12 @@ DUPLICATE_NOTE = (
     "the result has not changed. Use what you have or try different arguments."
 )
 
+ALREADY_SHOWN_NOTE = (
+    "NOTE: lines {first}-{last} of {path} are already in the tool results above "
+    "this turn, so this call was skipped. Use what you have, or ask for lines "
+    "outside that range."
+)
+
 # Tools whose arguments name a span of a file, so a repeat can be recognised by
 # CONTAINMENT rather than only by exact equality. Both spell the span the same
 # way, which tests/test_tool_schemas.py would surface immediately if a third
@@ -77,14 +83,22 @@ class ToolGuard:
         self._seen: set[tuple[str, str]] = set()
         self._spent = 0
 
-    def is_duplicate(self, name: str, args: dict) -> bool:
+    def duplicate_note(self, name: str, args: dict) -> str | None:
+        """What to tell the model instead of running this call, or None to run it.
+
+        Returns the note rather than a bool because the two ways a call is
+        redundant need different words. "You already called this with exactly
+        these arguments" is false of a containment hit — the arguments are new,
+        the LINES are not — and a note that misdescribes what happened is a
+        note the model cannot act on.
+        """
         key = (name, json.dumps(args, sort_keys=True, default=str))
         if key in self._seen:
-            return True
+            return DUPLICATE_NOTE.format(name=name)
         self._seen.add(key)
         return self._already_shown(name, args)
 
-    def _already_shown(self, name: str, args: dict) -> bool:
+    def _already_shown(self, name: str, args: dict) -> str | None:
         """A range the model has ALREADY been shown, asked for again.
 
         Exact-argument matching catches a repeat nobody makes. What actually
@@ -100,15 +114,18 @@ class ToolGuard:
         only version of this question that has a safe answer.
         """
         if self._covered is None or name not in RANGE_TOOLS:
-            return False
+            return None
         path = args.get("path")
         if not isinstance(path, str) or not path:
-            return False
+            return None
         try:
             first, last = _requested_range(name, args)
         except (TypeError, ValueError):
-            return False  # unparseable range: let the call through, as before
-        return any(start <= first and last <= end for start, end in self._covered(path))
+            return None  # unparseable range: let the call through, as before
+        for start, end in self._covered(path):
+            if start <= first and last <= end:
+                return ALREADY_SHOWN_NOTE.format(path=path, first=start, last=end)
+        return None
 
     async def clip(self, result: str, name: str = "", args: dict | None = None) -> str:
         """The per-call cap, applied to CONTEXT rather than to the result.
@@ -161,7 +178,7 @@ async def run_tool_round(calls, runner, guard: ToolGuard, round_trace=None) -> l
     - *History order.* Results come back indexed by call position, so the
       caller extends history in call order. Nothing is ever appended from
       inside a task.
-    - *Guard determinism.* `is_duplicate` mutates `_seen`, and `clip` mutates
+    - *Guard determinism.* `duplicate_note` mutates `_seen`, and `clip` mutates
       `_spent` and mints result ids. Both run serially — duplicates before
       dispatch, clipping after, in call order — so the outcome does not depend
       on which tool happens to finish first. `clip` awaits a file write now,
@@ -181,7 +198,7 @@ async def run_tool_round(calls, runner, guard: ToolGuard, round_trace=None) -> l
     `exhausted` is only checked after the round.
     """
     # Serial and first: pure bookkeeping, and it decides what gets dispatched.
-    duplicates = [guard.is_duplicate(call.name, call.arguments) for call in calls]
+    notes = [guard.duplicate_note(call.name, call.arguments) for call in calls]
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_TOOLS)
 
     async def dispatch(call) -> str:
@@ -195,12 +212,12 @@ async def run_tool_round(calls, runner, guard: ToolGuard, round_trace=None) -> l
             except Exception as exc:
                 return f"ERROR: {call.name} failed: {type(exc).__name__}: {exc}"
 
-    live = [i for i, dup in enumerate(duplicates) if not dup]
+    live = [i for i, note in enumerate(notes) if note is None]
     finished = await asyncio.gather(*(dispatch(calls[i]) for i in live))
 
     # A duplicate is answered from bookkeeping alone, and deliberately does not
     # pass through clip() — it costs no tool budget, exactly as before.
-    results = [DUPLICATE_NOTE.format(name=call.name) for call in calls]
+    results = [note or "" for note in notes]
     for index, raw in zip(live, finished, strict=True):  # ascending, so clip() stays in call order
         call = calls[index]
         # Awaited one at a time, not gathered: clip mutates _spent and mints

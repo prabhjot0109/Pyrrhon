@@ -31,9 +31,9 @@ class EchoTool(Tool):
 
 def test_guard_flags_exact_duplicates_only():
     guard = ToolGuard()
-    assert guard.is_duplicate("grep", {"pattern": "a"}) is False
-    assert guard.is_duplicate("grep", {"pattern": "a"}) is True
-    assert guard.is_duplicate("grep", {"pattern": "b"}) is False
+    assert guard.duplicate_note("grep", {"pattern": "a"}) is None
+    assert "exactly these arguments" in guard.duplicate_note("grep", {"pattern": "a"})
+    assert guard.duplicate_note("grep", {"pattern": "b"}) is None
 
 
 async def test_guard_clips_and_tracks_budget():
@@ -140,20 +140,24 @@ def test_a_range_already_shown_is_a_duplicate_even_with_new_arguments():
     """Exact-argument matching catches a repeat nobody makes. What actually
     happens is a re-request at a narrower range inside one already read."""
     guard = ToolGuard(covered=_covered(**{"loop.py": [(1, 400)]}))
-    assert guard.is_duplicate("read_file", {"path": "loop.py", "start_line": 40, "end_line": 90})
+    note = guard.duplicate_note("read_file", {"path": "loop.py", "start_line": 40, "end_line": 90})
+    assert note is not None
+    # NOT the exact-arguments wording: the arguments are new, the lines are not.
+    assert "exactly these arguments" not in note
+    assert "1-400 of loop.py" in note
 
 
 def test_a_range_reaching_past_what_was_shown_is_not_a_duplicate():
     guard = ToolGuard(covered=_covered(**{"loop.py": [(1, 400)]}))
-    assert not guard.is_duplicate(
+    assert guard.duplicate_note(
         "read_file", {"path": "loop.py", "start_line": 350, "end_line": 500}
-    )
+    ) is None
 
 
 def test_an_unbounded_read_is_not_a_duplicate_of_a_bounded_one():
     """read_file with only a start reads to EOF, so 1-400 does not contain it."""
     guard = ToolGuard(covered=_covered(**{"loop.py": [(1, 400)]}))
-    assert not guard.is_duplicate("read_file", {"path": "loop.py"})
+    assert guard.duplicate_note("read_file", {"path": "loop.py"}) is None
 
 
 def test_blame_defaults_to_one_line_where_read_file_defaults_to_the_file():
@@ -161,18 +165,18 @@ def test_blame_defaults_to_one_line_where_read_file_defaults_to_the_file():
     `-L n,n` blames one line. Reading them as if they agreed would suppress a
     whole-file read as a repeat of a single blamed line."""
     guard = ToolGuard(covered=_covered(**{"loop.py": [(40, 40)]}))
-    assert guard.is_duplicate("git_blame", {"path": "loop.py", "start_line": 40})
-    assert not guard.is_duplicate("read_file", {"path": "loop.py", "start_line": 40})
+    assert guard.duplicate_note("git_blame", {"path": "loop.py", "start_line": 40})
+    assert guard.duplicate_note("read_file", {"path": "loop.py", "start_line": 40}) is None
 
 
 def test_containment_is_off_for_tools_that_name_no_range():
     guard = ToolGuard(covered=_covered(**{"loop.py": [(1, 400)]}))
-    assert not guard.is_duplicate("grep", {"pattern": "def ", "path": "loop.py"})
+    assert guard.duplicate_note("grep", {"pattern": "def ", "path": "loop.py"}) is None
 
 
 def test_without_a_ledger_only_exact_repeats_count():
     """The deep subagent keeps no ledger, so its guard must behave as before."""
     guard = ToolGuard()
     args = {"path": "loop.py", "start_line": 40, "end_line": 90}
-    assert not guard.is_duplicate("read_file", args)
-    assert guard.is_duplicate("read_file", args)
+    assert guard.duplicate_note("read_file", args) is None
+    assert guard.duplicate_note("read_file", args) is not None

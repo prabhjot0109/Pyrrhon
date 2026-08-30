@@ -39,7 +39,13 @@ from pathlib import Path
 
 from pyrrhon.core.tools.base import Tool
 
-PAGE_CHARS = 8_000          # one window, sized like the per-call cap
+# One window. Sized deliberately BELOW guards.MAX_TOOL_RESULT_CHARS rather than
+# equal to it: a page comes back through `ToolGuard.clip` like any other tool
+# result, so a page as large as the per-call cap is itself persisted and the
+# model ends up paging through pages. The margin covers the header and the
+# continuation pointer. `tests/test_tool_results.py` pins the relationship,
+# because it cannot be imported here — guards.py imports this module.
+PAGE_CHARS = 7_000
 MAX_STORE_CHARS = 4_000_000  # aggregate, per session
 STALE_AFTER_SEC = 24 * 60 * 60
 
@@ -97,6 +103,14 @@ class ResultStore:
             self._sweep()
             self._swept = True
         self._dir.mkdir(parents=True, exist_ok=True)
+        # The store lives inside the user's working tree and `.pyrrhon/` is not
+        # ignored — memory.md and trusted are meant to be committable. Derived
+        # session scratch is not, and turning `git status` into noise is not a
+        # thing to ask the user to fix in their own .gitignore. Self-ignoring
+        # is what pip and pytest do with their caches, for the same reason.
+        ignore = self._root / ".gitignore"
+        if not ignore.exists():
+            ignore.write_text("*\n", encoding="utf-8")
         (self._dir / f"{ref_id}.txt").write_text(result, encoding="utf-8")
 
     def _sweep(self) -> None:
