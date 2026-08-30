@@ -39,20 +39,32 @@ const config = {
         syne: ["var(--font-syne)", "var(--font-geist-sans)", "system-ui", "sans-serif"],
       },
       fontSize: {
-        // Display steps. Syne, extrabold at the top two so the wordmark and
-        // the section heads carry the page. Tracking tightens as size grows.
-        "display-xl": ["clamp(2.75rem, 1.30rem + 6.2vw, 6rem)", { lineHeight: "0.96", letterSpacing: "-0.04em", fontWeight: "800" }],
-        "display-lg": ["clamp(2.25rem, 1.55rem + 3.0vw, 3.75rem)", { lineHeight: "1.02", letterSpacing: "-0.035em", fontWeight: "800" }],
-        "display-md": ["clamp(1.75rem, 1.35rem + 1.7vw, 2.5rem)", { lineHeight: "1.1", letterSpacing: "-0.03em", fontWeight: "700" }],
-        "display-sm": ["clamp(1.375rem, 1.2rem + 0.75vw, 1.75rem)", { lineHeight: "1.18", letterSpacing: "-0.02em", fontWeight: "700" }],
-        "display-xs": ["1.0625rem", { lineHeight: "1.35", letterSpacing: "-0.005em", fontWeight: "700" }],
+        /*
+          Display steps. Syne, semibold throughout.
+
+          These used to run extrabold (800) at the top two steps and top out
+          at 6rem with -0.04em tracking, which is three intensifiers stacked
+          on one word: Syne is already a wide, high-contrast face, so 800 at
+          96px with the letters jammed together read as a shout rather than a
+          headline. Weight is now a flat 600 across every step and hierarchy
+          comes from size alone, which is the axis a reader actually ranks.
+
+          Tracking still tightens as size grows — that part was right, large
+          type genuinely needs it — but from a much shallower start, because
+          -0.04em was closing the counters on Syne's rounder glyphs.
+        */
+        "display-xl": ["clamp(2.5rem, 1.55rem + 4.0vw, 4.25rem)", { lineHeight: "1.04", letterSpacing: "-0.022em", fontWeight: "600" }],
+        "display-lg": ["clamp(1.875rem, 1.42rem + 1.95vw, 2.75rem)", { lineHeight: "1.1", letterSpacing: "-0.018em", fontWeight: "600" }],
+        "display-md": ["clamp(1.5rem, 1.29rem + 0.9vw, 1.9rem)", { lineHeight: "1.2", letterSpacing: "-0.014em", fontWeight: "600" }],
+        "display-sm": ["clamp(1.25rem, 1.15rem + 0.45vw, 1.5rem)", { lineHeight: "1.28", letterSpacing: "-0.01em", fontWeight: "600" }],
+        "display-xs": ["1.0625rem", { lineHeight: "1.4", letterSpacing: "-0.003em", fontWeight: "600" }],
         // Syne below ~15px closes up badly, so the label step opens tracking
         // back out rather than inheriting the negative values above.
-        "display-2xs": ["0.875rem", { lineHeight: "1.4", letterSpacing: "0.01em", fontWeight: "700" }],
+        "display-2xs": ["0.875rem", { lineHeight: "1.4", letterSpacing: "0.012em", fontWeight: "600" }],
         // The wordmark is its own step. It is the same two places every time
         // (header, footer) and it is not a heading, so it should not drift
         // when a heading step is retuned.
-        wordmark: ["1.1875rem", { lineHeight: "1", letterSpacing: "-0.02em", fontWeight: "800" }],
+        wordmark: ["1.125rem", { lineHeight: "1", letterSpacing: "-0.004em", fontWeight: "600" }],
 
         // Body steps. Geist. Leading stays generous; these are read, not scanned.
         "body-lg": ["clamp(1.0625rem, 0.99rem + 0.35vw, 1.25rem)", { lineHeight: "1.6", letterSpacing: "-0.005em" }],

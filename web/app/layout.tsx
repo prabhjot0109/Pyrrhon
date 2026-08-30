@@ -23,8 +23,12 @@ const syne = Syne({
   weight: ['400', '500', '600', '700', '800'],
 })
 
+// Kept in step with the hero subhead in components/hero-section.tsx. A search
+// result and the first line of the page saying two different things is the
+// bounce; there are only two of them, so they are matched by hand rather than
+// hoisted into lib/site with a wrapper nobody else would use.
 const description =
-  'A voice-first engineering agent that runs in your terminal. Every claim it makes about your code cites a real file:line, or it says it does not know. Free and open source.'
+  'A voice-first engineering agent that runs in your terminal. Ask how an unfamiliar codebase works, or think out loud through a system before you build it — it answers from what is really in the repo, and tells you when it does not know. Free and open source.'
 
 export const metadata: Metadata = {
   title: {

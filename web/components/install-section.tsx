@@ -1,7 +1,7 @@
 import Link from "next/link"
 
 import { Button } from "@/components/ui/button"
-import { CommandBlock } from "@/components/command-block"
+import { CommandBlock, CopyButton } from "@/components/command-block"
 import { INSTALL_ALTERNATIVES, INSTALL_COMMAND, PACKAGE, REPO_URL, SITE } from "@/lib/site"
 
 /**
@@ -14,7 +14,13 @@ import { INSTALL_ALTERNATIVES, INSTALL_COMMAND, PACKAGE, REPO_URL, SITE } from "
  * clone a repo to try a CLI is a barrier, not a feature.
  */
 
-const steps = [
+/*
+ * `copy` is what reaches the clipboard when it differs from what is shown.
+ * Step 03 shows two invocations side by side with aligned trailing comments,
+ * which is the right thing to *read* and the wrong thing to paste into a
+ * shell \u2014 so the button hands over the one line somebody actually wants.
+ */
+const steps: { label: string; command: string; copy?: string; note: string }[] = [
   {
     label: "Install it",
     command: INSTALL_COMMAND,
@@ -28,6 +34,7 @@ const steps = [
   {
     label: "Point it at a repo",
     command: `${PACKAGE} .          # terminal UI\n${PACKAGE} --voice .  # and talk to it`,
+    copy: `${PACKAGE} .`,
     note: "Then ask it something. \u201cWhere does the retry logic live?\u201d Talk over it any time; barge-in cuts the audio mid-sentence.",
   },
 ]
@@ -53,11 +60,16 @@ export function InstallSection() {
         <ol className="mt-12 flex flex-col gap-3">
           {steps.map((step, i) => (
             <li key={step.label} className="overflow-hidden rounded-2xl border border-border bg-foreground/[0.03]">
-              <div className="flex items-baseline gap-3 px-5 pt-4">
+              {/* The copy button lives on the step's title row rather than
+                  floating over the <pre>. Absolutely positioning it there
+                  would sit it on top of a block that scrolls horizontally on
+                  narrow screens, i.e. over the end of the command it copies. */}
+              <div className="flex items-center gap-3 py-2.5 pl-5 pr-2.5">
                 <span className="select-none font-mono text-xs font-semibold text-muted-foreground">{`0${i + 1}`}</span>
-                <span className="font-display text-display-2xs text-foreground">{step.label}</span>
+                <span className="font-display text-display-2xs flex-1 text-foreground">{step.label}</span>
+                <CopyButton text={step.copy ?? step.command} label={`step ${i + 1}, ${step.label}`} />
               </div>
-              <pre className="overflow-x-auto px-5 py-4 font-mono text-xs font-medium leading-relaxed text-foreground/90 sm:text-[13.5px]">
+              <pre className="overflow-x-auto px-5 pb-4 font-mono text-xs font-medium leading-relaxed text-foreground/90 sm:text-[13.5px]">
                 {step.command}
               </pre>
               <p className="text-body-xs px-5 pb-4 text-muted-foreground">{step.note}</p>

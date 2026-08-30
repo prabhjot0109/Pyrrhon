@@ -20,7 +20,9 @@ export function DitherBackground() {
   return (
     <div aria-hidden="true" className="absolute inset-0 z-0 overflow-hidden">
       <Dither
-        waveColor={[0.26, 0.26, 0.26]}
+        // 0.26 put the whole field close enough to the ground that the wave
+        // only resolved in the corners, where the scrims happen to be thin.
+        waveColor={[0.36, 0.36, 0.36]}
         disableAnimation={false}
         enableMouseInteraction
         mouseRadius={0.3}
@@ -42,12 +44,16 @@ export function DitherBackground() {
 
         Centre: an ellipse over the column the copy occupies. Dark where the
         words are, gone by the edges, so the dither still reads as itself in
-        the corners.
+        the corners. Its centre sits below the headline rather than above it,
+        so the band across the top of the hero — the part with nothing in it —
+        keeps the wave instead of spending it on a scrim nothing needed.
       */}
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_72%_58%_at_50%_30%,hsl(var(--background)/0.94)_0%,hsl(var(--background)/0.78)_45%,transparent_100%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_64%_52%_at_50%_40%,hsl(var(--background)/0.86)_0%,hsl(var(--background)/0.58)_45%,transparent_100%)]" />
       {/* Top: the header is fixed and transparent over the hero, so its links
-          need a ground of their own before the user has scrolled. */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-44 bg-gradient-to-b from-background via-background/75 to-transparent" />
+          need a ground of their own before the user has scrolled. Sized to the
+          16px header and no further: at h-44 it reached down past the eyebrow
+          and was the main reason the animation looked absent up there. */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-background/92 via-background/45 to-transparent" />
       {/* Bottom: fades the dither into the page instead of a hard edge. */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-56 bg-gradient-to-b from-transparent to-background" />
     </div>

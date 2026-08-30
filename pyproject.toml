@@ -90,10 +90,37 @@ addopts = "-m 'not live'"
 [tool.hatch.build.targets.wheel]
 packages = ["pyrrhon"]
 
-# The wheel is allowlisted above, but the sdist defaults to everything git
-# tracks — which would ship the Next.js marketing site inside a source tarball.
+# The wheel is allowlisted above; the sdist is allowlisted here, for the same
+# reason and not merely for symmetry.
+#
+# This was an `exclude` list, and a denylist is the wrong shape for a step whose
+# failure mode is public and permanent: a release cannot be re-uploaded under
+# the same version, so anything that leaks is on the index for good. It named
+# web/, evals/, .github/, .pyrrhon/ and .claude/ — and by the time anyone
+# looked, three top-level directories had appeared that it did not name, so the
+# tarball carried 70 files of .remember/ session memory, 43 of .superpowers/
+# (including three review diffs over 140 KB each), 31 internal planning docs
+# and CLAUDE.md. A denylist fails open. An allowlist fails closed, and a new
+# directory has to be named before it can ship.
+#
+# uv.lock is deliberately out: 793 KB, and it pins a dev environment rather
+# than describing the package's own requirements, which `dependencies` above
+# already does. Contributors get it from the repo, which is where `uv sync`
+# is run anyway.
+#
+# `only-include`, not `include`. `include` is a glob filter applied while the
+# builder still walks the whole project root, so listing "pyrrhon" there left
+# web/, docs/ and evals/ in the tarball anyway; `only-include` is what stops
+# the traversal. pyproject.toml, README.md and LICENSE are always included by
+# hatchling and need no entry.
+#
+# One more reason the old denylist could not hold: hatchling honours
+# .gitignore, so docs/ was excluded by accident rather than by this list — and
+# it started shipping the moment docs/ was commented out of .gitignore so that
+# Claude could read it. Nothing here should depend on a .gitignore line that
+# exists for an unrelated reason.
 [tool.hatch.build.targets.sdist]
-exclude = ["web", "evals", ".github", ".pyrrhon", ".claude"]
+only-include = ["pyrrhon", "tests"]
 
 [dependency-groups]
 dev = [

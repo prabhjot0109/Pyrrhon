@@ -33,12 +33,19 @@ export function HeroSection() {
           Talk to your codebase
         </h1>
 
+        {/*
+          The subhead used to lead on `file:line` citations, rendered as a
+          mono chip. That is the mechanism, not the reason — it answers "how
+          does it work" to a reader who has not yet been told what it is, and
+          the chip pulled the eye to the least interesting word in the
+          sentence. It now names the two things you can actually do with it,
+          and keeps the honesty claim as a plain promise. The citation detail
+          still lives further down, where somebody is looking for it.
+        */}
         <p className="text-body-lg mx-auto mt-6 max-w-[620px] text-pretty text-muted-foreground">
-          A voice-first engineering agent for your terminal. Every claim it makes about your code cites a real{" "}
-          <span className="whitespace-nowrap">
-            <span className="inline-block rounded-md border border-border bg-foreground/[0.08] px-1.5 py-0.5 align-baseline font-mono text-[0.85em] font-medium text-foreground">file:line</span>,
-          </span>{" "}
-          or it says it doesn&apos;t know.
+          A voice-first engineering agent for your terminal. Ask how an unfamiliar codebase works, or think out loud
+          through a system before you build it, it answers from what is really in the repo, and tells you when
+          it doesn&apos;t know.
         </p>
 
         <div className="mx-auto mt-10 flex w-full max-w-[440px] flex-col items-stretch gap-3">
