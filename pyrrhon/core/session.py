@@ -222,13 +222,22 @@ class Session:
 
         Cancelling is safe, and is deliberately preferred over awaiting:
         awaiting would hand the next turn exactly the round trip this change
-        removed. maybe_summarize has a single await — the llm.chat call — and
-        it happens BEFORE any mutation of history; the splice that follows is
-        synchronous. So a cancellation lands with history byte-identical,
-        which is the contract context.py already documents ("Any LLM failure
-        leaves history untouched — compaction is an optimization, never a
-        correctness requirement"). If history really does outgrow the window,
-        Agent.run_turn's ContextLengthExceededError handler compacts
+        removed.
+
+        What "safe" means got weaker in M16b and is still enough. It used to
+        mean byte-identical: maybe_summarize has a single await, the llm.chat
+        call, and it happens BEFORE any mutation of history. _compact now runs
+        the whole ladder, whose first two rungs mutate synchronously in front
+        of that await, so a cancellation can land with tool results already
+        elided. That is fine and is not the same class of thing — elision is
+        idempotent, it is grounding-neutral because the EvidenceLedger is
+        separate from history, and it is exactly what the next turn's own
+        pre-flight or the safety net would have done anyway. The contract
+        context.py documents still holds: "compaction is an optimization, never
+        a correctness requirement."
+
+        If history really does outgrow the window, Agent.run_turn's
+        ContextLengthExceededError handler runs the ladder forced and
         synchronously, which is where that cost belongs.
         """
         task = self._compaction
