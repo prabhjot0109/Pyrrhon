@@ -1,6 +1,9 @@
 """Token estimation + tool-result eviction (pure, no LLM)."""
 
 from pyrrhon.core.context import (
+    FIT_CHEAP,
+    FIT_FORCED,
+    FIT_FULL,
     TOOL_STUB_MIN,
     compact_tool_results,
     estimate_tokens,
@@ -327,7 +330,7 @@ async def test_forcing_runs_every_rung_regardless_of_the_estimate():
     the estimate is known wrong and nothing it says should gate a rung."""
     llm = CountingLLM()
     history = _bulky_history(2)
-    assert await fit_to_budget(history, llm, 1_000_000, force=True, keep_last=2)
+    assert await fit_to_budget(history, llm, 1_000_000, mode=FIT_FORCED, keep_last=2)
     assert "elided" in history[3]["content"]
 
 
@@ -337,5 +340,57 @@ async def test_the_ladder_can_be_asked_to_stop_before_the_round_trip():
     llm = CountingLLM()
     history = [{"role": "system", "content": "sys"}]
     history += [{"role": "user", "content": "q" * 4000} for _ in range(12)]
-    assert await fit_to_budget(history, llm, 500, keep_last=2, summarize=False) == ""
+    assert await fit_to_budget(history, llm, 500, keep_last=2, mode=FIT_CHEAP) == ""
     assert llm.calls == 0
+
+
+async def test_the_cheap_mode_never_spends_the_current_turn_s_evidence():
+    """The regression M16b's runtime pass found on a real account.
+
+    With a learned ceiling of 8000 tokens the request budget for history is
+    ~2012, which is less than the system prompt plus one tool result. The
+    history is over budget from round one and never comes back under, so a
+    ladder allowed to reach rung 3 reached it on EVERY round and stripped every
+    tool result but the most recent — the current turn's evidence, which rung
+    2's last-user boundary exists to protect. It achieved nothing (still over
+    budget afterwards) and cost the model its working memory, so it re-read
+    files it had already seen.
+
+    Rung 3 is recovery-grade. The pre-flight runs what is free AND safe.
+    """
+    llm = CountingLLM()
+    history = [
+        {"role": "system", "content": "s" * 5000},
+        {"role": "user", "content": "the question"},
+        {"role": "assistant", "content": "a"},
+        {"role": "tool", "content": "first result " + "A" * 6000},
+        {"role": "assistant", "content": "b"},
+        {"role": "tool", "content": "second result " + "B" * 6000},
+    ]
+    rung = await fit_to_budget(history, llm, 2012, mode=FIT_CHEAP)
+
+    assert history_tokens(history) > 2012, "the fixture must stay over budget"
+    assert rung == ""  # nothing before the last user message to elide
+    assert "elided" not in history[3]["content"]
+    assert "elided" not in history[5]["content"]
+    assert llm.calls == 0
+
+
+async def test_the_full_mode_does_spend_it():
+    """Dead time is where that cost belongs. Session's background pass runs
+    this, which is the other half of restricting the pre-flight."""
+    llm = CountingLLM()
+    history = [
+        {"role": "system", "content": "s" * 5000},
+        {"role": "user", "content": "the question"},
+        {"role": "assistant", "content": "a"},
+        {"role": "tool", "content": "first result " + "A" * 6000},
+        {"role": "assistant", "content": "b"},
+        {"role": "tool", "content": "second result " + "B" * 6000},
+    ]
+    rung = await fit_to_budget(history, llm, 2012, mode=FIT_FULL, keep_last=8)
+
+    assert rung == "hard"
+    intact = [m for m in history if m.get("role") == "tool" and "elided" not in m["content"]]
+    assert len(intact) == 1
+    assert "second result" in intact[0]["content"]  # the most recent survives

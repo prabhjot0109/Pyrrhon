@@ -43,6 +43,8 @@ from pyrrhon.core.agent.prompts import ESCALATION_NOTE, TEXT_STYLE, VOICE_STYLE
 from pyrrhon.core.agent.turn_type import classify
 from pyrrhon.core.context import (
     CHARS_PER_TOKEN,
+    FIT_CHEAP,
+    FIT_FORCED,
     fit_to_budget,
     history_tokens,
     token_scale,
@@ -575,21 +577,22 @@ class Agent:
             # the case that never needed sealing.
             live: list[dict] = []
             round_trace = trace.begin_round()
-            # In front of EVERY request, not behind a failure. Both rungs it
-            # runs are pure and local, so they cost nothing when the history
-            # already fits and reclaim room before the provider has to refuse.
-            #
-            # summarize=False: M10 moved that round trip off the critical path
-            # and it stays off. Session runs the full ladder afterwards in dead
-            # time, and the ContextLengthExceededError handler below runs it
-            # forced if the estimate turns out to have been wrong.
+            # In front of EVERY request, not behind a failure, and CHEAP:
+            # rung 2 only. The two rungs above it each cost something a waiting
+            # user pays for — a round trip, and the current turn's own evidence
+            # — and a live run on an 8000-token ceiling showed rung 3 firing
+            # every single round, stripping what the model had just read and
+            # still leaving the request over budget. Session runs the full
+            # ladder afterwards in dead time, and the
+            # ContextLengthExceededError handler below runs it forced if the
+            # estimate turns out to have been wrong.
             rung = await fit_to_budget(
                 history,
                 self.llm,
                 self.request_budget(trace.schema_chars),
+                mode=FIT_CHEAP,
                 keep_last=self.context_keep_last,
                 scale=self.token_scale,
-                summarize=False,
             )
             if rung:
                 trace.compaction = rung
@@ -648,9 +651,9 @@ class Agent:
                         history,
                         self.llm,
                         self.request_budget(trace.schema_chars),
+                        mode=FIT_FORCED,
                         keep_last=self.context_keep_last,
                         scale=self.token_scale,
-                        force=True,
                     )
                     logger.warning(
                         "context overflow: safety net reached rung %r",

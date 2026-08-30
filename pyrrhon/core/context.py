@@ -20,6 +20,7 @@ eliding a stale grep dump costs nothing but a possible tool re-run.
 from __future__ import annotations
 
 import json
+from typing import Literal
 
 # The whole estimate, in one number. Provider-agnostic on purpose — see the
 # module docstring on why this is calibrated rather than replaced.
@@ -122,6 +123,27 @@ LADDER_COMPACT = "compact"
 LADDER_HARD = "hard"
 LADDER_SUMMARIZE = "summarize"
 
+# How far up the ladder a caller may go. One mode rather than a pair of
+# booleans, because only three of the four combinations are meaningful and the
+# fourth ("ignore the estimate, but stop at the cheap rung") is a contradiction
+# — the estimate is the only reason to stop early.
+FitMode = Literal["cheap", "full", "forced"]
+
+# Rung 2 only, gated on the estimate. What a turn runs in front of its own
+# request. Rung 2's last-user boundary is what makes it safe there: it never
+# touches the current turn's tool results, which the model is still reading.
+FIT_CHEAP: FitMode = "cheap"
+
+# Every rung, gated on the estimate. Dead time — Session's background pass.
+# Rung 3 spends the current turn's evidence and rung 4 costs a round trip, so
+# both belong somewhere the user is not waiting.
+FIT_FULL: FitMode = "full"
+
+# Every rung, and ignore the estimate. The safety net, after the provider has
+# already rejected the request: the estimate is known wrong, so nothing it says
+# should gate a rung.
+FIT_FORCED: FitMode = "forced"
+
 
 SUMMARY_PROMPT = (
     "Summarize the conversation below so it can be continued later. Keep: the "
@@ -196,10 +218,9 @@ async def fit_to_budget(
     llm,
     budget_tokens: int,
     *,
+    mode: FitMode = FIT_FULL,
     keep_last: int = 8,
     scale: float = 1.0,
-    force: bool = False,
-    summarize: bool = True,
 ) -> str:
     """Bring `history` under `budget_tokens`, cheapest rung first.
 
@@ -214,23 +235,35 @@ async def fit_to_budget(
 
     Returns the last rung that ran, or "" when none did.
 
-    `summarize=False` stops at rung 3, and that is what the turn's own
-    pre-flight passes. M10 moved the summarize round trip off the critical
-    path deliberately — it used to sit in front of the first token of every
-    over-budget turn, the worst possible place for it in a product whose
-    metric is time-to-first-word — and putting it back would undo that. The
-    background pass and the safety net both run the full ladder, which is
-    where the round trip belongs: dead time, or after the provider has already
-    said no.
+    **`mode` decides how far up.** A turn's own pre-flight passes `FIT_CHEAP`
+    and stops after rung 2, because the two rungs above it are not free in the
+    way rung 2 is, and a live run proved the difference rather than argued it.
 
-    `force` is the safety net's mode: the provider has already rejected the
-    request, so the estimate is known wrong and nothing it says should gate a
-    rung. Note that `maybe_summarize` leaves history untouched on any failure,
-    so a forced run cannot end worse than it started.
+    Rung 4 costs a round trip. M10 moved that off the critical path on purpose:
+    it used to sit in front of the first token of every over-budget turn, the
+    worst possible place for it in a product whose metric is
+    time-to-first-word.
+
+    Rung 3 costs the current turn's evidence, which is worse and less obvious.
+    Verified on a real account with a learned ceiling of 8000 tokens: the
+    request budget for history came to ~2012, less than the system prompt plus
+    one tool result, so the history was over budget from round one and never
+    came back under. Rung 3 therefore ran on EVERY round, stripped every tool
+    result but the most recent, and still left the request over budget — the
+    model lost what it had just read and went back to re-read it. Rung 2's
+    last-user boundary is exactly the protection that prevents this, so the
+    pre-flight keeps it and stops there.
+
+    Both costs are real; neither belongs in front of a waiting user. `FIT_FULL`
+    runs them in dead time and `FIT_FORCED` runs them after the provider has
+    already refused, which is where they pay. Note that `maybe_summarize`
+    leaves history untouched on any failure, so a forced run cannot end worse
+    than it started.
     """
+    forced = mode == "forced"
 
     def over() -> bool:
-        return force or (
+        return forced or (
             bool(budget_tokens) and history_tokens(history, scale) > budget_tokens
         )
 
@@ -239,18 +272,18 @@ async def fit_to_budget(
     done = ""
     if compact_tool_results(history):
         done = LADDER_COMPACT
-    if not over():
+    if mode == "cheap" or not over():
         return done
     if compact_tool_results(history, keep_recent=1):
         done = LADDER_HARD
-    if not summarize or not over():
+    if not over():
         return done
     if await maybe_summarize(
         history,
         llm,
         # Forced: the provider has spoken, so summarize regardless of what the
         # estimate makes of the history now.
-        budget_tokens=1 if force else budget_tokens,
+        budget_tokens=1 if forced else budget_tokens,
         keep_last=keep_last,
         scale=scale,
     ):

@@ -19,7 +19,7 @@ from collections.abc import AsyncIterator
 
 from pyrrhon.core.agent.design_prompts import DESIGN_PROMPT
 from pyrrhon.core.agent.loop import Agent
-from pyrrhon.core.context import history_tokens, maybe_summarize
+from pyrrhon.core.context import FIT_FULL, fit_to_budget, history_tokens
 from pyrrhon.core.events import Event, SpeechChunk
 from pyrrhon.core.telemetry import TurnTrace
 
@@ -193,12 +193,20 @@ class Session:
             self._compaction = None
 
     async def _compact(self, budget: int) -> None:
+        """The whole ladder, in the user's read/think/speak time.
+
+        Not just the summarize rung. The turn's own pre-flight is restricted to
+        rung 2, so this is the only place rung 3 runs outside a provider
+        refusal — without it a session on a small ceiling accumulates bulky
+        tool results that nothing elides until the provider says no.
+        """
         started = time.perf_counter()
         try:
-            await maybe_summarize(
+            await fit_to_budget(
                 self.history,
                 self.agent.llm,
                 budget,
+                mode=FIT_FULL,
                 keep_last=self.agent.context_keep_last,
                 scale=self.agent.token_scale,
             )
