@@ -21,6 +21,7 @@ from openai import (
 )
 
 from pyrrhon.core.providers.errors import classify, retry_after_seconds
+from tests.conftest import PROVIDER_BASE_URL
 
 REQUEST = httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions")
 
@@ -329,3 +330,40 @@ async def test_the_streaming_path_waits_too(mock_llm, provider_waits):
     with pytest.raises(RateLimitExceededError):
         await _drive_stream(llm)
     assert len(provider_waits) == MAX_RATE_LIMIT_WAITS
+
+
+# --- Preconnect -------------------------------------------------------------
+
+
+async def test_preconnect_cannot_raise_or_warn(caplog):
+    """The whole contract. It is fire-and-forget: a failure means the first
+    real request pays the handshake exactly as it does today, and an
+    unreachable provider must not put a warning on screen before the user has
+    asked for anything."""
+    import logging
+
+    from pyrrhon.core.providers.llm import OpenAICompatLLM
+
+    caplog.set_level(logging.DEBUG, logger="pyrrhon.providers")
+    # Port 9 is discard: refused immediately rather than left to time out.
+    llm = OpenAICompatLLM(
+        model="m", api_key="k", base_url="http://127.0.0.1:9/v1", max_retries=0
+    )
+    task = llm.preconnect()
+    await task
+
+    assert task.done() and task.exception() is None
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+    await llm._client.close()
+
+
+async def test_preconnect_warms_the_configured_base_url(mock_llm):
+    reached: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        reached.append(str(request.url))
+        return httpx.Response(200, json={"object": "list", "data": []})
+
+    llm = mock_llm(handler)
+    await llm.preconnect()
+    assert reached and reached[0].startswith(PROVIDER_BASE_URL)

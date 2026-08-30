@@ -172,6 +172,36 @@ class OpenAICompatLLM:
             kwargs["temperature"] = self.temperature
         return kwargs
 
+    def preconnect(self) -> "asyncio.Task":
+        """Warm the connection pool while the user is still reading the splash.
+
+        The first request of a session otherwise pays DNS, TCP and TLS inside
+        its own latency budget — roughly 100-200ms on a warm network and
+        considerably more on a cold one. start_channel already runs the repo
+        scan, the index load and the splash, and the user then has to type or
+        speak, so that window is free.
+
+        Fire and forget by construction. The task swallows everything and logs
+        at debug, because its failure mode is that the first real request pays
+        the handshake exactly as it does today — an unreachable provider must
+        not put a warning on screen before the user has asked for anything.
+        The handle comes back so the caller can cancel it on teardown instead
+        of leaving a pending task behind.
+        """
+        return asyncio.create_task(self._warm())
+
+    async def _warm(self) -> None:
+        try:
+            # models.list() rather than a bare socket: it is public SDK
+            # surface, it costs no tokens, and it warms DNS, TCP, TLS and the
+            # HTTP/1.1 pool in one go. Providers that do not implement it 404,
+            # which warms the pool just as well.
+            await self._client.models.list()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.debug("preconnect skipped (%s)", type(exc).__name__)
+
     async def _create(self, kwargs: dict, messages: list[dict]):
         """One request, waiting out a 429 if the wait is worth taking.
 
@@ -403,6 +433,11 @@ class FallbackLLM:
         leaving it measured against a link nobody is using.
         """
         return self.chain[self._active].limits
+
+    def preconnect(self) -> "asyncio.Task":
+        """Warm the ACTIVE link only. Warming a fallback that may never be
+        reached spends a request to save a handshake nobody pays."""
+        return self.chain[self._active].preconnect()
 
     async def chat(
         self, messages: list[dict], tools: list[dict] | None = None

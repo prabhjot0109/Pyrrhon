@@ -416,14 +416,27 @@ def start_channel(
     )
 
     async def _main() -> None:
+        warmup: asyncio.Task | None = None
         manager = MCPManager(settings.mcp_servers)
         mcp_tools = await manager.start()  # never raises; dead servers log once
         try:
             agent = build_agent(
                 repo_root, extra_tools=mcp_tools, settings=settings, plugins=plugins
             )
+            # After build_agent, deliberately: the pool worth warming is the
+            # one behind the CONFIGURED base URL, and warming a default before
+            # settings resolve is a silent no-op that looks like a win.
+            # Duck-typed, so a channel handed a test double simply skips it.
+            warm = getattr(agent.llm, "preconnect", None)
+            warmup = warm() if warm is not None else None
             await serve(agent, manager, plugins)
         finally:
+            if warmup is not None and not warmup.done():
+                warmup.cancel()
+                try:
+                    await warmup
+                except (asyncio.CancelledError, Exception):
+                    pass  # teardown never fails on a warmup nobody waited for
             await manager.stop()  # same task as start() — anyio cancel-scope rule
 
     try:
