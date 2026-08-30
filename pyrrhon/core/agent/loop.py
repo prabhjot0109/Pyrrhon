@@ -114,6 +114,19 @@ RESUME_INSTRUCTION = (
 # compacting and retrying before it gives up honestly.
 MAX_CONTEXT_RECOVERIES = 2
 
+# What to budget when nothing has established a real ceiling: no [context]
+# budget_tokens, and no provider header or recorded failure yet. Conservative
+# rather than generous, because the two failure modes are not symmetric — an
+# under-budget turn compacts slightly early, an over-budget turn dies. It fits
+# inside essentially every modern window, and a model smaller than this now
+# TEACHES its ceiling on the first refusal rather than failing again next turn.
+DEFAULT_CONTEXT_BUDGET_TOKENS = 32000
+
+# Room held back from a learned ceiling for the reply and the tool schemas.
+# Both ride the same request as the history, so a budget that ignored them
+# would aim the compactor at a number the request was always going to exceed.
+CONTEXT_RESERVE_TOKENS = 4096
+
 # How many times ONE round may be resumed after stopping at max_tokens.
 # One, deliberately. A second `length` on the same answer is a configuration
 # fact rather than something to retry around, and the reference's other tier —
@@ -253,7 +266,7 @@ class Agent:
         deep_llm=None,
         deep_tools: list[Tool] | None = None,
         mode: str = "understand",
-        context_budget_tokens: int = 90000,
+        context_budget_tokens: int | None = None,
         context_keep_last: int = 8,
     ):
         self.llm = llm
@@ -272,7 +285,10 @@ class Agent:
         self.voice_active = voice_active
         # Mutable: Session.set_mode reassigns it on /mode switches.
         self.mode = mode
-        self.context_budget_tokens = context_budget_tokens
+        # The configured value, or None for "ask the driver". Read through the
+        # two properties below rather than directly: which of them a caller
+        # wants is a real distinction, not a spelling.
+        self._configured_budget = context_budget_tokens
         self.context_keep_last = context_keep_last
         # How wrong len//4 is for whatever model is in the fast slot, learned
         # from the prompt_tokens each reply reports. 1.0 until the first reply
@@ -303,6 +319,41 @@ class Agent:
             deep_tool = ThinkDeeperTool(deep_llm, tools=deep_tools)
             self.tools[deep_tool.name] = deep_tool
             self.system_prompt = system_prompt + "\n" + ESCALATION_NOTE
+
+    @property
+    def known_context_budget(self) -> int | None:
+        """The budget when something actually established one, else None.
+
+        None is a real answer and the status bar depends on it: a meter
+        against a denominator nobody measured is worse than no meter. Asked of
+        the driver rather than held, because the driver is what learns it —
+        and a fallover re-points the question at the provider now answering.
+
+        A configured `[context] budget_tokens` outranks a learned one, zero
+        included: an explicit 0 means "never compact", which is a coherent
+        instruction and is what several tests rely on.
+        """
+        if self._configured_budget is not None:
+            return self._configured_budget
+        limits = getattr(self.llm, "limits", None)
+        if limits is None:  # a test double, or a driver that learns nothing
+            return None
+        return limits.budget(CONTEXT_RESERVE_TOKENS)
+
+    @known_context_budget.setter
+    def known_context_budget(self, value: int | None) -> None:
+        self._configured_budget = value
+
+    @property
+    def context_budget_tokens(self) -> int:
+        """What compaction budgets against. Always a number, because
+        compaction has to decide something even when the ceiling is unknown."""
+        known = self.known_context_budget
+        return DEFAULT_CONTEXT_BUDGET_TOKENS if known is None else known
+
+    @context_budget_tokens.setter
+    def context_budget_tokens(self, value: int | None) -> None:
+        self._configured_budget = value
 
     def _seal_partial(
         self, history: list[dict], live: list[dict], marker: str = CUT_OFF_MARKER

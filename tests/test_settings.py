@@ -113,9 +113,9 @@ def test_deepseek_and_huggingface_are_builtin_providers():
 
 
 def test_context_settings_defaults_and_override(tmp_path: Path):
-    # 90k since M10, up from 32k: most fast models carry a 128k window, and at
-    # 32k compaction fired constantly — each firing is a full LLM round trip.
-    assert load_settings(tmp_path).context.budget_tokens == 90000
+    # None since M16a: the ceiling is learned from the provider's own
+    # rate-limit headers, not declared here. A configured value still wins.
+    assert load_settings(tmp_path).context.budget_tokens is None
     (tmp_path / ".pyrrhon.toml").write_text(
         "[context]\nbudget_tokens = 9000\nkeep_last_messages = 4\n", encoding="utf-8"
     )

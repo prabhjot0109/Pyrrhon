@@ -343,7 +343,10 @@ class PyrrhonApp(App):
             # token_scale is the calibration from what the provider actually
             # charged, so this tracks the real window rather than len//4.
             context_used=history_tokens(self.session.history, self.agent.token_scale),
-            context_budget=getattr(self.agent, "context_budget_tokens", 0),
+            # The KNOWN budget, not the fallback default: a percentage
+            # against a number nobody measured is a claim, and the bar renders
+            # 0 as "say nothing" rather than as an empty window.
+            context_budget=getattr(self.agent, "known_context_budget", None) or 0,
             voice_state=self.voice_state(),
         )
 

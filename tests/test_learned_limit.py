@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import pathlib
 
 import httpx
 import pytest
@@ -163,3 +164,77 @@ async def test_a_rate_limit_teaches_nothing_about_size(mock_llm, provider_waits)
     with pytest.raises(RateLimitExceededError):
         await llm.chat(REFUSED)
     assert llm.limits.limit is None
+
+
+# --- What the agent budgets against -----------------------------------------
+
+from pyrrhon.core.agent.loop import (  # noqa: E402
+    CONTEXT_RESERVE_TOKENS,
+    DEFAULT_CONTEXT_BUDGET_TOKENS,
+    Agent,
+)
+
+
+class _Driver:
+    """Bare duck-typed driver carrying a LearnedLimit and nothing else."""
+
+    model = "driver"
+
+    def __init__(self, limits=None):
+        if limits is not None:
+            self.limits = limits
+
+    async def chat(self, messages, tools=None):
+        raise AssertionError("not called")
+
+
+def _agent(llm, **kwargs) -> Agent:
+    return Agent(
+        llm=llm, tools=[], system_prompt="t", repo_root=pathlib.Path("."), **kwargs
+    )
+
+
+def test_with_nothing_learned_the_budget_is_the_conservative_default():
+    agent = _agent(_Driver(LearnedLimit()))
+    assert agent.known_context_budget is None
+    assert agent.context_budget_tokens == DEFAULT_CONTEXT_BUDGET_TOKENS
+    assert agent.context_budget_tokens != 90000
+
+
+def test_a_driver_that_learns_nothing_at_all_still_budgets():
+    """FakeLLM and friends carry no `limits`, and must keep working."""
+    agent = _agent(_Driver())
+    assert agent.known_context_budget is None
+    assert agent.context_budget_tokens == DEFAULT_CONTEXT_BUDGET_TOKENS
+
+
+def test_a_learned_limit_sets_the_budget():
+    limits = LearnedLimit()
+    limits.observe_headers({"x-ratelimit-limit-tokens": "30000"})
+    agent = _agent(_Driver(limits))
+    assert agent.known_context_budget == 30000 - CONTEXT_RESERVE_TOKENS
+    assert agent.context_budget_tokens == 30000 - CONTEXT_RESERVE_TOKENS
+
+
+def test_configuration_outranks_a_learned_guess():
+    limits = LearnedLimit()
+    limits.observe_headers({"x-ratelimit-limit-tokens": "30000"})
+    agent = _agent(_Driver(limits), context_budget_tokens=9000)
+    assert agent.known_context_budget == 9000
+
+
+def test_an_explicit_zero_means_never_compact():
+    """Not "unknown". Several suites use it to isolate the loop from
+    summarization, and the status bar renders it as no meter at all."""
+    agent = _agent(_Driver(LearnedLimit()), context_budget_tokens=0)
+    assert agent.known_context_budget == 0
+    assert agent.context_budget_tokens == 0
+
+
+def test_the_budget_follows_a_failure_down():
+    limits = LearnedLimit()
+    limits.observe_headers({"x-ratelimit-limit-tokens": "30000"})
+    agent = _agent(_Driver(limits))
+    before = agent.context_budget_tokens
+    limits.observe_failure(12000)
+    assert agent.context_budget_tokens < before

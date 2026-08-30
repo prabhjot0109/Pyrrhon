@@ -100,13 +100,13 @@ class ModelSettings(BaseModel):
 class ContextSettings(BaseModel):
     """Context-window budgeting (TOML section [context])."""
 
-    # 90k, not the old 32k: most current fast models carry a 128k window, and
-    # at 32k compaction fired constantly — each firing costs a full LLM round
-    # trip to summarize. Raising the ceiling is the cheapest latency win
-    # available, and the ContextLengthExceededError path in Agent.run_turn is
-    # the real safety net for models with a smaller window.
-    budget_tokens: int = 90000       # estimated-token ceiling before compaction
-    keep_last_messages: int = 8      # recent messages kept verbatim
+    # None means "learn it" (M16a). A flat number here was budgeting 90000
+    # tokens whether the configured model had an 8k window or a 131k one, and
+    # whether the account's per-minute allowance was 6k or 600k — while the
+    # provider reported x-ratelimit-limit-tokens on every response. An explicit
+    # value still wins: a number the user chose outranks a learned guess.
+    budget_tokens: int | None = None  # estimated-token ceiling before compaction
+    keep_last_messages: int = 8       # recent messages kept verbatim
 
 
 class GroundingSettings(BaseModel):
