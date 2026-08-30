@@ -459,6 +459,74 @@ lines of symbol counts on a real repo, and it used to land on top of the
 splash as the first thing a new user ever saw. The REPL keeps its own
 rendering on purpose.
 
+**The provider boundary (M16a, 2026-08-30).** A live session died after four
+tool rounds with `PROVIDER_ERROR_MESSAGE`. The obvious reading — "the context
+window overflowed" — was wrong, and the difference is the whole milestone: the
+overflow recovery existed and did not fire, because `_raise_if_typed` was
+reachable only from `except BadRequestError` and Groq reports an oversized
+request as **413** and a spent token allowance as **429**. Neither is a
+`BadRequestError`, so the string tests never ran.
+
+`core/providers/errors.py` keys on HTTP status instead. Prose matching survives
+only as a tiebreaker inside 400, which is the one status genuinely ambiguous
+between "your tools are wrong" and "your prompt is too long". **`classify`
+returning `None` is load-bearing**: it means "the caller re-raises verbatim",
+and an unrecognised 4xx must never be laundered into a kind the loop believes
+it can recover from. `credentials` and `outage` deliberately get no type — a
+bad key is user error the SDK message already names, and an outage is
+`FallbackLLM`'s to answer by inspecting the SDK exception.
+
+`LLMReply` carries `finish_reason`, and that closes the quietest fault of the
+four. Every other one produces a visible error; a reply cut off at `max_tokens`
+is HTTP 200, a well-formed body, and a confident half-sentence that went
+through the gate and got **spoken**. The loop resumes such a round exactly
+once. `RESUME_INSTRUCTION`'s wording is load-bearing — a model told only
+"continue" restates its previous paragraph and spends the whole new budget on
+the recap. A second `length` is a configuration fact and names `[model]
+max_tokens` rather than handing over a longer fragment; silently re-running at
+a larger `max_tokens`, which the reference does, is **not** adopted. On the
+streaming path the fragment has already been spoken by the time the reason is
+known, so the resume accepts one audible seam rather than taxing every turn to
+withhold a final sentence.
+
+`core/providers/limits.py` is the missing other half of `token_scale`. That
+learns how many characters make a token; `LearnedLimit` learns how many tokens
+the endpoint will take, from `x-ratelimit-limit-tokens` (which rode every
+response and was read by nobody) and from a recorded refusal. `limit` is the
+**min** of the two, so a failure always wins and a later header cannot undo a
+ratchet — that is the mitigation for a provider advertising an allowance it
+will not honour. Both calls go through `.with_raw_response.create()` plus
+`.parse()`; headers land with the HTTP response, so the streaming path gets the
+ceiling before chunk one.
+
+`context_budget_tokens = 90000` is gone. The budget is a question the agent
+asks its driver, and there are **two** properties because the distinction is
+real: `known_context_budget` is `None` when nothing established a ceiling, and
+the status meter depends on that (a percentage against a denominator nobody
+measured is a claim), while `context_budget_tokens` always returns a number
+because compaction has to decide something. The fallback is 32000, not 90000:
+an under-budget turn compacts slightly early, an over-budget turn dies — and a
+smaller model now *teaches* its ceiling on the first refusal, so the guess
+self-corrects within one turn.
+
+A 429 gets one bounded wait derived from `retry-after`, taken with
+`asyncio.sleep` so a barge-in kills it. A `retry-after` above the ceiling is
+**declined outright rather than clamped**: waiting twenty seconds and then
+reporting failure is strictly worse than reporting now with the real number, so
+the user hears "clears in about 45 seconds". `FallbackLLM`'s "never fall over
+on a 4xx" rule narrows by exactly one case — a spent allowance is availability,
+not user error — and it arrives typed because the link already took whatever
+wait was worth taking. `ProviderRetrying` rides the existing `on_switch`
+attachment shape, so the payload is a core event and the dispatch table decides
+how each channel says it.
+
+`preconnect()` warms the pool during the splash, using `models.list()`: public
+SDK surface, no tokens, and a 404 from a provider that lacks it warms the pool
+just as well. It is called **after** `build_agent`, because the pool worth
+warming is the one behind the configured base URL and warming a default is a
+silent no-op that looks like a win. Its failure mode is that the first request
+pays the handshake as it does today, so it logs at debug and never warns.
+
 **LLM lane and vision (M15b).** LLM providers are rows in
 `core/providers/registry.py`; `BUILTIN_PROVIDERS` and the wizard's catalog are
 both derived from it, and no model ids are hardcoded anywhere. Token usage is
@@ -549,8 +617,20 @@ the prompt forbidding claims about unloaded code) so the egress gate becomes a
 cheap safety net rather than the mechanism. That is what would make S2S viable
 later; it is M16 work, not a licence to weaken the gate now.
 
-**Planned next. M15 is closed; M16 is the next thing to start.** Spec:
-`docs/superpowers/specs/2026-08-19-pyrrhon-m15-pipecat-integration-design.md`.
+**Planned next. M16a is closed; M16b is the next thing to start.** Spec:
+`docs/superpowers/specs/2026-08-29-pyrrhon-m16-agent-harness-design.md`; the
+five plans are `m16a` through `m16e` in `docs/superpowers/plans/`.
+
+**M16a's runtime verification is outstanding and is not a formality.** Its plan
+requires replaying the failing transcript against a real rate-limited account
+on the TUI and text channels, and forcing a truncation on `--voice` to confirm
+no fragment is spoken as though it were finished. Unit tests show a branch
+behaves a certain way, not that the bug is gone — and the truncation fault is
+about what a *listener* hears, which no unit test hears. The only credential on
+this machine is a placeholder that answers 401, so those three checks and the
+preconnect latency measurement are unrun. Do them before treating M16a as
+finished.
+
 M15a and M15b are both done on branch `m15`, and the 2026-08-22 pass closed the
 three gaps that were left in Phase 3's own honesty claim: tier 3 pushes a real
 utterance and covers STT, `[voice] idle_timeout_sec` has a handler, and
@@ -567,12 +647,10 @@ LLM-lane feature with its own design question; M16's job is the harness, and
 the seam exists precisely so the harness never has to know which driver it
 holds.
 
-Next is **M16 — the harness**: agent loop, aggressive compaction, long
-sessions, large-codebase tool strategy, system prompt. That is the moat and it
-gets its own spec; M15 exists to make the seam thin enough that M16 never
-thinks about audio. Note the one piece of M16 the M15 spec already names: the
-S2S paragraph above describes moving verification upstream, which is M16 work
-and the thing that would eventually unblock Gemini Live.
+Next is the rest of **M16 — the harness**: the turn state machine (M16b), the
+tool contract (M16c), the context firewall (M16d), and verification moved
+upstream (M16e). That is the moat; M15 exists to make the seam thin enough that
+M16 never thinks about audio. The S2S paragraph above is M16e's brief.
 
 Deferred on purpose, with triggers recorded in the M15a plan: the
 `SoundfileMixer` thinking bed, until someone decides what it should sound like.
