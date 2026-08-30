@@ -195,3 +195,29 @@ async def test_background_compaction_records_its_duration():
 
     assert session.last_compaction_ms is not None
     assert session.last_compaction_ms >= 0.0
+
+
+async def test_a_turn_that_fitted_its_own_history_schedules_nothing_after():
+    """M16b: the pre-flight ladder and the background pass answer the same
+    question against the same budget, so a turn that already fitted its history
+    must not queue a round trip to fit it again.
+
+    Both sides read Agent.request_budget, which is what makes that true — a
+    background pass budgeting against a looser number would fire on a history
+    the turn had just declared fine.
+    """
+    llm = FakeLLM([LLMReply(text="answer.")])
+    session = make_session(llm, budget=3000)
+    session.history.extend([
+        {"role": "system", "content": "p"},
+        {"role": "user", "content": "an earlier question"},
+        {"role": "assistant", "content": "a"},
+        {"role": "tool", "content": "X" * 20_000},
+        {"role": "assistant", "content": "an earlier answer"},
+    ])
+
+    await drain(session, "and now?")
+
+    assert "elided" in session.history[3]["content"]  # the ladder ran
+    assert session._compaction is None                # and nothing came after
+    assert len(llm.calls) == 1

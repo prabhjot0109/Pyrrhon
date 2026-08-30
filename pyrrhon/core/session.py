@@ -178,7 +178,11 @@ class Session:
         Runs during the user's think/read/speak time, which is dead time for
         us and typically far longer than the call takes.
         """
-        budget = self.agent.context_budget_tokens
+        # The SAME budget the turn's own pre-flight ladder used, schemas
+        # netted out and all. Asking a looser question here would schedule a
+        # round trip to fix a history the turn had just fitted.
+        trace = self.agent.last_trace
+        budget = self.agent.request_budget(trace.schema_chars if trace else 0)
         # Cheap pure scan: don't spawn a task just to have maybe_summarize
         # decide there is nothing to do.
         if not budget or history_tokens(self.history, self.agent.token_scale) <= budget:

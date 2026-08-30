@@ -372,8 +372,13 @@ class Agent:
     def context_budget_tokens(self, value: int | None) -> None:
         self._configured_budget = value
 
-    def _request_budget(self, schema_chars: int) -> int:
+    def request_budget(self, schema_chars: int) -> int:
         """What the history may weigh, once the reply and the belt are paid for.
+
+        Public because Session budgets against it too. One number, computed
+        one way: a background pass working from a looser figure would fire on
+        a history the turn had just declared fine, and a tighter one would let
+        the next turn's request go out over budget.
 
         `context_budget_tokens` already holds CONTEXT_RESERVE_TOKENS back for
         the reply. The schemas ride the same request and are measured exactly
@@ -582,7 +587,7 @@ class Agent:
             rung = await fit_to_budget(
                 history,
                 self.llm,
-                self._request_budget(trace.schema_chars),
+                self.request_budget(trace.schema_chars),
                 keep_last=self.context_keep_last,
                 scale=self.token_scale,
                 summarize=False,
@@ -643,7 +648,7 @@ class Agent:
                     rung = await fit_to_budget(
                         history,
                         self.llm,
-                        self._request_budget(trace.schema_chars),
+                        self.request_budget(trace.schema_chars),
                         keep_last=self.context_keep_last,
                         scale=self.token_scale,
                         force=True,
