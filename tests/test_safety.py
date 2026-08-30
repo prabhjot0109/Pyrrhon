@@ -23,10 +23,13 @@ EXPECTED_BELT = {
     "read_file", "read_image", "grep", "glob", "remember", "read_result",
     "find_symbol", "symbol_context", "list_dependencies", "repo_map",
     "git_log", "git_blame", "git_show",
-    "web_search", "web_fetch", "write_spec", "think_deeper",
+    "web_search", "web_fetch", "write_spec", "think_deeper", "explore",
 }
 
-READ_ONLY = EXPECTED_BELT - {"write_spec", "remember", "think_deeper"}
+# The two dispatchers leave with write_spec and remember: a tool that spawns a
+# subagent is not a read tool, and putting one here would put it on a subagent
+# belt, which is the depth-1 rule breaking quietly.
+READ_ONLY = EXPECTED_BELT - {"write_spec", "remember", "think_deeper", "explore"}
 
 # What think_deeper actually gets. Narrower than READ_ONLY: the web tools are
 # read-only with respect to the repo, but a subagent loop is excluded from
@@ -34,6 +37,14 @@ READ_ONLY = EXPECTED_BELT - {"write_spec", "remember", "think_deeper"}
 # read_result joins them for a different reason: the deep loop's ToolGuard
 # holds no store, so a pager there could only follow the fast loop's pointers.
 EXPECTED_DEEP_BELT = READ_ONLY - {"web_search", "web_fetch", "read_result"}
+
+# What the SCOUT gets: search only. Narrower than the deep belt on latency
+# grounds, not safety ones — explore is the CHEAP dispatch, and a vision call
+# is the slowest thing on the belt while git history answers a question that is
+# not "where does this live".
+EXPECTED_EXPLORE_BELT = EXPECTED_DEEP_BELT - {
+    "read_image", "git_log", "git_blame", "git_show",
+}
 
 
 @pytest.fixture
@@ -137,7 +148,19 @@ def test_the_deep_subagent_belt_gained_symbol_context_and_stayed_read_only(agent
 # with the belt, exactly as it did for read_image. What the seventeenth slot
 # buys is the round a truncated result used to cost — re-running a tool with
 # narrower arguments the model has to guess blind.
-MAX_BELT_SCHEMA_CHARS = 9000
+# 9318 over 18 once explore joined. 744 chars against a 518-char belt average,
+# so the eighteenth slot is the most expensive one yet — and it is the one the
+# ceiling rule was written for: the newcomer is not trimmed to fit under a cap
+# calibrated for seventeen tools. What the extra ~56 tokens per tool-bearing
+# turn buy is the difference between a multi-file question costing the main
+# context ten tool results and costing it one report, which is a saving
+# measured in thousands of tokens the first time it fires.
+#
+# Most of explore's schema is the two lines teaching WHEN to reach for it
+# ("three or more searches", "one known file is cheaper to read directly").
+# Trimming those would shrink the number and produce the failure mode this
+# milestone exists to avoid: a scout dispatched for a single-file lookup.
+MAX_BELT_SCHEMA_CHARS = 9500
 
 
 def test_the_belt_schema_stays_within_its_latency_budget(agent):
@@ -383,7 +406,53 @@ def test_the_deep_subagent_gets_its_own_read_file(agent):
     recorded. Sharing the instance would answer "already shown this turn"
     about lines the subagent cannot see.
     """
-    deep = agent.tools["think_deeper"]
-    assert deep.tools["read_file"] is not agent.tools["read_file"]
-    assert deep.tools["read_file"]._seen("anything.py") == []
-    assert deep.tools["grep"] is agent.tools["grep"]
+    for dispatcher in ("think_deeper", "explore"):
+        belt = agent.tools[dispatcher].tools
+        assert belt["read_file"] is not agent.tools["read_file"]
+        assert belt["read_file"]._seen("anything.py") == []
+        assert belt["grep"] is agent.tools["grep"]
+    assert (
+        agent.tools["think_deeper"].tools["read_file"]
+        is not agent.tools["explore"].tools["read_file"]
+    )
+
+
+def test_the_scout_belt_is_exactly_the_search_belt(agent):
+    """Derived from the builtin belt by exclusion, same as the deep one.
+
+    Pinned as an equality rather than a subset for the reason the deep belt
+    is: a subset check catches a write tool sneaking in, and cannot catch a
+    search tool added to the main belt and forgotten here — which silently
+    leaves the scout unable to find what the loop dispatching it could.
+    """
+    assert set(agent.tools["explore"].tools) == EXPECTED_EXPLORE_BELT
+
+
+def test_neither_dispatcher_can_reach_either_dispatcher(agent):
+    """Depth is structurally 1, asserted from the assembled agent.
+
+    `subagent.check_depth` refuses such a belt at construction, so this is the
+    other half: that the derivation never builds one, in either direction. A
+    scout that could dispatch a scout is an unbounded fan-out behind one tool
+    call, and nothing downstream of here would bound it.
+    """
+    from pyrrhon.core.agent.subagent import DISPATCH_TOOLS
+
+    assert DISPATCH_TOOLS <= EXPECTED_BELT  # both are real tools on the belt
+    for dispatcher in DISPATCH_TOOLS:
+        assert not DISPATCH_TOOLS & set(agent.tools[dispatcher].tools)
+
+
+def test_a_scout_report_stays_below_the_per_call_result_cap():
+    """The relationship M16c pinned for PAGE_CHARS, for the same reason.
+
+    A report comes back through the parent's ToolGuard.clip like any other
+    tool result. One sized at the cap would be persisted to the result store
+    and the model would page through a summary of a summary. The two
+    constants live in different modules and cannot see each other, so nothing
+    but this test holds them apart.
+    """
+    from pyrrhon.core.agent.guards import MAX_TOOL_RESULT_CHARS
+    from pyrrhon.core.tools.explore import MAX_REPORT_CHARS
+
+    assert MAX_REPORT_CHARS < MAX_TOOL_RESULT_CHARS

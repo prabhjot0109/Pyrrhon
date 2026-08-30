@@ -104,6 +104,7 @@ TOOL_FILLERS = {
     "remember": "Noting that down…",
     "write_spec": "Writing that up…",
     "think_deeper": "Thinking this one through properly…",
+    "explore": "Having a scout around the repo…",
 }
 
 

@@ -48,6 +48,7 @@ from pyrrhon.core.tools.ast_index import (
     SymbolIndex,
 )
 from pyrrhon.core.tools.base import Tool
+from pyrrhon.core.tools.explore import ExploreTool
 from pyrrhon.core.tools.git import GitBlameTool, GitLogTool, GitShowTool
 from pyrrhon.core.tools.images import ReadImageTool
 from pyrrhon.core.tools.memory import RememberTool
@@ -86,7 +87,47 @@ DEEP_EXCLUDED = frozenset({
     # budget bounds it anyway; paging would only let it spend that budget on
     # tails it did not fetch.
     "read_result",
+    # Depth stays structurally 1. `subagent.check_depth` refuses this belt at
+    # construction anyway; excluding it here is what stops the derivation from
+    # building one that would be refused.
+    "explore",
 })
+
+# What the SCOUT does not inherit, on top of the deep pass's exclusions. Both
+# additions are about the tool being the CHEAP dispatch rather than about
+# safety: a vision call is the slowest thing on the belt, and git history
+# answers "who changed this and when", which is not a locating question. What
+# is left is exactly the search belt — grep, glob, find_symbol,
+# symbol_context, list_dependencies, repo_map, read_file.
+EXPLORE_EXCLUDED = DEEP_EXCLUDED | {
+    "read_image", "git_log", "git_blame", "git_show",
+}
+
+
+def _subagent_belt(
+    builtin_tools: list[Tool], excluded: frozenset[str] | set[str], repo_root: Path
+) -> list[Tool]:
+    """One subagent's belt, derived from the builtin one by exclusion.
+
+    Derived rather than hand-listed because the two belts used to be
+    maintained side by side: adding a read-only tool to one and forgetting the
+    other silently gave a subagent a weaker belt than the main loop, with no
+    test to catch it. Instances are shared, since a tool carries no per-agent
+    state worth separating — the parse cache and its locks live on
+    SymbolIndex, which every belt already shared.
+
+    read_file is the one exception, and it is spelled out rather than left to
+    the reader to notice. The suppression accessor patched in by `build_agent`
+    is bound to the FAST loop's evidence ledger, and a subagent's own message
+    history contains none of what that ledger recorded. Telling it "already
+    shown this turn" about lines it cannot see is strictly worse than showing
+    them a second time.
+    """
+    return [
+        ReadFileTool(repo_root) if tool.name == "read_file" else tool
+        for tool in builtin_tools
+        if tool.name not in excluded
+    ]
 
 
 def warm_index_in_background(agent: Agent) -> asyncio.Task | None:
@@ -258,6 +299,13 @@ def build_agent(
         # understand-mode prompt forbids writing spec files.
         WriteSpecTool(repo_root),
     ]
+    # Appended AFTER its own belt is derived, which is the ordering the
+    # chicken-and-egg forces: explore is on the main belt and must not be on
+    # its own. DEEP_EXCLUDED names it too, so think_deeper cannot reach it
+    # either — depth is 1 for both dispatchers.
+    builtin_tools.append(
+        ExploreTool(llm, tools=_subagent_belt(builtin_tools, EXPLORE_EXCLUDED, repo_root))
+    )
     tools = [*builtin_tools, *(extra_tools or [])]  # MCP adapters join here
     existing = {tool.name for tool in tools}
     for plugin in plugins:
@@ -274,23 +322,7 @@ def build_agent(
     plugin_prompts = "\n\n".join(p.prompt_text for p in plugins if p.prompt_text)
     if plugin_prompts:
         system_prompt += f"\n# Plugin context\n\n{plugin_prompts}\n"
-    # Derived, not hand-listed — see DEEP_EXCLUDED. Instances are shared with
-    # the main belt rather than rebuilt, because a tool carries no per-agent
-    # state worth separating (the parse cache and its locks live on
-    # SymbolIndex, which both belts already shared).
-    #
-    # read_file is the one exception, since M16c gave it one, and it is spelled
-    # out below rather than left to the reader to notice.
-    deep_tools = [
-        # A FRESH read_file: the suppression accessor patched in further down
-        # is bound to the FAST loop's evidence ledger, and the deep subagent's
-        # own message history contains none of what that ledger recorded.
-        # Telling it "already shown this turn" about lines it cannot see is
-        # strictly worse than showing them a second time.
-        ReadFileTool(repo_root) if tool.name == "read_file" else tool
-        for tool in builtin_tools
-        if tool.name not in DEEP_EXCLUDED
-    ]
+    deep_tools = _subagent_belt(builtin_tools, DEEP_EXCLUDED, repo_root)
     agent = Agent(
         llm=llm,
         tools=tools,

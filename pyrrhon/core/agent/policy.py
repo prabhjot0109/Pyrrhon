@@ -198,6 +198,14 @@ _TYPED = TurnPolicy(
 # frozenset({"think_deeper", "web_search", "web_fetch"}) back in `withheld`
 # below; belt_for and the schema cache already handle it, and the cap of three
 # belt shapes has the room.
+#
+# M16d's `explore` has the same shape and is deliberately NOT withheld either.
+# It is bounded harder than think_deeper on both axes that matter to a spoken
+# turn — six rounds of the FAST model against twelve of the deep one, and half
+# the tool-char budget — so it is the cheaper of the two ways a spoken turn can
+# spend seconds inside one round. It also ships a filler, like the other three.
+# The same live signal decides both: a spoken turn observed stalling in a
+# dispatch, not intuition about what one might cost.
 _SPOKEN = TurnPolicy(
     max_rounds=4,
     max_tool_chars=MAX_TURN_TOOL_CHARS // 2,
