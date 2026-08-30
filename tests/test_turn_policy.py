@@ -171,17 +171,27 @@ def test_a_resumed_question_keeps_the_belt():
     assert needs_tools(RESUME) is True
 
 
-def test_the_voice_belt_is_a_subset_of_the_real_belt():
-    """Every withheld name must still exist, or the row is narrowing nothing.
+def test_every_withheld_name_is_a_name_the_belt_actually_has():
+    """A withhold list naming tools that were renamed away narrows nothing and
+    reads as though it did — silent in exactly the way an allow list of stale
+    names would be loud. No row withholds anything today (see _SPOKEN on why
+    the voice split was measured and dropped), so this passes vacuously; it is
+    here for the row that puts one back."""
+    for turn_type in TURN_TYPES:
+        for voice in (False, True):
+            withheld = policy_for(turn_type, voice_active=voice).withheld
+            assert withheld is None or withheld <= set(BELT)
 
-    A withhold list of names that no longer exist is silent in exactly the way
-    an allow list of names that no longer exist is loud, so this is the check
-    that keeps the voice row honest.
-    """
+
+def test_a_spoken_repo_question_keeps_the_whole_belt():
+    """Measured, not assumed. Withholding the three tools that cannot finish
+    inside a spoken turn saved ~348 schema tokens — a quarter of the estimate —
+    and voice/bridge.py already ships a spoken filler for each of them, so a
+    previous milestone had made them voice-usable on purpose. The spoken row
+    bounds a turn by rounds and tool volume instead, which is a limit rather
+    than a removed capability."""
     spoken = policy_for(REPO_QUESTION, voice_active=True)
-    belt = spoken.belt_for(BELT)
-    assert set(belt) < set(BELT)
-    assert spoken.withheld is not None and spoken.withheld <= set(BELT)
+    assert spoken.belt_for(BELT) == BELT
 
 
 def test_the_whole_table_produces_at_most_three_distinct_belts():

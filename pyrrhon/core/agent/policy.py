@@ -155,15 +155,6 @@ def _approaching(state: TurnState, policy: TurnPolicy) -> bool:
     )
 
 
-# Tools a spoken turn does not get. Not a token-saving list — a latency one.
-# think_deeper runs a bounded subagent loop and the web tools go over the
-# network; each is tens of seconds of silence, which on the voice path reads as
-# "it's broken". A WITHHOLD list rather than an allow list, deliberately: an
-# allow list of builtin names would silently strip every plugin and MCP tool
-# from every spoken turn, which is the same class of invisible narrowing the
-# schema-cache key guards against.
-SLOW_FOR_VOICE = frozenset({"think_deeper", "web_search", "web_fetch"})
-
 # A turn that needs no tools. max_rounds=0 says the same thing from the other
 # side: with no belt the model cannot ask for a tool, so the first reply is the
 # answer. Both are stated because they fail differently — a belt withheld by
@@ -189,10 +180,28 @@ _TYPED = TurnPolicy(
 # 40k chars is ~10k tokens the model must read before the first spoken word.
 # Both are first guesses; the signal for tuning them is Stop(reason="rounds")
 # showing up in traces, not intuition.
+#
+# It keeps the WHOLE belt, and that is a measured decision rather than an
+# omission. Withholding think_deeper and the two web tools — the three that
+# cannot finish inside a spoken turn — was tried and measured at ~348 schema
+# tokens saved, a quarter of what M16b's plan estimated, against a third
+# prefix-cache family in any session that mixes typed and spoken turns. Two
+# things then argued against it. voice/bridge.py already ships a spoken filler
+# for each of those three, so a previous milestone had deliberately made them
+# voice-usable, and the filler is the mitigation for exactly the silence they
+# would have been withheld for. And the case is unmeasured live: nobody has
+# heard a spoken turn reach for think_deeper.
+#
+# Note what this leaves open, because the round cap does NOT cover it —
+# think_deeper is one tool call, so it fits inside one round and no cap bounds
+# it. If a live spoken session shows a turn stalling there, the fix is to put
+# frozenset({"think_deeper", "web_search", "web_fetch"}) back in `withheld`
+# below; belt_for and the schema cache already handle it, and the cap of three
+# belt shapes has the room.
 _SPOKEN = TurnPolicy(
     max_rounds=4,
     max_tool_chars=MAX_TURN_TOOL_CHARS // 2,
-    withheld=SLOW_FOR_VOICE,
+    withheld=frozenset(),
     nudge_at=0.75,
 )
 

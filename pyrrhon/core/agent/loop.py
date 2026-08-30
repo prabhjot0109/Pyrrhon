@@ -530,11 +530,10 @@ class Agent:
             history.append({"role": "user", "content": user_text})
             # After the append, so the question being asked right now counts.
             self._mentions_now = self._conversation_mentions(history)
-            # A greeting or a bare "yes" needs no tools; a spoken question
-            # gets the belt minus the tools that cannot finish inside a spoken
-            # turn. Both are rows in one table rather than two conditionals.
-            # Withholding the belt entirely saves ~1.5k tokens of schema on the
-            # 25-40% of voice turns that are acknowledgements, and removes any
+            # A greeting or a bare "yes" needs no tools. That is a row in
+            # the policy table rather than a conditional here, and it saves
+            # ~1.9k tokens of schema (measured on this belt) on the 25-40% of
+            # voice turns that are acknowledgements, as well as removing any
             # chance of a spurious tool round on a turn with nothing to look up.
             turn_kind = classify(user_text, history)
             trace.turn_type = turn_kind
@@ -548,10 +547,10 @@ class Agent:
         trace.prompt_chars = sum(
             len(m["content"]) for m in history if isinstance(m.get("content"), str)
         )
-        # Everything this turn has spent, in one object, against the one table
-        # row selected above. The five locals this replaced -- a range()
+        # Everything this turn has spent, in one object, against the one
+        # table row selected above. The five locals this replaced — a range()
         # counter, two booleans, a recovery count and a per-round resume count
-        # -- each encoded part of "may this turn keep going", and the reason it
+        # — each encoded part of "may this turn keep going", and the reason it
         # eventually stopped had to be reconstructed from whichever branch
         # happened to break out.
         state = TurnState()

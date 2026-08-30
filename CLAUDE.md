@@ -43,7 +43,8 @@ that must stay true.
 | `pyrrhon/voice/registry.py` | The STT/TTS provider table. Data only; imports no Pipecat. |
 | `pyrrhon/voice/factory.py` | Generic construction from that table: key checks, lazy import, clean degradation. |
 | `pyrrhon/voice/` | Pipecat pipeline: mic, RNNoise, Silero VAD, smart turn, STT, bridge, TTS, barge-in. |
-| `pyrrhon/core/agent/loop.py` | The turn state machine. LLM and tools, streaming, error recovery. |
+| `pyrrhon/core/agent/loop.py` | The turn: LLM and tools, streaming, error recovery, pre-flight compaction. |
+| `pyrrhon/core/agent/policy.py` | The turn state machine proper: the policy table, `TurnState`, and `decide()`. |
 | `pyrrhon/core/session.py` | History, modes, cancellable turns, latency. |
 | `pyrrhon/core/grounding/` | `gate.py` verifies citations; `evidence.py` records what tool output actually showed. |
 | `pyrrhon/core/tools/` | The belt. One module per family. |
@@ -527,6 +528,125 @@ warming is the one behind the configured base URL and warming a default is a
 silent no-op that looks like a win. Its failure mode is that the first request
 pays the handshake as it does today, so it logs at debug and never warns.
 
+**The turn state machine (M16b, 2026-08-30).** `_run_turn` drove itself from
+five loose locals — a `range(max_tool_rounds)` counter, a `ToolGuard`, two
+booleans, and M16a's per-round resume count. Together they *were* the turn's
+state; separately, the reason the loop stopped had to be reconstructed from
+whichever branch happened to break out, by both the forced-answer path and the
+trace. `core/agent/policy.py` gives that a type: `TurnState` is what the turn
+has spent, `TurnPolicy` is what it may spend, and `decide()` returns
+`Continue | Stop` with the reason attached. **Do not reintroduce a round
+counter.** A second place that decides when a turn ends is how the five locals
+happened in the first place, and `TurnTrace.stop_reason` immediately starts
+lying — it is recorded now, not inferred, and `/debug-history` and the latency
+harness read it.
+
+The loop is `while True`, bounded by `decide()`, which is not a cosmetic
+change: the nudge, the context recovery and the truncation resume all `continue`
+without consuming a tool round now, where `range()` silently charged them one.
+Each is bounded on its own — one nudge per key, `MAX_CONTEXT_RECOVERIES`, one
+resume per round — so every path still terminates.
+
+`decide()` is consulted **after** a tool round, never before the first LLM call.
+That is what lets `max_rounds=0` mean "no tool rounds" rather than "no reply":
+a social turn still gets its one round, and the row states the same fact twice
+(no belt, no rounds) because the two fail differently.
+
+The diminishing-returns signal is **evidence, not tokens**. The reference counts
+forced continuations; three or four tool rounds is a normal investigation here,
+so that threshold would cut off an agent that is working. `EvidenceLedger.
+fingerprint()` is taken either side of each round, and three consecutive rounds
+that opened no new line range and named no new path end the turn with
+`Stop("diminishing")`. Ranges collapse into a set inside the fingerprint, so a
+round that re-read lines already seen counts as barren — the duplicate-call
+guard only catches the case where the arguments matched too. A token count
+cannot make that distinction: a round can be expensive and productive, or cheap
+and decisive.
+
+**The nudge points the opposite way from Claude Code's.** Theirs says "keep
+working, do not summarize", because its failure mode is a model that stops
+early. Pyrrhon's is the reverse — a spoken turn that spends four more rounds has
+already lost — so `LAND_NUDGE` fires at `nudge_at` of the budget and says answer
+now. Do not copy the reference's wording back in; a test asserts the direction.
+
+The policy is a **table** keyed by `(turn_type, voice_active)`, and
+`turn_type.needs_tools` is derived from it through a function-local import (the
+same shape as `catalog._providers`, and for the same reason). Which turns get
+tools was one fact living in two places. `TurnPolicy.withheld` is a *withhold*
+list, not an allow list: `None` means no belt at all, an empty frozenset means
+the whole belt, and `belt_for` is the only place that polarity is read. An allow
+list of builtin names would have silently stripped every plugin and MCP tool
+from every narrowed turn.
+
+Two rows carry decisions rather than numbers. `RESUME` keeps the belt — the plan
+said otherwise, but "yes, go on" is a repo question the user just re-anchored,
+and `turn_type.classify` documents why withholding tools there produces exactly
+the ungrounded answer the gate cannot catch. And the spoken row keeps the
+**whole** belt: withholding `think_deeper` and the two web tools was built,
+measured at ~348 schema tokens saved (a quarter of the plan's estimate) against
+a third prefix-cache family in any mixed session, and dropped — `voice/bridge.py`
+already ships a spoken filler for each of those three, so an earlier milestone
+had deliberately made them voice-usable. What the spoken row does carry is half
+the round cap and half the tool-char budget, which bounds a turn rather than
+removing a capability. The open question is recorded at `_SPOKEN`: the round cap
+does **not** bound `think_deeper`, because it is one call inside one round.
+
+`_tool_schemas` takes the policy and keys its cache on the offered **names**, so
+the key moves with both things that can change it — a plugin joining
+`self.tools`, and a row narrowing it. Getting that wrong is silent in both
+directions. The whole table may produce at most **three** distinct belt shapes,
+and that is a test rather than a comment: filtering the schema list looks like a
+pure narrowing at the call site and is in fact a decision about how many
+prefix-cache families the session gets (M10 section 2.2). Two shapes are in use
+today; the third is the room a future voice row needs.
+
+**Compaction runs in front of the request, not behind its failure.**
+`context.fit_to_budget` is the ladder, cheapest rung first: under budget, then
+elide earlier turns' tool results, then elide harder keeping only the most
+recent, then summarize. `hard_compact_tool_results` is gone — it differed from
+`compact_tool_results` by exactly one thing, which results are off limits, so it
+is a `keep_recent` parameter now rather than a second function with a duplicated
+body.
+
+The turn's own pre-flight passes **`summarize=False`**, and that is load-bearing
+rather than an oversight. M16b's plan puts the summarize rung in the pre-flight
+*and* describes the loop as compacting "locally and cheaply"; those cannot both
+hold, and M10 moved that round trip off the critical path on purpose — it used
+to sit in front of the first token of every over-budget turn.
+`test_the_turn_itself_makes_no_summarize_call` pins it. So the ladder owns all
+four rungs, the critical path runs the two pure ones, and the round trip stays
+where it belongs: `Session`'s background pass in dead time, or the safety net
+after the provider has already said no.
+
+`Agent.request_budget` nets the belt's schemas off the top, because they ride
+the same request as the history and a budget that ignored them would aim the
+compactor at a number the request was always going to exceed. `Session.
+_schedule_compaction` reads the **same** function: it used to budget against
+`context_budget_tokens`, a looser number, which would schedule a round trip to
+fix a history the turn had just fitted. `_cancel_compaction` is deliberately
+untouched — its contract depends on `maybe_summarize`'s single await landing
+before any mutation of history, and routing the background pass through the
+whole ladder would put pure mutations in front of that await to buy microseconds
+off a rung that is already free.
+
+`MAX_CONTEXT_RECOVERIES` is **1**. The `ContextLengthExceededError` handler is
+what its name says now: reaching it means the *estimate* was wrong, not that
+nothing was tried, so it runs the same ladder once with `force=True` — every
+rung, regardless of what the estimate says — and then degrades honestly.
+
+Two things this milestone deliberately did **not** do. The eval and the runtime
+checks in Task 7 need a working provider key, and `~/.pyrrhon/credentials.toml`
+carries a placeholder for Groq, so the policy numbers are first guesses and the
+signal for tuning them is `Stop(reason="rounds")` in real traces rather than
+intuition. And M16a's handoff — trimming a sealed partial back to its last
+complete sentence so the resume seam cannot duplicate a clause — is **declined**,
+not deferred: on the streaming path that clause was already spoken, and
+`_seal_partial`'s "history records what was heard" invariant is what barge-in
+truncation and the transcript's honesty both rest on. One duplicated clause is
+not worth trading it for. The seam belongs to M16e's move of verification
+upstream, or to a wording change in `RESUME_INSTRUCTION`, whichever a live
+listen argues for.
+
 **LLM lane and vision (M15b).** LLM providers are rows in
 `core/providers/registry.py`; `BUILTIN_PROVIDERS` and the wizard's catalog are
 both derived from it, and no model ids are hardcoded anywhere. Token usage is
@@ -617,9 +737,12 @@ the prompt forbidding claims about unloaded code) so the egress gate becomes a
 cheap safety net rather than the mechanism. That is what would make S2S viable
 later; it is M16 work, not a licence to weaken the gate now.
 
-**Planned next. M16a is closed; M16b is the next thing to start.** Spec:
-`docs/superpowers/specs/2026-08-29-pyrrhon-m16-agent-harness-design.md`; the
-five plans are `m16a` through `m16e` in `docs/superpowers/plans/`.
+**Planned next. M16a and M16b are closed; M16c is the next thing to start.**
+Spec: `docs/superpowers/specs/2026-08-29-pyrrhon-m16-agent-harness-design.md`;
+the five plans are `m16a` through `m16e` in `docs/superpowers/plans/`. M16b's
+runtime pass (the grounding eval, the tuning of the policy numbers, and driving
+both channels) is the one part left open, and it is blocked on a provider key
+rather than on code.
 
 **M16a was verified against a real Groq account on 2026-08-30, and the run
 found a fault the plan did not know about** — see the plan's "Runtime
@@ -645,7 +768,8 @@ with "by verifying once, the assistant guarantees that its knowledge base...",
 duplicating the clause. Trimming the sealed partial back to its last complete
 sentence would fix it and would trade against `_seal_partial`'s invariant that
 history records what was *heard*, since on the streaming path that clause was
-already spoken. Left as a decision for M16b rather than taken quietly.
+already spoken. M16b took that decision and **declined the trim** — see the end
+of its section above for why, and where the seam belongs instead.
 
 **Preconnect is worth its lines**: 127ms median off time-to-first-token, warm
 beating cold in all six samples.
@@ -671,10 +795,11 @@ LLM-lane feature with its own design question; M16's job is the harness, and
 the seam exists precisely so the harness never has to know which driver it
 holds.
 
-Next is the rest of **M16 — the harness**: the turn state machine (M16b), the
-tool contract (M16c), the context firewall (M16d), and verification moved
-upstream (M16e). That is the moat; M15 exists to make the seam thin enough that
-M16 never thinks about audio. The S2S paragraph above is M16e's brief.
+Next is the rest of **M16 — the harness**: the tool contract (M16c), the
+context firewall (M16d), and verification moved upstream (M16e). The turn state
+machine (M16b) is done. That is the moat; M15 exists to make the seam thin
+enough that M16 never thinks about audio. The S2S paragraph above is M16e's
+brief.
 
 Deferred on purpose, with triggers recorded in the M15a plan: the
 `SoundfileMixer` thinking bed, until someone decides what it should sound like.

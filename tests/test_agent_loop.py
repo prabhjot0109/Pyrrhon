@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 from pyrrhon.core.agent.loop import Agent
@@ -174,19 +175,15 @@ async def test_the_same_question_typed_goes_further():
     assert typed.max_rounds > policy_for(REPO_QUESTION, voice_active=True).max_rounds
 
 
-async def test_a_spoken_turn_is_offered_a_narrower_belt_that_still_exists():
-    """The withheld names must be names the live belt actually has.
-
-    A withhold list naming tools that were renamed away would narrow nothing
-    and read as though it did, so assert the offered belt is a strict subset —
-    not merely that some filtering happened.
-    """
+async def test_a_spoken_turn_is_offered_the_whole_belt():
+    """The voice row bounds a spoken turn by rounds and tool volume, not by
+    taking tools away — see policy._SPOKEN for the measurement that settled
+    it. The narrowing machinery stays wired: this asserts what it currently
+    produces, so putting a withhold list back is a visible change."""
     agent, fake = _trace_agent(1, voice=True)
     await collect(agent, [], "where does the turn state machine decide?")
     offered = {schema["function"]["name"] for schema in fake.calls[0]["tools"]}
-    assert offered < set(agent.tools)
-    assert "web_search" not in offered
-    assert "trace" in offered
+    assert offered == set(agent.tools)
 
 
 async def test_a_social_turn_is_offered_no_belt_at_all():
@@ -207,18 +204,23 @@ async def test_the_constructor_still_pins_the_round_cap():
 
 def test_the_schema_cache_key_tracks_the_belt_and_nothing_else():
     """Silent in both directions if it is wrong: a stale key serves the
-    previous turn's belt, and no key rebuilds the list every round."""
+    previous turn's belt, and no key rebuilds the list every round.
+
+    Driven from a hand-built policy rather than a table row, because no row
+    withholds anything today. The mechanism is what has to keep working — the
+    day a row does narrow the belt, this is the test that says whether the
+    cache noticed."""
     agent = Agent(llm=FakeLLM([]), tools=[TraceTool(), WebSearchTool()],
                   system_prompt="p", repo_root=FIXTURE)
     typed = policy_for(REPO_QUESTION, voice_active=False)
-    spoken = policy_for(REPO_QUESTION, voice_active=True)
+    narrowed = replace(typed, withheld=frozenset({"web_search"}))
 
     full = agent._tool_schemas(typed)
     key_after_full = agent._schema_cache_key
     assert agent._tool_schemas(typed) is full  # same belt: no rebuild
     assert agent._schema_cache_key == key_after_full
 
-    narrow = agent._tool_schemas(spoken)
+    narrow = agent._tool_schemas(narrowed)
     assert agent._schema_cache_key != key_after_full
     assert narrow is not None and len(narrow) < len(full or ())
     assert agent._tool_schemas(policy_for(SOCIAL, voice_active=False)) is None
