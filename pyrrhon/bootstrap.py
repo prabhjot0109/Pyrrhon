@@ -350,6 +350,10 @@ def build_agent(
         # Agent's to know, and read_file must not hold a reference back to it.
         elif isinstance(tool, ReadFileTool):
             tool._seen = lambda path: agent._evidence.covered(path)
+        elif isinstance(tool, ExploreTool):
+            # Same shape again. ThinkDeeperTool is handed the same sink by
+            # Agent.__init__, which is where that one is constructed.
+            tool._on_progress = agent.emit_progress
     return agent
 
 

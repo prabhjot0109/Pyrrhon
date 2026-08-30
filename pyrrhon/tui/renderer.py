@@ -21,6 +21,7 @@ from pyrrhon.core.events import (
     ProviderRetrying,
     ScreenArtifact,
     SpeechChunk,
+    SubagentProgress,
     ToolCallFinished,
     ToolCallStarted,
     Transcription,
@@ -156,6 +157,18 @@ class TuiRenderer(EventRenderer):
         row.resolve(event.result_preview, self._app.turn.elapsed(row))
         # The working row collapses into the row that just resolved.
         self._app.turn.set_working_label("thinking")
+
+    def on_subagent_progress(self, event: SubagentProgress) -> None:
+        """A dispatch reporting a round, onto the row it already has.
+
+        Reached by callback from inside the awaited tool call rather than
+        through the turn's event stream, the same shape `orient_in_background`
+        uses — so it must do nothing that needs the message pump. Updating a
+        mounted Static satisfies that; mounting a row would not.
+        """
+        row = self._app.turn.peek_tool(event.tool)
+        if row is not None:
+            row.progress(event.round_number, event.detail)
 
     def on_citation(self, event: Citation) -> None:
         # Two independent routes to the same line, so a terminal without

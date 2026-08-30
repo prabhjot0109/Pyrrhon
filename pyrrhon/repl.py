@@ -39,6 +39,7 @@ from pyrrhon.core.events import (
     ProviderRetrying,
     ScreenArtifact,
     SpeechChunk,
+    SubagentProgress,
     ToolCallStarted,
 )
 from pyrrhon.core.mcp import MCPManager
@@ -96,6 +97,17 @@ class ConsoleRenderer(EventRenderer):
     def on_question(self, event: AskUser) -> None:
         # Design mode's Socratic question, rendered distinctly (spec: M6).
         self._console.print(f"[bold magenta]? {event.question}[/bold magenta]")
+
+    def on_subagent_progress(self, event: SubagentProgress) -> None:
+        """One dim line per round, so a long dispatch reads as work.
+
+        The REPL has no updatable row to revise, so it appends. Dim, because
+        this is machinery: what the user is waiting for is the report.
+        """
+        self._console.print(
+            f"[dim]  {event.tool} · round {event.round_number} · "
+            f"{event.detail}[/dim]"
+        )
 
     def on_provider_retrying(self, event: ProviderRetrying) -> None:
         self._console.print(
@@ -173,6 +185,10 @@ async def _repl_loop(
     agent.llm.on_retry = lambda delay, reason: renderer.render(
         ProviderRetrying(delay_seconds=delay, reason=reason)
     )
+    # Where a dispatched subagent's rounds go. Third attachment of the same
+    # shape, and the payload is already an Event, so the dispatch table
+    # decides what this channel says about it.
+    agent.on_progress = renderer.render
     session = Session(agent)
     # voice stays None: the plain REPL is a text channel; /voice answers honestly.
     ctx = CommandContext(

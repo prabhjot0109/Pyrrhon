@@ -136,6 +136,13 @@ class PyrrhonApp(App):
             self._renderer.render,
             ProviderRetrying(delay_seconds=delay, reason=reason),
         )
+        # A dispatched subagent reporting a round, same treatment: the payload
+        # is already an Event, and `render` rather than `_render_event`
+        # because the hook updates a mounted Static and needs no pump of its
+        # own. It fires from inside the tool call the turn worker is awaiting.
+        agent.on_progress = lambda event: self.call_later(
+            self._renderer.render, event
+        )
         self.voice = VoiceController(
             self.session,
             load_settings(repo_root),

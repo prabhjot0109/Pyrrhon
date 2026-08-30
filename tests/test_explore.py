@@ -174,3 +174,75 @@ def test_the_scout_is_driven_by_the_fast_slot_not_the_deep_one(tmp_path):
     agent = build_agent(tmp_path, llm=fast, deep_llm=deep, home=tmp_path)
     assert agent.tools["explore"].llm is fast
     assert agent.tools["think_deeper"].deep_llm is deep
+
+
+async def test_a_dispatch_reports_each_round_to_whoever_asked(tmp_path):
+    """The firewall is visible: a long dispatch is distinguishable from a hang.
+
+    Reached by callback rather than through the turn's event stream, so the
+    check is that the events ARRIVE while the tool call is still in flight —
+    before the ToolCallFinished that ends it.
+    """
+    from pyrrhon.bootstrap import build_agent
+    from pyrrhon.core.events import SubagentProgress, ToolCallFinished
+
+    agent = build_agent(tmp_path, llm=FakeLLM([]), deep_llm=FakeLLM([]), home=tmp_path)
+    scout = agent.tools["explore"]
+    scout.llm = FakeLLM(
+        [
+            LLMReply(tool_calls=(_grep_call(),)),
+            LLMReply(tool_calls=(_grep_call("second"),)),
+            LLMReply(text=REPORT),
+        ]
+    )
+    scout.tools = {"grep": FakeGrep("src/a.py:1: hit")}
+
+    seen: list[object] = []
+    agent.on_progress = seen.append
+    agent.llm = FakeLLM(
+        [
+            LLMReply(
+                tool_calls=(
+                    ToolCall(id="e1", name="explore", arguments={"question": "where?"}),
+                )
+            ),
+            LLMReply(text="It is in the bridge."),
+        ]
+    )
+    events = [e async for e in agent.run_turn([], "where?")]
+
+    assert seen == [
+        SubagentProgress("explore", 1, "grep"),
+        SubagentProgress("explore", 2, "grep"),
+    ]
+    # Both landed before the call resolved, which is what makes them progress
+    # rather than a summary of work already finished.
+    assert [e for e in events if isinstance(e, ToolCallFinished)]
+
+
+async def test_a_progress_sink_that_raises_never_kills_the_turn(tmp_path):
+    from pyrrhon.bootstrap import build_agent
+
+    agent = build_agent(tmp_path, llm=FakeLLM([]), deep_llm=FakeLLM([]), home=tmp_path)
+    scout = agent.tools["explore"]
+    scout.llm = FakeLLM([LLMReply(tool_calls=(_grep_call(),)), LLMReply(text=REPORT)])
+    scout.tools = {"grep": FakeGrep("src/a.py:1: hit")}
+
+    def explode(event):
+        raise RuntimeError("the renderer fell over")
+
+    agent.on_progress = explode
+    agent.llm = FakeLLM(
+        [
+            LLMReply(
+                tool_calls=(
+                    ToolCall(id="e1", name="explore", arguments={"question": "where?"}),
+                )
+            ),
+            LLMReply(text="It is in the bridge."),
+        ]
+    )
+    history: list[dict] = []
+    async for _ in agent.run_turn(history, "where?"):
+        pass
+    assert history[-1]["content"] == "It is in the bridge."

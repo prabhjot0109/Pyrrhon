@@ -97,6 +97,32 @@ class ProviderRetrying:
 
 
 @dataclass(frozen=True)
+class SubagentProgress:
+    """A dispatched subagent finished a round of its own investigation.
+
+    The existing tool narration covers the START of a dispatch; what was
+    missing is progress. `explore` and `think_deeper` can each run for tens of
+    seconds behind one unchanging tool row, and a row that has not moved is
+    indistinguishable from a hang.
+
+    It reaches a channel by CALLBACK rather than through the turn's event
+    stream, which is the one thing about it worth knowing before wiring
+    another consumer: the runner is awaited inside a tool call, and an async
+    generator cannot yield through one. Same shape as `orient_in_background`,
+    for the same reason. It is still an Event and still goes through the one
+    dispatch table, so a channel that shows nothing says so once.
+
+    `detail` is the distinct tool names that round ran, already deduplicated —
+    a description of what the subagent just did, in a form a channel can put
+    on a row without reformatting.
+    """
+
+    tool: str
+    round_number: int
+    detail: str
+
+
+@dataclass(frozen=True)
 class TruncateSpeech:
     """The one reverse-direction event (channel → core).
 
@@ -136,6 +162,7 @@ Event = (
     | Transcription
     | VoiceNotice
     | ProviderRetrying
+    | SubagentProgress
     | TruncateSpeech
     | TurnFinished
 )

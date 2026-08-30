@@ -243,6 +243,15 @@ class TurnView:
     def track_tool(self, name: str, row: ToolRow) -> None:
         self._pending.setdefault(name, []).append((row, time.monotonic()))
 
+    def peek_tool(self, name: str) -> ToolRow | None:
+        """The oldest unresolved row for this tool, left in the queue.
+
+        `claim_tool` pops, because a finish ends a call. Progress does not, so
+        it must not: a dispatch reports several rounds before it resolves.
+        """
+        queue = self._pending.get(name)
+        return queue[0][0] if queue else None
+
     def claim_tool(self, name: str) -> ToolRow | None:
         """The oldest unresolved row for this tool. Calls finish in order."""
         queue = self._pending.get(name)

@@ -94,3 +94,26 @@ def test_a_long_result_preview_is_capped_too():
     row = ToolRow("grep", {"q": "x"})
     row.resolve("y" * 500, seconds=0.2)
     assert len(str(row.body().content)) < 200
+
+
+def _text(row: ToolRow) -> str:
+    """The Static's content, however this Textual spells it."""
+    return str(row._body._Static__content)
+
+
+def test_a_running_tool_row_takes_a_live_tail_and_a_resolved_one_does_not():
+    """A dispatch reports rounds onto the row it already has.
+
+    The second half is the race the callback path makes possible: progress is
+    reported from inside the awaited tool call, and a report that lands after
+    the call resolved must not overwrite the result with news about how it
+    was reached.
+    """
+    row = ToolRow("explore", {"question": "where is barge-in?"})
+    row.progress(2, "grep, read_file")
+    assert "round 2 · grep, read_file" in _text(row)
+
+    row.resolve("FOUND: the voice bridge.")
+    resolved = _text(row)
+    row.progress(3, "read_file")
+    assert _text(row) == resolved

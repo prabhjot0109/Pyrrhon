@@ -143,6 +143,21 @@ class ToolRow(Row):
         head = f"{self.tool_name}  {self._summary}" if self._summary else self.tool_name
         return f"{head}{tail}"
 
+    def progress(self, round_number: int, detail: str) -> None:
+        """A live tail on a dispatch that is still running.
+
+        The row already exists and is already tracked, so a subagent's rounds
+        update it in place rather than mounting a row each. That keeps the
+        transcript one line per tool call, which is what makes the progress
+        legible instead of a wall of its own.
+
+        A report that lands after the call resolved is dropped: it would
+        overwrite the result with news about how it was reached.
+        """
+        if self.state != "running":
+            return
+        self._body.update(self._line(f"  round {round_number} · {detail}"))
+
     def resolve(self, preview: str, seconds: float | None = None) -> None:
         """Mark the call finished. Failure reads differently from success,
         because "it ran" and "it worked" are not the same news."""

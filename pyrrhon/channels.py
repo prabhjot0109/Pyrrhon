@@ -27,6 +27,7 @@ from pyrrhon.core.events import (
     ProviderRetrying,
     ScreenArtifact,
     SpeechChunk,
+    SubagentProgress,
     ToolCallFinished,
     ToolCallStarted,
     Transcription,
@@ -49,6 +50,7 @@ EVENT_HOOKS: dict[type, str] = {
     Transcription: "on_transcription",
     VoiceNotice: "on_voice_notice",
     ProviderRetrying: "on_provider_retrying",
+    SubagentProgress: "on_subagent_progress",
     TruncateSpeech: "on_interrupted",
     TurnFinished: "on_turn_finished",
 }
@@ -117,5 +119,6 @@ class EventRenderer:
     def on_transcription(self, event: Transcription) -> None: ...
     def on_voice_notice(self, event: VoiceNotice) -> None: ...
     def on_provider_retrying(self, event: ProviderRetrying) -> None: ...
+    def on_subagent_progress(self, event: SubagentProgress) -> None: ...
     def on_interrupted(self, event: TruncateSpeech) -> None: ...
     def on_turn_finished(self, event: TurnFinished) -> None: ...

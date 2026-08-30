@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
@@ -53,6 +53,7 @@ from pyrrhon.core.events import (
     AskUser,
     Event,
     SpeechChunk,
+    SubagentProgress,
     ToolCallFinished,
     ToolCallStarted,
 )
@@ -327,6 +328,13 @@ class Agent:
         # References this turn that were real-but-unopened. Diagnostics for the
         # eval harness, not conversation state — same status as last_trace.
         self.last_unseen: tuple[str, ...] = ()
+        # Where a subagent's round-boundary progress goes, or None to drop it.
+        # A callback rather than the turn's event stream, because a dispatch is
+        # awaited inside a tool call and an async generator cannot yield
+        # through one. Channels assign this after build; the shape is
+        # `orient_in_background`'s, which already renders from outside the
+        # message pump.
+        self.on_progress: Callable[[Event], object] | None = None
         self._schema_cache: list[dict] = []
         self._schema_cache_key: tuple[str, ...] | None = None
         # Owned, not just consumed. Channels swap the deep slot at runtime
@@ -336,7 +344,9 @@ class Agent:
         # lockstep through one seam.
         self.deep_llm = deep_llm
         if deep_llm is not None:
-            deep_tool = ThinkDeeperTool(deep_llm, tools=deep_tools)
+            deep_tool = ThinkDeeperTool(
+                deep_llm, tools=deep_tools, on_progress=self.emit_progress
+            )
             self.tools[deep_tool.name] = deep_tool
             self.system_prompt = system_prompt + "\n" + ESCALATION_NOTE
 
@@ -1081,6 +1091,20 @@ class Agent:
             if kind == "reply":
                 sink.append((payload, joiner.join(spoken).strip(), slot))
                 return
+
+    def emit_progress(self, tool: str, round_number: int, detail: str) -> None:
+        """A dispatched subagent finished a round; tell the channel if it asked.
+
+        Swallows everything the sink raises. A progress line is never
+        load-bearing, and the investigation the user is waiting for must not
+        die because a renderer did.
+        """
+        if self.on_progress is None:
+            return
+        try:
+            self.on_progress(SubagentProgress(tool, round_number, detail))
+        except Exception:  # pragma: no cover - a progress line is a nicety
+            logger.debug("progress sink failed", exc_info=True)
 
     async def _run_tool(self, name: str, args: dict) -> str:
         return await run_tool(self.tools, name, args)
