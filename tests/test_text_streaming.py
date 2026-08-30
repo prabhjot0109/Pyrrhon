@@ -20,8 +20,8 @@ from pyrrhon.core.agent.loop import (
     _pop_blocks,
 )
 from pyrrhon.core.events import SpeechChunk
+from pyrrhon.core.providers.errors import ContextLengthExceededError
 from pyrrhon.core.providers.llm import (
-    ContextLengthExceededError,
     LLMReply,
     ToolCall,
 )

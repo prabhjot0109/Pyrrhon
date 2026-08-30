@@ -12,9 +12,15 @@ import os
 from dataclasses import dataclass
 
 import httpx
-from openai import APIConnectionError, APIStatusError, AsyncOpenAI, BadRequestError
+from openai import APIConnectionError, APIStatusError, AsyncOpenAI
 
 from pyrrhon.config.settings import ModelSlot, Settings
+from pyrrhon.core.providers.errors import (
+    ContextLengthExceededError,
+    InvalidToolCallError,
+    RateLimitExceededError,
+    classify,
+)
 
 logger = logging.getLogger("pyrrhon.providers")
 
@@ -23,50 +29,25 @@ class MissingAPIKeyError(RuntimeError):
     pass
 
 
-class InvalidToolCallError(RuntimeError):
-    """The model emitted a tool call the provider rejected as not in the tool
-    list — e.g. gpt-oss on Groq hallucinating its built-in `search`/`python`.
-    Distinct from an outage: the loop recovers by nudging with the real tool
-    names, so it must not be swallowed as a generic 4xx."""
+def _raise_if_typed(exc: APIStatusError) -> None:
+    """Re-raise a provider failure as a typed error the agent loop recovers
+    from, or return so the caller re-raises it verbatim.
 
-
-class ContextLengthExceededError(RuntimeError):
-    """The prompt (history + tool results) exceeded the model's context window.
-    A 4xx, but recoverable: the loop compacts the conversation and retries the
-    round rather than dying — so it must not be swallowed as a generic error
-    (which is what stranded the turn in the field). Mirrors Codex catching
-    ContextWindowExceeded and compacting before continuing."""
-
-
-def _is_tool_validation_error(exc: BadRequestError) -> bool:
-    if getattr(exc, "code", None) == "tool_use_failed":
-        return True
-    text = str(exc)
-    return "not in request.tools" in text or "Tool call validation failed" in text
-
-
-def _is_context_length_error(exc: BadRequestError) -> bool:
-    if getattr(exc, "code", None) == "context_length_exceeded":
-        return True
-    text = str(exc).lower()
-    # Providers word this differently: OpenAI "maximum context length",
-    # others "context length"/"context window"/"reduce the length".
-    return (
-        "context_length_exceeded" in text
-        or "maximum context length" in text
-        or "context window" in text
-        or "reduce the length" in text
-        or "too many tokens" in text
-    )
-
-
-def _raise_if_typed(exc: BadRequestError) -> None:
-    """Re-raise a provider 4xx as a typed error the agent loop recovers from,
-    or return so the caller re-raises it verbatim. Shared by chat() + stream()."""
-    if _is_tool_validation_error(exc):
-        raise InvalidToolCallError(str(exc)) from exc
-    if _is_context_length_error(exc):
-        raise ContextLengthExceededError(str(exc)) from exc
+    The kinds that get a type are exactly the ones something downstream knows
+    how to act on. `credentials` and `outage` deliberately fall through: a bad
+    key is user error the message already names, and an outage is
+    FallbackLLM's to answer, which it does by inspecting the SDK exception —
+    so wrapping it here would take that decision away from it.
+    """
+    fault = classify(exc)
+    if fault is None:
+        return
+    if fault.kind == "tool_validation":
+        raise InvalidToolCallError(fault.message) from exc
+    if fault.kind == "too_large":
+        raise ContextLengthExceededError(fault.message) from exc
+    if fault.kind == "rate_limited":
+        raise RateLimitExceededError(fault.message, fault.retry_after) from exc
 
 
 @dataclass(frozen=True)
@@ -158,7 +139,7 @@ class OpenAICompatLLM:
             kwargs["tools"] = tools
         try:
             response = await self._client.chat.completions.create(**kwargs)
-        except BadRequestError as exc:
+        except APIStatusError as exc:
             _raise_if_typed(exc)
             raise
         message = response.choices[0].message
@@ -196,7 +177,7 @@ class OpenAICompatLLM:
             kwargs["tools"] = tools
         try:
             stream = await self._client.chat.completions.create(**kwargs)
-        except BadRequestError as exc:
+        except APIStatusError as exc:
             _raise_if_typed(exc)
             raise
         text_parts: list[str] = []
@@ -227,7 +208,7 @@ class OpenAICompatLLM:
                         slot["name"] = tc.function.name
                     if tc.function and tc.function.arguments:
                         slot["args"] += tc.function.arguments
-        except BadRequestError as exc:
+        except APIStatusError as exc:
             _raise_if_typed(exc)
             raise
         calls = tuple(

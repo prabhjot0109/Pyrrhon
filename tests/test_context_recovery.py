@@ -6,8 +6,8 @@ from pathlib import Path
 from pyrrhon.core.agent.loop import CONTEXT_FULL_MESSAGE, Agent
 from pyrrhon.core.context import TOOL_STUB_MIN, hard_compact_tool_results
 from pyrrhon.core.events import SpeechChunk
+from pyrrhon.core.providers.errors import ContextLengthExceededError
 from pyrrhon.core.providers.llm import (
-    ContextLengthExceededError,
     LLMReply,
     ToolCall,
 )

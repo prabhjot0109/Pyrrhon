@@ -146,3 +146,151 @@ def test_retry_after_http_date():
     assert parsed is not None and 25 < parsed <= 31
     past = datetime.now(timezone.utc) - timedelta(seconds=30)
     assert retry_after_seconds({"retry-after": format_datetime(past)}) is None
+
+
+# --- The client raises from the taxonomy ------------------------------------
+#
+# Driven through httpx.MockTransport rather than a stubbed `.create`, so the
+# openai SDK builds the exception itself and the tests keep holding when the
+# acquisition path changes (Task 5 switches chat() to .with_raw_response).
+
+import json
+
+from openai import AsyncOpenAI
+
+from pyrrhon.core.providers.errors import (
+    ContextLengthExceededError,
+    InvalidToolCallError,
+    RateLimitExceededError,
+)
+from pyrrhon.core.providers.llm import OpenAICompatLLM
+
+BASE_URL = "http://provider.test/v1"
+
+
+@pytest.fixture
+async def _llm():
+    """Builds an OpenAICompatLLM whose transport is `handler`, and closes it.
+
+    Closing matters more than it looks: an httpx.AsyncClient left open past
+    its event loop raises "Event loop is closed" from a finaliser, which
+    surfaces as an unraisable warning in whatever test happens to run next.
+    tests/conftest.py exists because of exactly that class of cross-test
+    leakage.
+
+    max_retries=0 throughout: the SDK's own backoff sleeps for real on a 429,
+    and what is under test here is the taxonomy, not the SDK's retry.
+    """
+    clients: list[AsyncOpenAI] = []
+
+    def build(handler, **kwargs) -> OpenAICompatLLM:
+        llm = OpenAICompatLLM(
+            model="m", api_key="k", base_url=BASE_URL, max_retries=0, **kwargs
+        )
+        llm._client = AsyncOpenAI(
+            api_key="k",
+            base_url=BASE_URL,
+            max_retries=0,
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        )
+        clients.append(llm._client)
+        return llm
+
+    yield build
+    for client in clients:
+        await client.close()
+
+
+def _failing(status: int, body: dict, headers: dict | None = None):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, json=body, headers=headers or {})
+
+    return handler
+
+
+async def _drive_stream(llm):
+    return [event async for event in llm.stream([{"role": "user", "content": "hi"}])]
+
+
+async def _drive_chat(llm):
+    return await llm.chat([{"role": "user", "content": "hi"}])
+
+
+TOOL_BODY = {"error": {"message": "tool call validation failed", "code": "tool_use_failed"}}
+LONG_BODY = {"error": {"message": "Please reduce the length of the messages"}}
+BIG_BODY = {"error": {"message": "Request Entity Too Large"}}
+LIMIT_BODY = {"error": {"message": "Rate limit reached for model", "code": "rate_limit_exceeded"}}
+KEY_BODY = {"error": {"message": "Invalid API Key", "code": "invalid_api_key"}}
+ODD_BODY = {"error": {"message": "malformed json in messages[0]"}}
+
+
+@pytest.mark.parametrize("drive", [_drive_chat, _drive_stream])
+@pytest.mark.parametrize(
+    "status,body,expected",
+    [
+        (400, TOOL_BODY, InvalidToolCallError),
+        (400, LONG_BODY, ContextLengthExceededError),
+        (413, BIG_BODY, ContextLengthExceededError),
+        (429, LIMIT_BODY, RateLimitExceededError),
+    ],
+)
+async def test_recoverable_failures_become_typed_errors(_llm, drive, status, body, expected):
+    with pytest.raises(expected):
+        await drive(_llm(_failing(status, body)))
+
+
+@pytest.mark.parametrize("drive", [_drive_chat, _drive_stream])
+async def test_rate_limit_carries_its_delay(_llm, drive):
+    llm = _llm(_failing(429, LIMIT_BODY, {"retry-after": "20"}))
+    with pytest.raises(RateLimitExceededError) as caught:
+        await drive(llm)
+    assert caught.value.retry_after == 20.0
+
+
+@pytest.mark.parametrize("drive", [_drive_chat, _drive_stream])
+@pytest.mark.parametrize(
+    "status,body,expected",
+    [
+        (401, KEY_BODY, AuthenticationError),
+        (400, ODD_BODY, BadRequestError),
+        (500, {"error": {"message": "boom"}}, InternalServerError),
+    ],
+)
+async def test_unrecoverable_failures_reach_the_caller_verbatim(
+    _llm, drive, status, body, expected
+):
+    """A bad key and an outage are not the loop's to recover from, and an
+    unrecognised 400 must not be mistaken for one that is."""
+    with pytest.raises(expected):
+        await drive(_llm(_failing(status, body)))
+
+
+@pytest.mark.parametrize("drive", [_drive_chat, _drive_stream])
+async def test_transport_failure_reaches_the_fallback_chain(_llm, drive):
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("no route to host", request=request)
+
+    with pytest.raises(APIConnectionError):
+        await drive(_llm(refuse))
+
+
+async def test_a_good_reply_still_works(_llm):
+    """The guard against a taxonomy that swallows the happy path."""
+
+    def ok(request: httpx.Request) -> httpx.Response:
+        assert json.loads(request.content)["model"] == "m"
+        return httpx.Response(
+            200,
+            json={
+                "id": "x", "object": "chat.completion", "created": 0, "model": "m",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "hello"},
+                     "finish_reason": "stop"}
+                ],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
+            },
+        )
+
+    reply = await _drive_chat(_llm(ok))
+    assert reply.text == "hello"
+    assert reply.usage is not None and reply.usage.prompt == 5

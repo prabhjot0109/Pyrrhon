@@ -51,7 +51,7 @@ from pyrrhon.core.grounding.gate import (
     LINE_UNSEEN_HEDGE,
     GroundingGate,
 )
-from pyrrhon.core.providers.llm import (
+from pyrrhon.core.providers.errors import (
     ContextLengthExceededError,
     InvalidToolCallError,
 )
