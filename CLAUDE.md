@@ -45,6 +45,8 @@ that must stay true.
 | `pyrrhon/voice/` | Pipecat pipeline: mic, RNNoise, Silero VAD, smart turn, STT, bridge, TTS, barge-in. |
 | `pyrrhon/core/agent/loop.py` | The turn: LLM and tools, streaming, error recovery, pre-flight compaction. |
 | `pyrrhon/core/agent/policy.py` | The turn state machine proper: the policy table, `TurnState`, and `decide()`. |
+| `pyrrhon/core/agent/subagent.py` | The bounded read-only subagent runner, shared by `think_deeper` and `explore`. |
+| `pyrrhon/core/tools/explore.py` | The scout: a locating question answered in one round instead of many. |
 | `pyrrhon/core/session.py` | History, modes, cancellable turns, latency. |
 | `pyrrhon/core/grounding/` | `gate.py` verifies citations; `evidence.py` records what tool output actually showed. |
 | `pyrrhon/core/tools/` | The belt. One module per family. |
@@ -77,9 +79,12 @@ runs it next. The same care applies to the pipecat exception in
    `parameters` (the JSON schema the model sees), then implement
    `async def run(...)`. Anything blocking goes through `asyncio.to_thread`.
 2. Add it to `builtin_tools` in `pyrrhon/bootstrap.py:build_agent`.
-3. The deep subagent's belt is *derived* from that list, so a read-only tool is
-   inherited automatically. If `think_deeper` must not have it, add the name to
-   `DEEP_EXCLUDED` in the same file.
+3. Both subagent belts are *derived* from that list through `_subagent_belt`,
+   so a read-only tool is inherited automatically. If `think_deeper` must not
+   have it, add the name to `DEEP_EXCLUDED`; `EXPLORE_EXCLUDED` derives from
+   that and names what the scout additionally skips. A tool that dispatches a
+   subagent belongs in `DISPATCH_TOOLS` (`core/agent/subagent.py`) as well, or
+   depth stops being 1.
 4. Add its name to `EXPECTED_BELT` in `tests/test_safety.py`. That belt is a
    reviewed set, so this step is a deliberate checkpoint rather than bookkeeping.
 5. Add a spoken filler to `TOOL_FILLERS` in `pyrrhon/voice/bridge.py`. A test
@@ -286,7 +291,7 @@ loop is undeniable.
 
 ## Current state
 
-Everything through M15b is implemented and tested, bar the one piece named
+Everything through M16d is implemented and tested, bar the one piece named
 under "Planned next". The parts worth knowing about before you change them:
 
 **The TUI redesign (2026-08-23).** The Textual channel had not been designed
@@ -793,6 +798,96 @@ The tool reaches the ledger through one narrow callable that `build_agent`
 patches in, the same shape `RepoMapTool` uses for `mentions` and for the same
 reason: a tool must not hold a back-reference to the thing that calls it.
 
+**The context firewall (M16d, 2026-08-30).** `escalate.py` had run a bounded
+read-only subagent in a fresh context since M4, with its own belt and a compact
+cited report handed back. That is a context firewall wearing the name
+`think_deeper`, so the milestone extracted the loop rather than inventing a
+second mechanism. `core/agent/subagent.py` is the runner; `escalate.py` keeps
+what was genuinely deep-specific (which prompt, how question and notes compose
+into one task, the round budget) and `core/tools/explore.py` is a second,
+cheaper caller of the same thing.
+
+**`explore` takes the FAST slot and `think_deeper` the deep one, and that is
+the whole reason there are two tools rather than one with a flag.** Locating is
+search; routing it to the deep model makes every exploratory question pay
+escalation latency, which is the cost the tool exists to avoid. Its belt is
+narrower than the deep one on latency grounds rather than safety ones —
+`read_image` is the slowest thing on the belt, and git history answers a
+question that is not "where does this live".
+
+Measured on this repo: a five-call investigation across `bridge.py`, `loop.py`
+and `renderer.py` costs the parent's history 6990 tokens carried raw, and 1011
+in the **worst case the code permits** (a report at the hard cap). 5979 tokens
+saved against a schema that costs 186 per tool-bearing turn, so one dispatch
+pays for roughly thirty-two turns of carrying it. The live half — whether a
+real model reaches for it at the right moment — is still owed.
+
+Four things about it are load-bearing.
+
+**Depth is structurally 1, enforced in two places that fail differently.**
+`subagent.check_depth` refuses either dispatcher on either subagent belt at
+construction, and `DEEP_EXCLUDED` (which `EXPLORE_EXCLUDED` derives from) stops
+`build_agent` from ever assembling one that would be refused. A test asserts
+both directions from the assembled agent. `DISPATCH_TOOLS` names the pair once,
+so a third dispatcher cannot arrive without someone deciding what depth means
+for it.
+
+**The report is bounded in code, and the bound has a floor as well as a
+ceiling.** `MAX_REPORT_CHARS = 4000` against a per-call cap of 8000, and the
+gap is the same relationship M16c pinned for `PAGE_CHARS`: a report comes back
+through the parent's `ToolGuard.clip` like any other tool result, so one sized
+at the cap would be persisted to the result store and the model would page
+through a summary of a summary. `explore.py` and `guards.py` cannot see each
+other's constants, so a test holds them apart. A prompt asking for 200 words is
+a request; this is the contract.
+
+**Citations survive the firewall through a SECOND evidence bucket, not a shared
+ledger.** This is the part that looks like a style choice until it bites. The
+subagent verifies `loop.py:431` with its own `read_file` and reports it; the
+parent's ledger never saw that read, so under `require_provenance` the gate
+strips a citation that *was* verified — a firewall that makes grounding worse.
+The obvious fix, and what M16d's plan recommended, is to have the runner record
+into a ledger the caller supplies. **Do not do that.** Since M16c the ledger
+has two consumers asking opposite questions of it: `GroundingGate.check` via
+`observed()` wants the subagent's evidence, while `ToolGuard.duplicate_note`
+and `ReadFileTool._seen` via `covered()` must not have it, because the parent
+was handed a report and not the source. One bucket answers both the same way
+and the parent then skips a `read_file` for lines it was never shown — the
+exact hazard `bootstrap.py` gives each subagent its own `ReadFileTool` to
+avoid. So `EvidenceLedger.absorb` folds into `_elsewhere`: `observed()` reads
+both buckets, `covered()` reads only what this context displayed, and
+`fingerprint()` reads both, because a round that spent itself on one `explore`
+call and came back with three new locations is the most productive round a turn
+can have. The gate's own `LINE_UNSEEN_HEDGE` says "this session", not "this
+context", which is what makes the split honest rather than convenient.
+
+A report contributes no *mined* evidence — `explore` and `think_deeper` sit in
+`_REPORTED` and `record_tool_result` returns early for both. Their citations
+are provenance already, with a real tool result behind each; mining the prose
+as well would license every location the subagent merely guessed, which is the
+same reasoning as `read_image`'s branch and the same conclusion.
+
+**`SubagentProgress` reaches a channel by callback, and that is forced rather
+than chosen.** The runner is awaited inside a tool call and an async generator
+cannot yield through one; buffering and yielding after the round would deliver
+the whole burst at the moment it stops being worth anything. It rides
+`Agent.on_progress`, wired by each channel to its renderer — the shape
+`orient_in_background` already uses, which is the one precedent for rendering
+from outside the message pump. It is still an `Event` through the one dispatch
+table, so a channel that shows nothing says so once. The TUI updates the
+`ToolRow` it already has (hence `TurnView.peek_tool`, since `claim_tool` pops
+and a dispatch reports several rounds before it resolves), and
+`ToolRow.progress` drops a report that lands after the call resolved: the
+callback path makes that race possible, and overwriting a result with news
+about how it was reached is worse than showing nothing.
+
+`explore` stays on the spoken belt. It is bounded harder than `think_deeper` on
+both axes a spoken turn cares about — six rounds of the fast model against
+twelve of the deep one, half the tool-char budget — and ships a filler like the
+other three. The open question `policy.py` records for `think_deeper` applies
+to it unchanged: a dispatch is one tool call, so it fits inside one round and
+the round cap does not bound it.
+
 **LLM lane and vision (M15b).** LLM providers are rows in
 `core/providers/registry.py`; `BUILTIN_PROVIDERS` and the wizard's catalog are
 both derived from it, and no model ids are hardcoded anywhere. Token usage is
@@ -883,7 +978,7 @@ the prompt forbidding claims about unloaded code) so the egress gate becomes a
 cheap safety net rather than the mechanism. That is what would make S2S viable
 later; it is M16 work, not a licence to weaken the gate now.
 
-**Planned next. M16a, M16b and M16c are closed; M16d is the next thing to
+**Planned next. M16a through M16d are closed; M16e is the next thing to
 start.** Spec:
 `docs/superpowers/specs/2026-08-29-pyrrhon-m16-agent-harness-design.md`; the
 five plans are `m16a` through `m16e` in `docs/superpowers/plans/`. Two runtime
@@ -892,7 +987,9 @@ rather than on code (the one in `~/.pyrrhon/credentials.toml` answers `401`): M1
 numbers, and driving both channels) and M16c's (a transcript replay confirming
 that no read exceeds what the preceding search pointed at, and a grounding-eval
 comparison confirming that suppressing a re-read costs the gate no citation it
-needed).
+needed). M16d adds a third: a genuinely multi-file question driven through both
+channels, confirming `/debug-history` shows one `explore` result rather than a
+dozen tool results, plus the live half of its context-saving comparison.
 
 **M16a was verified against a real Groq account on 2026-08-30, and the run
 found a fault the plan did not know about** — see the plan's "Runtime
@@ -945,9 +1042,9 @@ LLM-lane feature with its own design question; M16's job is the harness, and
 the seam exists precisely so the harness never has to know which driver it
 holds.
 
-Next is the rest of **M16 — the harness**: the context firewall (M16d) and
-verification moved upstream (M16e). The turn state machine (M16b) and the tool
-contract (M16c) are done. That is the moat; M15 exists to make the seam thin
+Next is the last of **M16 — the harness**: verification moved upstream (M16e).
+The turn state machine (M16b), the tool contract (M16c) and the context
+firewall (M16d) are done. That is the moat; M15 exists to make the seam thin
 enough that M16 never thinks about audio. The S2S paragraph above is M16e's
 brief.
 
