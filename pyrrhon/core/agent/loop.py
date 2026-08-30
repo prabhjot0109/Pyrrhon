@@ -42,10 +42,9 @@ from pyrrhon.core.agent.policy import (
 from pyrrhon.core.agent.prompts import ESCALATION_NOTE, TEXT_STYLE, VOICE_STYLE
 from pyrrhon.core.agent.turn_type import classify
 from pyrrhon.core.context import (
-    compact_tool_results,
-    hard_compact_tool_results,
+    CHARS_PER_TOKEN,
+    fit_to_budget,
     history_tokens,
-    maybe_summarize,
     token_scale,
 )
 from pyrrhon.core.events import (
@@ -123,8 +122,11 @@ RESUME_INSTRUCTION = (
 )
 
 # How many times one turn may recover from a context-window overflow by
-# compacting and retrying before it gives up honestly.
-MAX_CONTEXT_RECOVERIES = 2
+# compacting and retrying before it gives up honestly. ONE, since M16b: the
+# pre-flight ladder is the mechanism now and this handler is the safety net
+# for the case where the ESTIMATE was wrong. A second attempt would run the
+# same rungs against a history the first attempt already stripped.
+MAX_CONTEXT_RECOVERIES = 1
 
 # What to budget when nothing has established a real ceiling: no [context]
 # budget_tokens, and no provider header or recorded failure yet. Conservative
@@ -370,6 +372,26 @@ class Agent:
     def context_budget_tokens(self, value: int | None) -> None:
         self._configured_budget = value
 
+    def _request_budget(self, schema_chars: int) -> int:
+        """What the history may weigh, once the reply and the belt are paid for.
+
+        `context_budget_tokens` already holds CONTEXT_RESERVE_TOKENS back for
+        the reply. The schemas ride the same request and are measured exactly
+        rather than reserved for, so they come off the top here — a budget that
+        ignored them would aim the compactor at a number the request was always
+        going to exceed.
+
+        Zero is passed straight through: a configured `[context] budget_tokens
+        = 0` means "never compact", which is a coherent instruction. Anything
+        else floors at 1, so a belt larger than the whole window still leaves
+        the ladder running rather than silently switching it off.
+        """
+        budget = self.context_budget_tokens
+        if not budget:
+            return 0
+        schema_tokens = round(schema_chars / CHARS_PER_TOKEN * self.token_scale)
+        return max(1, budget - schema_tokens)
+
     def _seal_partial(
         self, history: list[dict], live: list[dict], marker: str = CUT_OFF_MARKER
     ) -> bool:
@@ -503,13 +525,6 @@ class Agent:
             history.append({"role": "user", "content": user_text})
             # After the append, so the question being asked right now counts.
             self._mentions_now = self._conversation_mentions(history)
-            # Only the pure, local pass runs before round one. maybe_summarize
-            # is a full LLM round trip and used to sit right here, in front of
-            # the first token of every over-budget turn; Session now runs it
-            # AFTER the turn instead (see Session._schedule_compaction). The
-            # ContextLengthExceededError handler below is the safety net for
-            # the case where skipping it actually overflows the window.
-            compact_tool_results(history)
             # A greeting or a bare "yes" needs no tools; a spoken question
             # gets the belt minus the tools that cannot finish inside a spoken
             # turn. Both are rows in one table rather than two conditionals.
@@ -556,6 +571,24 @@ class Agent:
             # the case that never needed sealing.
             live: list[dict] = []
             round_trace = trace.begin_round()
+            # In front of EVERY request, not behind a failure. Both rungs it
+            # runs are pure and local, so they cost nothing when the history
+            # already fits and reclaim room before the provider has to refuse.
+            #
+            # summarize=False: M10 moved that round trip off the critical path
+            # and it stays off. Session runs the full ladder afterwards in dead
+            # time, and the ContextLengthExceededError handler below runs it
+            # forced if the estimate turns out to have been wrong.
+            rung = await fit_to_budget(
+                history,
+                self.llm,
+                self._request_budget(trace.schema_chars),
+                keep_last=self.context_keep_last,
+                scale=self.token_scale,
+                summarize=False,
+            )
+            if rung:
+                trace.compaction = rung
             # The unscaled estimate of exactly what this round sends, kept so
             # the reply's prompt_tokens can be turned into a ratio. Taken
             # before the call because the streaming path appends into
@@ -595,9 +628,10 @@ class Agent:
                     yield event
                 return
             except ContextLengthExceededError:
-                # The prompt outgrew the model's window mid-turn. Reclaim room
-                # (elide bulky tool results + summarize old turns) and retry the
-                # same round instead of stranding the turn. Codex's pattern.
+                # The estimate was wrong: the pre-flight ladder above passed the
+                # request and the provider rejected it anyway. Run the same
+                # ladder at maximum aggression — every rung, regardless of what
+                # the estimate now says — and retry the round once.
                 #
                 # Sealing BEFORE the retry is deliberate: the retry re-runs the
                 # round with a fresh slot, so the previous partial must already
@@ -606,20 +640,20 @@ class Agent:
                 sealed = self._seal_partial(history, live)
                 if state.recoveries < MAX_CONTEXT_RECOVERIES:
                     state.recoveries += 1
-                    elided = hard_compact_tool_results(history)
-                    summarized = await maybe_summarize(
+                    rung = await fit_to_budget(
                         history,
                         self.llm,
-                        # Force a summarize pass even if the estimate is under
-                        # budget — the provider just told us we're over.
-                        budget_tokens=1,
+                        self._request_budget(trace.schema_chars),
                         keep_last=self.context_keep_last,
+                        scale=self.token_scale,
+                        force=True,
                     )
                     logger.warning(
-                        "context overflow: recovered (elided=%d, summarized=%s, "
-                        "attempt=%d)", elided, summarized, state.recoveries
+                        "context overflow: safety net reached rung %r",
+                        rung or "nothing",
                     )
-                    if elided or summarized:
+                    if rung:
+                        trace.compaction = rung
                         continue
                 trace.stop_reason = "error"
                 async for event in self._emit_final(

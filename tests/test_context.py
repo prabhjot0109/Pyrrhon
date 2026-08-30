@@ -4,6 +4,7 @@ from pyrrhon.core.context import (
     TOOL_STUB_MIN,
     compact_tool_results,
     estimate_tokens,
+    fit_to_budget,
     history_tokens,
     maybe_summarize,
 )
@@ -236,3 +237,105 @@ async def test_a_provider_that_omits_usage_leaves_the_scale_alone(tmp_path):
         pass
 
     assert agent.token_scale == 1.4
+
+
+# -- the pre-flight ladder (M16b) -------------------------------------------
+
+
+class CountingLLM:
+    """Counts summarize round trips. The whole point of the ladder is that the
+    expensive rung is rare, so the count is the assertion."""
+
+    def __init__(self, text: str = "A summary."):
+        self.text = text
+        self.calls = 0
+
+    async def chat(self, messages, tools=None):
+        self.calls += 1
+        return LLMReply(text=self.text)
+
+
+def _bulky_history(results: int) -> list[dict]:
+    history = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "the original question"},
+    ]
+    for i in range(results):
+        history.append({"role": "assistant", "content": f"looking at {i}"})
+        history.append({"role": "tool", "content": f"{i}" * 4000})
+    history.append({"role": "user", "content": "follow up"})
+    return history
+
+
+async def test_a_history_under_budget_is_left_alone():
+    llm = CountingLLM()
+    history = _bulky_history(2)
+    before = [dict(m) for m in history]
+    assert await fit_to_budget(history, llm, 1_000_000) == ""
+    assert history == before
+    assert llm.calls == 0
+
+
+async def test_the_cheap_rung_is_enough_and_the_expensive_one_never_runs():
+    """The ladder's reason for existing: three of its four rungs are pure,
+    local and free, and the one that costs a round trip is genuinely last."""
+    llm = CountingLLM()
+    history = _bulky_history(4)
+    # Comfortably above what the elided stubs will weigh, comfortably below
+    # what the four full results weigh.
+    assert await fit_to_budget(history, llm, 900) == "compact"
+    assert llm.calls == 0
+    assert history_tokens(history) <= 900
+
+
+async def test_the_ladder_elides_harder_before_it_summarizes():
+    """Rung 3 ignores the last-user boundary that rung 2 respects, which is the
+    only thing hard_compact_tool_results ever did — a parameter now, not a
+    second function."""
+    llm = CountingLLM()
+    history = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": "a"},
+        {"role": "tool", "content": "A" * 4000},
+        {"role": "tool", "content": "B" * 4000},
+    ]
+    assert await fit_to_budget(history, llm, 400) == "hard"
+    assert llm.calls == 0
+    assert "elided" in history[3]["content"]
+    assert history[4]["content"] == "B" * 4000  # the most recent survives
+
+
+async def test_summarize_runs_only_once_eliding_has_run_out():
+    llm = CountingLLM()
+    history = [{"role": "system", "content": "sys"}]
+    history += [{"role": "user", "content": "q" * 4000} for _ in range(12)]
+    assert await fit_to_budget(history, llm, 500, keep_last=2) == "summarize"
+    assert llm.calls == 1
+
+
+async def test_a_zero_budget_means_never_compact():
+    llm = CountingLLM()
+    history = _bulky_history(4)
+    before = [dict(m) for m in history]
+    assert await fit_to_budget(history, llm, 0) == ""
+    assert history == before
+
+
+async def test_forcing_runs_every_rung_regardless_of_the_estimate():
+    """The safety net's mode. The provider has already rejected the request, so
+    the estimate is known wrong and nothing it says should gate a rung."""
+    llm = CountingLLM()
+    history = _bulky_history(2)
+    assert await fit_to_budget(history, llm, 1_000_000, force=True, keep_last=2)
+    assert "elided" in history[3]["content"]
+
+
+async def test_the_ladder_can_be_asked_to_stop_before_the_round_trip():
+    """What the turn's own pre-flight passes. M10 moved the summarize round
+    trip off the critical path; the ladder must not quietly put it back."""
+    llm = CountingLLM()
+    history = [{"role": "system", "content": "sys"}]
+    history += [{"role": "user", "content": "q" * 4000} for _ in range(12)]
+    assert await fit_to_budget(history, llm, 500, keep_last=2, summarize=False) == ""
+    assert llm.calls == 0

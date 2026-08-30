@@ -155,6 +155,9 @@ class TurnTrace:
     # failure ended the turn. Recorded rather than inferred — reconstructing it
     # from which branch happened to return is what this milestone deleted.
     stop_reason: str = "answered"
+    # The last pre-flight compaction rung this turn reached, or "" when the
+    # history fit every time. A context.LADDER_* value.
+    compaction: str = ""
 
     # -- recording -----------------------------------------------------------
 
