@@ -159,3 +159,65 @@ def test_a_failed_read_image_records_nothing():
         "read_image", {"path": "docs/gone.png"}, "ERROR: 'docs/gone.png' does not exist."
     )
     assert ledger.files == set()
+
+
+def test_absorbed_evidence_is_citable_but_never_counts_as_already_shown():
+    """The two questions the ledger answers, and why they must differ.
+
+    A subagent read lines 10-40 behind the firewall. The gate must treat a
+    citation of line 20 as verified, because Pyrrhon really did open it this
+    session. M16c's re-read suppression must NOT treat it as covered, because
+    the parent was handed a report and not the source — suppressing that read
+    would leave the model citing a location it cannot check.
+    """
+    parent, scout = EvidenceLedger(), EvidenceLedger()
+    scout.record_range("loop.py", 10, 40)
+    parent.absorb(scout)
+
+    assert parent.observed("loop.py", 20)
+    assert parent.covered("loop.py") == []
+    assert "loop.py" in parent.files
+
+
+def test_absorbing_carries_a_relayed_report_and_leaves_the_source_alone():
+    inner, scout, parent = EvidenceLedger(), EvidenceLedger(), EvidenceLedger()
+    inner.record_range("a.py", 1, 5)
+    scout.absorb(inner)
+    scout.record_range("b.py", 7, 9)
+    parent.absorb(scout)
+
+    assert parent.observed("a.py", 3) and parent.observed("b.py", 8)
+    # Absorbing must not move anything out of the ledger it came from.
+    assert scout.covered("b.py") == [(7, 9)]
+
+
+def test_a_dispatched_round_reads_as_productive():
+    """The diminishing-returns signal counts absorbed findings.
+
+    A round that spent itself on one explore call and came back with three
+    new locations is the most productive round a turn can have. Reading only
+    the displayed bucket would score it barren and, three of those in a row,
+    end the turn.
+    """
+    parent = EvidenceLedger()
+    before = parent.fingerprint()
+    scout = EvidenceLedger()
+    scout.record_range("bridge.py", 100, 140)
+    parent.absorb(scout)
+    assert parent.fingerprint() != before
+
+
+def test_a_subagent_report_contributes_no_mined_evidence():
+    """Its citations are provenance already; its guesses must stay guesses.
+
+    Same reasoning as read_image: the output is a model's prose, so a
+    path:line inside it was never displayed to anyone. Mining it would license
+    exactly the invented citation this ledger exists to catch.
+    """
+    for name in ("explore", "think_deeper"):
+        ledger = EvidenceLedger()
+        ledger.record_tool_result(
+            name, {"question": "where?"}, "FOUND it at invented/file.py:99."
+        )
+        assert not ledger.observed("invented/file.py", 99)
+        assert ledger.files == set()

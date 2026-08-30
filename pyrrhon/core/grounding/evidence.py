@@ -38,6 +38,13 @@ _PATH_TOKEN = re.compile(r"(?<![\w./\\-])([A-Za-z0-9_][\w./\\-]*\.[A-Za-z0-9_]+)
 # list_dependencies is the same: it names import edges, not locations.
 _FILE_ONLY = {"repo_map", "glob", "list_dependencies"}
 
+# Tools whose output is a SUBAGENT's prose. Their path:line citations are
+# provenance already, absorbed from the subagent's own ledger with a real tool
+# result behind each one — so mining the prose as well would add nothing true
+# and would license every location the subagent merely GUESSED. Same reasoning
+# as read_image's branch below, and the same conclusion.
+_REPORTED = {"explore", "think_deeper"}
+
 # git blame's output format is not path:line, so its range comes from the
 # arguments — which for blame are exact, because -L is passed through verbatim.
 _RANGE_FROM_ARGS = {"git_blame"}
@@ -64,6 +71,17 @@ class EvidenceLedger:
 
     def __init__(self) -> None:
         self._ranges: dict[str, list[tuple[int, int]]] = {}
+        # Ranges a SUBAGENT verified with its own tools and reported back.
+        # A second bucket rather than the same one, because the ledger has two
+        # consumers asking opposite questions of it. The gate asks "did we
+        # verify this line", and a subagent opening a line IS Pyrrhon opening
+        # it — its own LINE_UNSEEN_HEDGE says "this session", not "this
+        # context". M16c's re-read suppression asks "is this line already in
+        # the model's context", and the answer there is no: the parent was
+        # handed a report, not the source. Merging the two would make the
+        # parent skip a read for lines it was never shown, which is the exact
+        # hazard bootstrap.py gives each subagent its own read_file to avoid.
+        self._elsewhere: dict[str, list[tuple[int, int]]] = {}
         self.files: set[str] = set()
 
     def record_range(self, rel: str, start: int, end: int) -> None:
@@ -86,12 +104,38 @@ class EvidenceLedger:
         O(ranges-for-that-file), no I/O. This runs once per reference on the
         speech critical path, where the whole gate check budgets ~0.025ms.
         """
+        key = _normalise(rel)
         return any(
-            start <= line <= end for start, end in self._ranges.get(_normalise(rel), ())
+            start <= line <= end
+            for start, end in (*self._ranges.get(key, ()), *self._elsewhere.get(key, ()))
         )
 
+    def absorb(self, other: "EvidenceLedger") -> None:
+        """Take a subagent's evidence as VERIFIED, not as displayed.
+
+        The firewall's cost, if this did not exist: the subagent verifies
+        loop.py:431 with its own read_file and reports it, the parent's ledger
+        never saw that read, and the gate downgrades or strips a citation that
+        WAS verified. A firewall that makes grounding worse is a regression
+        whatever it saves.
+
+        Everything the other ledger holds lands in `_elsewhere`, including its
+        own `_elsewhere` — a report relayed once is still a line some tool
+        actually displayed, and depth is 1 so the chain cannot grow.
+        """
+        for source in (other._ranges, other._elsewhere):
+            for rel, ranges in source.items():
+                self._elsewhere.setdefault(rel, []).extend(ranges)
+        self.files |= other.files
+
     def covered(self, rel: str) -> list[tuple[int, int]]:
-        """Merged line ranges displayed for `rel` this turn, ascending.
+        """Merged line ranges DISPLAYED for `rel` this turn, ascending.
+
+        `_elsewhere` is deliberately absent. A caller of this is deciding
+        whether to spend a round fetching bytes that are already in context,
+        and a line a subagent read behind the firewall is not in context —
+        suppressing that read would leave the model citing a report it cannot
+        check against source it never received.
 
         `observed` answers "was this one line shown"; this answers "which of
         these lines were", which is the question a re-read has to ask before
@@ -116,12 +160,17 @@ class EvidenceLedger:
         round that re-read lines already seen reads as barren — which is the
         intent: re-reading is not progress, and the duplicate-call guard only
         catches the case where the ARGUMENTS were identical too.
+
+        A dispatched subagent's findings count, which is why this reads both
+        buckets: a round that spent itself on one explore call and came back
+        with three new locations is the most productive round a turn can have.
         """
         return (
             frozenset(self.files),
             frozenset(
                 (rel, start, end)
-                for rel, ranges in self._ranges.items()
+                for source in (self._ranges, self._elsewhere)
+                for rel, ranges in source.items()
                 for start, end in ranges
             ),
         )
@@ -137,6 +186,9 @@ class EvidenceLedger:
             return
         args = args if isinstance(args, dict) else {}
         path = args.get("path")
+
+        if name in _REPORTED:
+            return
 
         if name == "read_image":
             # An image has no line numbers. Recording the FILE means a claim

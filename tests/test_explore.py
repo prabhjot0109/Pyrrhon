@@ -246,3 +246,75 @@ async def test_a_progress_sink_that_raises_never_kills_the_turn(tmp_path):
     async for _ in agent.run_turn(history, "where?"):
         pass
     assert history[-1]["content"] == "It is in the bridge."
+
+
+async def test_a_citation_the_scout_verified_survives_the_gate(tmp_path):
+    """Task 4's whole point, under the mode where it is load-bearing.
+
+    `require_provenance` is off by default, so this constructs the gate that
+    enforces it. What must hold: a path:line the scout OPENED comes back as a
+    promoted citation in the parent's answer, and one it merely named does
+    not. Without absorption both are stripped, and the firewall would have
+    made grounding worse than the round-by-round grinding it replaces.
+    """
+    from pyrrhon.core.agent.loop import Agent
+    from pyrrhon.core.grounding.gate import GroundingGate
+
+    (tmp_path / "seen.py").write_text("x = 1\n" * 50, encoding="utf-8")
+    (tmp_path / "unseen.py").write_text("y = 2\n" * 50, encoding="utf-8")
+
+    class FakeReader(Tool):
+        name = "read_file"
+        description = "fake"
+        parameters = {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        }
+
+        async def run(self, path: str) -> str:
+            return "\n".join(f"    {n}| x = 1" for n in range(1, 21))
+
+    scout = ExploreTool(
+        FakeLLM(
+            [
+                LLMReply(
+                    tool_calls=(
+                        ToolCall(id="r1", name="read_file", arguments={"path": "seen.py"}),
+                    )
+                ),
+                LLMReply(text="FOUND: it is at seen.py:12, and maybe unseen.py:8."),
+            ]
+        ),
+        tools=[FakeReader()],
+    )
+    agent = Agent(
+        llm=FakeLLM(
+            [
+                LLMReply(
+                    tool_calls=(
+                        ToolCall(id="e1", name="explore", arguments={"question": "where?"}),
+                    )
+                ),
+                LLMReply(text="It is at seen.py:12, and possibly unseen.py:8."),
+            ]
+        ),
+        tools=[scout],
+        system_prompt="base",
+        repo_root=tmp_path,
+        grounding_gate=GroundingGate(tmp_path, require_provenance=True),
+    )
+    scout._absorb = lambda sub: agent._evidence.absorb(sub)
+
+    citations = [
+        f"{e.file}:{e.line}"
+        for e in await _collect_citations(agent, "where?")
+    ]
+    assert citations == ["seen.py:12"]
+    assert agent.last_unseen == ("unseen.py:8",)
+
+
+async def _collect_citations(agent, question: str):
+    from pyrrhon.core.events import Citation
+
+    return [e async for e in agent.run_turn([], question) if isinstance(e, Citation)]

@@ -354,6 +354,10 @@ def build_agent(
             # Same shape again. ThinkDeeperTool is handed the same sink by
             # Agent.__init__, which is where that one is constructed.
             tool._on_progress = agent.emit_progress
+            # What the scout verified, handed to the parent as evidence. A
+            # lambda for the same reason as `_seen` above: _evidence is
+            # replaced at the top of every turn.
+            tool._absorb = lambda sub: agent._evidence.absorb(sub)
     return agent
 
 

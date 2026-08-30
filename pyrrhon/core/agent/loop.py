@@ -347,6 +347,10 @@ class Agent:
             deep_tool = ThinkDeeperTool(
                 deep_llm, tools=deep_tools, on_progress=self.emit_progress
             )
+            # A lambda, not a bound method: _evidence is REASSIGNED at the top
+            # of every turn, so a bound method would pin this to turn one's
+            # ledger. Same reason the ToolGuard's `covered` is a lambda.
+            deep_tool._absorb = lambda sub: self._evidence.absorb(sub)
             self.tools[deep_tool.name] = deep_tool
             self.system_prompt = system_prompt + "\n" + ESCALATION_NOTE
 

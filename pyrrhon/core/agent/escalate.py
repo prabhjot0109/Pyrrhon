@@ -18,6 +18,7 @@ from collections.abc import Callable
 
 from pyrrhon.core.agent.prompts import DEEP_AGENT_PROMPT, DEEP_SYSTEM_PROMPT
 from pyrrhon.core.agent.subagent import check_depth, run_subagent
+from pyrrhon.core.grounding.evidence import EvidenceLedger
 from pyrrhon.core.tools.base import Tool
 
 DEEP_MAX_ROUNDS = 12
@@ -56,17 +57,28 @@ class ThinkDeeperTool(Tool):
         # Round-boundary progress, wired by whoever built the Agent. A deep
         # pass can run for tens of seconds behind one unchanging tool row.
         self._on_progress = on_progress
+        # Where this pass's provenance goes, likewise wired at build time.
+        self._absorb: Callable[[EvidenceLedger], object] | None = None
 
     async def run(self, question: str, context: str) -> str:
-        return await run_subagent(
+        # The subagent's OWN ledger, absorbed by the parent as verified rather
+        # than displayed. Without it the gate strips or hedges a path:line the
+        # deep pass genuinely opened — true since M13, and the same defect
+        # M16d's Task 4 exists to fix for explore.
+        ledger = EvidenceLedger()
+        report = await run_subagent(
             self.deep_llm,
             list(self.tools.values()),
             DEEP_AGENT_PROMPT if self.tools else DEEP_SYSTEM_PROMPT,
             f"{question}\n\n# Context gathered by the fast model\n\n{context}",
             max_rounds=self.max_rounds,
             label="deep model",
+            ledger=ledger,
             on_round=self._round_reporter(),
         )
+        if self._absorb is not None:
+            self._absorb(ledger)
+        return report
 
     def _round_reporter(self) -> Callable[[int, str], object] | None:
         # Bound to a local before the closure: reading the attribute inside
