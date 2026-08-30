@@ -16,6 +16,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from pyrrhon.core.agent.loop import Agent
+from pyrrhon.core.agent.policy import policy_for
+from pyrrhon.core.agent.turn_type import REPO_QUESTION
 from pyrrhon.core.events import SpeechChunk
 from pyrrhon.core.grounding.gate import GroundingGate
 from pyrrhon.core.providers.llm import LLMReply, ToolCall
@@ -282,13 +284,15 @@ async def test_session_publishes_a_partial_trace_after_barge_in():
 async def test_tool_schemas_are_rebuilt_only_when_the_belt_changes():
     """A CPU tidy, not a prompt-cache fix: the rebuilt list already serialised
     byte-identically. The belt is mutable (plugins, MCP, design mode), so its
-    identity is the cache key."""
+    identity is the cache key — since M16b the key is the belt the POLICY
+    offers, which moves with both."""
+    full = policy_for(REPO_QUESTION, voice_active=False)
     agent = make_agent([LLMReply(text="a."), LLMReply(text="b.")])
-    first = agent._tool_schemas()
-    assert agent._tool_schemas() is first  # same object, not rebuilt
+    first = agent._tool_schemas(full)
+    assert agent._tool_schemas(full) is first  # same object, not rebuilt
 
     agent.tools["extra"] = SlowTool("extra", 0.0)
-    rebuilt = agent._tool_schemas()
+    rebuilt = agent._tool_schemas(full)
     assert rebuilt is not first
     assert {s["function"]["name"] for s in rebuilt} == set(agent.tools)
 

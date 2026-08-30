@@ -1,9 +1,13 @@
 from pathlib import Path
 
 from pyrrhon.core.agent.loop import Agent
+from pyrrhon.core.agent.policy import policy_for
+from pyrrhon.core.agent.turn_type import REPO_QUESTION, SOCIAL
 from pyrrhon.core.events import Citation, SpeechChunk, ToolCallFinished, ToolCallStarted
 from pyrrhon.core.providers.llm import LLMReply, ToolCall
+from pyrrhon.core.tools.base import Tool
 from pyrrhon.core.tools.repo import ReadFileTool
+from pyrrhon.core.tools.web import WebSearchTool
 from tests.helpers import FakeLLM
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_repo"
@@ -109,3 +113,112 @@ async def test_an_unknown_tool_is_still_named():
     from pyrrhon.core.tools.base import run_tool
 
     assert await run_tool({}, "nope", {}) == "ERROR: no tool named 'nope'."
+
+
+# --- the policy table, selected per turn ----------------------------------
+
+
+class TraceTool(Tool):
+    """Returns a new repo location every call, so every round is productive.
+
+    Needed because the diminishing-returns check is real: a tool that returns
+    the same thing each round would end these turns after three barren rounds
+    rather than at the round cap under test.
+    """
+
+    name = "trace"
+    description = "returns a location"
+    parameters = {"type": "object", "properties": {"n": {"type": "integer"}},
+                  "required": ["n"]}
+
+    async def run(self, n: int) -> str:
+        return f"utils/helpers.py:{n}"
+
+
+def _trace_agent(rounds: int, *, voice: bool) -> tuple[Agent, FakeLLM]:
+    replies = [
+        LLMReply(tool_calls=(ToolCall(id=f"c{i}", name="trace", arguments={"n": i}),))
+        for i in range(rounds)
+    ]
+    replies.append(LLMReply(text="Landed."))
+    fake = FakeLLM(replies)
+    agent = Agent(
+        llm=fake,
+        tools=[TraceTool(), WebSearchTool()],
+        system_prompt="p",
+        repo_root=FIXTURE,
+        voice_active=voice,
+    )
+    return agent, fake
+
+
+def _tool_rounds(fake: FakeLLM) -> int:
+    """LLM calls that carried a belt. The forced answer passes tools=None."""
+    return sum(1 for call in fake.calls if call["tools"] is not None)
+
+
+async def test_a_spoken_repo_question_stops_at_the_voice_round_cap():
+    spoken = policy_for(REPO_QUESTION, voice_active=True)
+    agent, fake = _trace_agent(spoken.max_rounds + 4, voice=True)
+    await collect(agent, [], "where does the turn state machine decide?")
+    assert _tool_rounds(fake) == spoken.max_rounds
+    assert agent.last_trace is not None
+    assert agent.last_trace.stop_reason == "rounds"
+
+
+async def test_the_same_question_typed_goes_further():
+    typed = policy_for(REPO_QUESTION, voice_active=False)
+    agent, fake = _trace_agent(typed.max_rounds + 4, voice=False)
+    await collect(agent, [], "where does the turn state machine decide?")
+    assert _tool_rounds(fake) == typed.max_rounds
+    assert typed.max_rounds > policy_for(REPO_QUESTION, voice_active=True).max_rounds
+
+
+async def test_a_spoken_turn_is_offered_a_narrower_belt_that_still_exists():
+    """The withheld names must be names the live belt actually has.
+
+    A withhold list naming tools that were renamed away would narrow nothing
+    and read as though it did, so assert the offered belt is a strict subset —
+    not merely that some filtering happened.
+    """
+    agent, fake = _trace_agent(1, voice=True)
+    await collect(agent, [], "where does the turn state machine decide?")
+    offered = {schema["function"]["name"] for schema in fake.calls[0]["tools"]}
+    assert offered < set(agent.tools)
+    assert "web_search" not in offered
+    assert "trace" in offered
+
+
+async def test_a_social_turn_is_offered_no_belt_at_all():
+    fake = FakeLLM([LLMReply(text="Hi.")])
+    agent = Agent(llm=fake, tools=[TraceTool()], system_prompt="p", repo_root=FIXTURE)
+    await collect(agent, [], "hi")
+    assert fake.calls[0]["tools"] is None
+
+
+async def test_the_constructor_still_pins_the_round_cap():
+    """Kept as an override so a test or a plugin can still pin it. It stops
+    being the mechanism; it does not stop working."""
+    agent, fake = _trace_agent(6, voice=False)
+    agent.max_tool_rounds = 2
+    await collect(agent, [], "where does the turn state machine decide?")
+    assert _tool_rounds(fake) == 2
+
+
+def test_the_schema_cache_key_tracks_the_belt_and_nothing_else():
+    """Silent in both directions if it is wrong: a stale key serves the
+    previous turn's belt, and no key rebuilds the list every round."""
+    agent = Agent(llm=FakeLLM([]), tools=[TraceTool(), WebSearchTool()],
+                  system_prompt="p", repo_root=FIXTURE)
+    typed = policy_for(REPO_QUESTION, voice_active=False)
+    spoken = policy_for(REPO_QUESTION, voice_active=True)
+
+    full = agent._tool_schemas(typed)
+    key_after_full = agent._schema_cache_key
+    assert agent._tool_schemas(typed) is full  # same belt: no rebuild
+    assert agent._schema_cache_key == key_after_full
+
+    narrow = agent._tool_schemas(spoken)
+    assert agent._schema_cache_key != key_after_full
+    assert narrow is not None and len(narrow) < len(full or ())
+    assert agent._tool_schemas(policy_for(SOCIAL, voice_active=False)) is None

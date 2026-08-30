@@ -23,18 +23,24 @@ import logging
 import re
 from collections.abc import AsyncIterator
 from contextlib import nullcontext
+from dataclasses import replace
 from pathlib import Path
 
 from pyrrhon.core.agent.escalate import ThinkDeeperTool
 from pyrrhon.core.agent.guards import (
-    MAX_TURN_TOOL_CHARS,
     ToolGuard,
     assistant_tool_message,
     run_tool_round,
 )
-from pyrrhon.core.agent.policy import Stop, TurnPolicy, TurnState, decide
+from pyrrhon.core.agent.policy import (
+    Stop,
+    TurnPolicy,
+    TurnState,
+    decide,
+    policy_for,
+)
 from pyrrhon.core.agent.prompts import ESCALATION_NOTE, TEXT_STYLE, VOICE_STYLE
-from pyrrhon.core.agent.turn_type import classify, needs_tools
+from pyrrhon.core.agent.turn_type import classify
 from pyrrhon.core.context import (
     compact_tool_results,
     hard_compact_tool_results,
@@ -265,7 +271,7 @@ class Agent:
         tools: list[Tool],
         system_prompt: str,
         repo_root: Path,
-        max_tool_rounds: int = 8,
+        max_tool_rounds: int | None = None,
         grounding_gate: GroundingGate | None = None,
         allow_retry: bool = True,
         voice_active: bool = False,
@@ -282,6 +288,9 @@ class Agent:
         self._mentions_now: frozenset[str] = frozenset()
         self.system_prompt = system_prompt
         self.repo_root = repo_root
+        # An OVERRIDE, not the mechanism. None means "whatever the policy
+        # table says for this turn"; a number pins every turn to it, which is
+        # what a test or a plugin that wants a fixed budget still needs.
         self.max_tool_rounds = max_tool_rounds
         self.grounding_gate = grounding_gate
         self.allow_retry = allow_retry
@@ -501,34 +510,31 @@ class Agent:
             # ContextLengthExceededError handler below is the safety net for
             # the case where skipping it actually overflows the window.
             compact_tool_results(history)
-            # A greeting or a bare "yes" needs no tools. Withholding the belt
-            # saves ~1.5k tokens of schema on the 25-40% of voice turns that
-            # are acknowledgements, and removes any chance of a spurious tool
-            # round on a turn with nothing to look up.
+            # A greeting or a bare "yes" needs no tools; a spoken question
+            # gets the belt minus the tools that cannot finish inside a spoken
+            # turn. Both are rows in one table rather than two conditionals.
+            # Withholding the belt entirely saves ~1.5k tokens of schema on the
+            # 25-40% of voice turns that are acknowledgements, and removes any
+            # chance of a spurious tool round on a turn with nothing to look up.
             turn_kind = classify(user_text, history)
             trace.turn_type = turn_kind
-            schemas = self._tool_schemas() if needs_tools(turn_kind) else None
+            policy = policy_for(turn_kind, voice_active=self.voice_active)
+            if self.max_tool_rounds is not None:
+                policy = replace(policy, max_rounds=self.max_tool_rounds)
+            schemas = self._tool_schemas(policy)
         # Zero when the belt was withheld — that saving is the point of the
         # turn-type check, so the trace should show it.
         trace.schema_chars = sum(len(str(schema)) for schema in schemas or ())
         trace.prompt_chars = sum(
             len(m["content"]) for m in history if isinstance(m.get("content"), str)
         )
-        # Everything this turn has spent, in one object, against one table
-        # row. The five locals this replaced -- a range() counter, two
-        # booleans, a recovery count and a per-round resume count -- each
-        # encoded part of "may this turn keep going", and the reason it
+        # Everything this turn has spent, in one object, against the one table
+        # row selected above. The five locals this replaced -- a range()
+        # counter, two booleans, a recovery count and a per-round resume count
+        # -- each encoded part of "may this turn keep going", and the reason it
         # eventually stopped had to be reconstructed from whichever branch
         # happened to break out.
         state = TurnState()
-        policy = TurnPolicy(
-            max_rounds=self.max_tool_rounds,
-            max_tool_chars=MAX_TURN_TOOL_CHARS,
-            withheld=frozenset() if schemas is not None else None,
-            # No nudge yet: this task is restructuring only, and the table's
-            # own nudge_at arrives with the table in the next one.
-            nudge_at=1.0,
-        )
         guard = ToolGuard(max_total_chars=policy.max_tool_chars)
         # Stream on EVERY channel, not just voice: buffering a whole reply
         # makes time-to-first-output equal to time-to-last-token, which is the
@@ -785,20 +791,28 @@ class Agent:
                 found.update(rel for rel, _line in extract_references(content))
         return frozenset(found)
 
-    def _tool_schemas(self) -> list[dict]:
-        """The tool belt's JSON schemas, rebuilt only when the belt changes.
+    def _tool_schemas(self, policy: TurnPolicy) -> list[dict] | None:
+        """The belt this turn is offered, or None when it is offered none.
 
-        Purely a CPU tidy — it is NOT a prompt-cache fix. The rebuilt list
-        serialises byte-identically to the previous one, so providers were
-        already seeing a stable tools payload; this just stops reconstructing
-        ~15 nested dicts on every turn. `self.tools` is mutable (plugins and
-        MCP servers contribute at build time, and design mode will swap
-        write_spec in and out), so the belt's identity is the cache key.
+        Rebuilt only when the offered belt changes, which is now two things at
+        once: `self.tools` is mutable (plugins and MCP servers contribute at
+        build time, and design mode will swap write_spec in and out) and the
+        policy narrows it. The offered NAMES are therefore the cache key —
+        getting that wrong is silent in both directions, since a stale key
+        serves the previous turn's belt and no key rebuilds the list every
+        round.
+
+        The narrowing is not a CPU question. Every distinct belt is a separate
+        prefix-cache family at the provider (M10 section 2.2), which is why the
+        table is capped at three shapes by a test rather than by a comment.
         """
-        key = tuple(self.tools)
+        names = policy.belt_for(self.tools)
+        if names is None:
+            return None
+        key = tuple(names)
         if self._schema_cache_key != key:
             self._schema_cache_key = key
-            self._schema_cache = [tool.schema() for tool in self.tools.values()]
+            self._schema_cache = [self.tools[name].schema() for name in names]
         return self._schema_cache
 
     async def _forced_answer(self, history: list[dict]) -> str:

@@ -13,6 +13,8 @@ from pathlib import Path
 import pytest
 
 from pyrrhon.bootstrap import build_agent
+from pyrrhon.core.agent.policy import policy_for
+from pyrrhon.core.agent.turn_type import REPO_QUESTION
 from pyrrhon.core.tools.git import GitBlameTool, GitLogTool, GitShowTool
 from pyrrhon.core.tools.spec_writer import SPEC_FILENAMES, WriteSpecTool
 from tests.helpers import FakeLLM  # scripted-replies double, defined in tests/helpers.py
@@ -123,7 +125,8 @@ MAX_BELT_SCHEMA_CHARS = 8000
 
 
 def test_the_belt_schema_stays_within_its_latency_budget(agent):
-    total = sum(len(str(s)) for s in agent._tool_schemas())
+    full = policy_for(REPO_QUESTION, voice_active=False)
+    total = sum(len(str(s)) for s in agent._tool_schemas(full) or ())
     assert total <= MAX_BELT_SCHEMA_CHARS, (
         f"belt schema grew to {total} chars; every tool-bearing turn pays this"
     )
