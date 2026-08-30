@@ -104,7 +104,12 @@ class ReadImageTool(Tool):
         encoded = base64.b64encode(target.read_bytes()).decode("ascii")
         return f"data:{mime};base64,{encoded}", ""
 
-    async def run(self, path: str = "", question: str = "") -> str:
+    async def run(self, path: str, question: str) -> str:
+        # No defaults, because the schema already says both are required and
+        # the two must agree. The defaults sent a call with no path down
+        # _load(""), which came back "not an image I can read" — a diagnosis of
+        # the wrong problem. Without them run_tool's TypeError handler names
+        # the parameters the model should have sent.
         if self.llm is None:
             return _NO_VISION
         data_url, error = await asyncio.to_thread(self._load, path)

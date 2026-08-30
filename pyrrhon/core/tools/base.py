@@ -9,6 +9,7 @@ close an import cycle.
 
 from __future__ import annotations
 
+import inspect
 from abc import ABC, abstractmethod
 
 
@@ -35,9 +36,39 @@ class Tool(ABC):
             "function": {
                 "name": self.name,
                 "description": self.description,
-                "parameters": self.parameters,
+                "parameters": _closed(self.parameters),
             },
         }
+
+
+def _closed(parameters: dict) -> dict:
+    """The arguments object, sealed against keys it did not declare.
+
+    Set here rather than on each tool because it is true of every one of them
+    without exception, and a per-tool opt-in is twenty places to forget it
+    once. `setdefault` semantics rather than an override: an MCP server owns
+    its own inputSchema, so a remote tool that genuinely takes free-form extras
+    keeps saying so.
+    """
+    if "additionalProperties" in parameters:
+        return parameters
+    return {**parameters, "additionalProperties": False}
+
+
+def run_parameters(tool: Tool) -> dict[str, bool]:
+    """`tool.run`'s parameters, each mapped to whether it is mandatory.
+
+    The signature is the truth and the schema is the copy. This reads the
+    truth, so `tests/test_tool_schemas.py` can hold the copy to it — the model
+    never sees a signature, so a disagreement is a trap only the test catches.
+    """
+    signature = inspect.signature(tool.run)  # bound method: `self` is gone
+    return {
+        name: parameter.default is inspect.Parameter.empty
+        for name, parameter in signature.parameters.items()
+        if parameter.kind
+        in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    }
 
 
 async def run_tool(tools: dict[str, Tool], name: str, args: dict) -> str:

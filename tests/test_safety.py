@@ -121,7 +121,15 @@ def test_the_deep_subagent_belt_gained_symbol_context_and_stayed_read_only(agent
 # ~29 extra tokens per tool-bearing turn is what a sixteenth capability costs.
 # What this must still catch is the belt QUIETLY doubling; the headroom here
 # (~6%) matches what the 15-tool ceiling left.
-MAX_BELT_SCHEMA_CHARS = 8000
+#
+# 8067 over the same 16 after M16c closed every schema with
+# `additionalProperties: false`. That is 31 chars a tool, ~124 tokens across
+# the belt, and it is bought with a round: an unrecognised argument is now
+# refused by the provider's own validator instead of reaching run(), raising
+# TypeError, and costing a full round trip to discover. repo_map's "takes no
+# arguments" line is the other 33 chars, and it exists to stop the ATTEMPT
+# rather than the call.
+MAX_BELT_SCHEMA_CHARS = 8500
 
 
 def test_the_belt_schema_stays_within_its_latency_budget(agent):

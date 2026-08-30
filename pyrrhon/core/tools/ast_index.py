@@ -451,7 +451,8 @@ class RepoMapTool(Tool):
     description = (
         "Ranked overview of the whole repo: the most-referenced classes and "
         "functions per file, hottest files first. Call this FIRST on a "
-        "codebase you haven't explored — it tells you where to look."
+        "codebase you haven't explored — it tells you where to look. "
+        "Takes no arguments; call it with {}."
     )
     parameters = {"type": "object", "properties": {}}
 
