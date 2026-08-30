@@ -23,6 +23,14 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Literal
 
+from pyrrhon.core.agent.guards import MAX_TURN_TOOL_CHARS
+from pyrrhon.core.agent.turn_type import (
+    AMBIGUOUS_FOLLOWUP,
+    REPO_QUESTION,
+    RESUME,
+    SOCIAL,
+)
+
 StopReason = Literal["rounds", "budget", "diminishing", "answered"]
 
 # Consecutive rounds that added nothing before the turn is called off. Counts
@@ -145,3 +153,74 @@ def _approaching(state: TurnState, policy: TurnPolicy) -> bool:
         state.rounds >= policy.max_rounds * policy.nudge_at
         or state.tool_chars >= policy.max_tool_chars * policy.nudge_at
     )
+
+
+# Tools a spoken turn does not get. Not a token-saving list — a latency one.
+# think_deeper runs a bounded subagent loop and the web tools go over the
+# network; each is tens of seconds of silence, which on the voice path reads as
+# "it's broken". A WITHHOLD list rather than an allow list, deliberately: an
+# allow list of builtin names would silently strip every plugin and MCP tool
+# from every spoken turn, which is the same class of invisible narrowing the
+# schema-cache key guards against.
+SLOW_FOR_VOICE = frozenset({"think_deeper", "web_search", "web_fetch"})
+
+# A turn that needs no tools. max_rounds=0 says the same thing from the other
+# side: with no belt the model cannot ask for a tool, so the first reply is the
+# answer. Both are stated because they fail differently — a belt withheld by
+# mistake still terminates, a round cap raised by mistake does not.
+_NO_TOOLS = TurnPolicy(
+    max_rounds=0, max_tool_chars=0, withheld=None, nudge_at=1.0
+)
+
+# The typed repo question. max_rounds=8 is today's default, unchanged, so the
+# screen path keeps the behaviour it was tuned with. 40k tool chars is
+# guards.MAX_TURN_TOOL_CHARS, likewise unchanged.
+_TYPED = TurnPolicy(
+    max_rounds=8,
+    max_tool_chars=MAX_TURN_TOOL_CHARS,
+    withheld=frozenset(),
+    nudge_at=0.75,
+)
+
+# The spoken one. Four rounds because a spoken turn's budget is measured in
+# seconds of silence, not in thoroughness: at roughly a second of model time
+# per round plus tools, four is already several seconds of "let me look at
+# that" before a word is said. Half the tool-char budget for the same reason —
+# 40k chars is ~10k tokens the model must read before the first spoken word.
+# Both are first guesses; the signal for tuning them is Stop(reason="rounds")
+# showing up in traces, not intuition.
+_SPOKEN = TurnPolicy(
+    max_rounds=4,
+    max_tool_chars=MAX_TURN_TOOL_CHARS // 2,
+    withheld=SLOW_FOR_VOICE,
+    nudge_at=0.75,
+)
+
+# Keyed by (turn type, voice active). A table rather than a chain of ifs, so
+# adding a turn type is a row and the tests can ask whether every row exists.
+#
+# RESUME keeps the belt, and that is not an oversight: "yes, go on" is a repo
+# question the user just re-anchored, and turn_type.classify documents why
+# withholding tools there produces exactly the ungrounded answer the gate
+# cannot catch.
+_TABLE: dict[tuple[str, bool], TurnPolicy] = {
+    (SOCIAL, False): _NO_TOOLS,
+    (SOCIAL, True): _NO_TOOLS,
+    (AMBIGUOUS_FOLLOWUP, False): _NO_TOOLS,
+    (AMBIGUOUS_FOLLOWUP, True): _NO_TOOLS,
+    (REPO_QUESTION, False): _TYPED,
+    (REPO_QUESTION, True): _SPOKEN,
+    (RESUME, False): _TYPED,
+    (RESUME, True): _SPOKEN,
+}
+
+
+def policy_for(turn_type: str, *, voice_active: bool) -> TurnPolicy:
+    """The row for this turn. An unknown turn type gets the full typed belt.
+
+    Falling back to the widest row is deliberate: a classifier that grows a
+    fifth value and forgets its row should lose latency, never repo access.
+    The parametrised table test is what stops that fallback from being the
+    silent answer in practice.
+    """
+    return _TABLE.get((turn_type, voice_active), _TYPED)

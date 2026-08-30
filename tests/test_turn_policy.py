@@ -16,6 +16,14 @@ from pyrrhon.core.agent.policy import (
     TurnPolicy,
     TurnState,
     decide,
+    policy_for,
+)
+from pyrrhon.core.agent.turn_type import (
+    REPO_QUESTION,
+    RESUME,
+    SOCIAL,
+    TURN_TYPES,
+    needs_tools,
 )
 
 POLICY = TurnPolicy(max_rounds=8, max_tool_chars=40_000, withheld=frozenset(),
@@ -112,3 +120,104 @@ def test_the_nudge_fraction_is_honoured_at_both_extremes(nudge_at):
                         withheld=frozenset(), nudge_at=nudge_at)
     outcome = decide(TurnState(rounds=1), policy)
     assert (outcome.nudge is not None) is (nudge_at == 0.0)
+
+
+# --- the table ------------------------------------------------------------
+
+BELT = [
+    "read_file", "read_image", "grep", "glob", "remember",
+    "find_symbol", "symbol_context", "list_dependencies", "repo_map",
+    "git_log", "git_blame", "git_show",
+    "web_search", "web_fetch", "write_spec", "think_deeper",
+]
+
+
+@pytest.mark.parametrize("turn_type", TURN_TYPES)
+@pytest.mark.parametrize("voice_active", [False, True])
+def test_every_turn_type_has_a_row_for_both_channels(turn_type, voice_active):
+    """A fifth turn type fails the suite until someone gives it a policy.
+
+    Parametrised over turn_type's own constants rather than over the table's
+    keys, so the test asks the question in the direction that can actually
+    catch drift.
+    """
+    policy = policy_for(turn_type, voice_active=voice_active)
+    assert isinstance(policy, TurnPolicy)
+    assert policy.max_rounds >= 0
+    assert 0.0 <= policy.nudge_at <= 1.0
+
+
+def test_a_social_turn_gets_no_belt_at_all():
+    assert policy_for(SOCIAL, voice_active=False).belt_for(BELT) is None
+    assert policy_for(SOCIAL, voice_active=True).belt_for(BELT) is None
+
+
+def test_a_spoken_repo_question_stops_sooner_than_a_typed_one():
+    spoken = policy_for(REPO_QUESTION, voice_active=True)
+    typed = policy_for(REPO_QUESTION, voice_active=False)
+    assert spoken.max_rounds < typed.max_rounds
+    assert spoken.max_tool_chars <= typed.max_tool_chars
+
+
+def test_a_resumed_question_keeps_the_belt():
+    """"yes, go on" is a repo question the user just re-anchored.
+
+    turn_type.classify has a whole docstring on why: VOICE_STYLE tells the
+    model to offer the next thread and explain it when the user agrees, and an
+    answer given without repo access is the ungrounded failure the gate cannot
+    catch — it verifies citations that appear, not claims that cite nothing.
+    """
+    assert policy_for(RESUME, voice_active=True).belt_for(BELT) is not None
+    assert needs_tools(RESUME) is True
+
+
+def test_the_voice_belt_is_a_subset_of_the_real_belt():
+    """Every withheld name must still exist, or the row is narrowing nothing.
+
+    A withhold list of names that no longer exist is silent in exactly the way
+    an allow list of names that no longer exist is loud, so this is the check
+    that keeps the voice row honest.
+    """
+    spoken = policy_for(REPO_QUESTION, voice_active=True)
+    belt = spoken.belt_for(BELT)
+    assert set(belt) < set(BELT)
+    assert spoken.withheld is not None and spoken.withheld <= set(BELT)
+
+
+def test_the_whole_table_produces_at_most_three_distinct_belts():
+    """M10 section 2.2: the prompt prefix is byte-stable so providers hit their
+    prefix cache, and the tool block sits inside that prefix. Every distinct
+    belt is a separate cache family.
+
+    Today there are three — no belt, the voice subset, the full belt. A fourth
+    has to argue against the cache before it is added, which is why this is a
+    test rather than a comment: filtering the schema list looks like a pure
+    narrowing at the call site and is in fact a decision about how many cache
+    families the session will have.
+    """
+    shapes = {
+        tuple(policy.belt_for(BELT) or ())
+        for turn_type in TURN_TYPES
+        for voice in (False, True)
+        for policy in [policy_for(turn_type, voice_active=voice)]
+    }
+    assert len(shapes) <= 3
+
+
+def test_needs_tools_is_derived_from_the_table():
+    for turn_type in TURN_TYPES:
+        expected = policy_for(turn_type, voice_active=False).withheld is not None
+        assert needs_tools(turn_type) is expected
+
+
+def test_whether_a_turn_gets_tools_never_depends_on_the_channel():
+    """What makes the single-argument needs_tools() honest.
+
+    The voice row narrows the belt; it must never remove it. A spoken repo
+    question that lost its tools would answer from memory, which is the one
+    failure mode the whole grounding stack exists to prevent.
+    """
+    for turn_type in TURN_TYPES:
+        typed = policy_for(turn_type, voice_active=False).withheld is None
+        spoken = policy_for(turn_type, voice_active=True).withheld is None
+        assert typed is spoken

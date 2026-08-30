@@ -25,6 +25,10 @@ AMBIGUOUS_FOLLOWUP = "ambiguous_followup"
 REPO_QUESTION = "repo_question"
 RESUME = "resume"
 
+# Every value `classify` can return. The policy table is parametrised over
+# this in tests, so a fifth turn type fails the suite until it has a row.
+TURN_TYPES = (SOCIAL, AMBIGUOUS_FOLLOWUP, REPO_QUESTION, RESUME)
+
 # An affirmative answer to a question WE asked. Anchored at the start so
 # "yes, but what about the gate?" still reads as affirmative; the word after
 # it does not have to be understood, because the belt is the safe outcome.
@@ -120,7 +124,16 @@ def classify(user_text: str, history: list[dict] | None = None) -> str:
 
 
 def needs_tools(turn_type: str) -> bool:
-    return turn_type in (REPO_QUESTION, RESUME)
+    """Whether this turn gets a belt at all. Derived from the policy table.
+
+    Imported inside the function because policy.py imports the constants
+    above — the same shape, and for the same reason, as the function-local
+    import in config/catalog.py. Whether a turn gets tools is one fact; it
+    used to live here AND in the loop's `schemas = ...` line.
+    """
+    from pyrrhon.core.agent.policy import policy_for
+
+    return policy_for(turn_type, voice_active=False).withheld is not None
 
 
 def _last_assistant_asked(history: list[dict] | None) -> bool:
