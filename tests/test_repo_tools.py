@@ -198,3 +198,53 @@ async def test_a_search_that_finished_on_its_own_is_never_killed(tmp_path, monke
 
     assert "a.py:1:" in result
     assert killed == [], "a search that reached EOF on its own must not be killed"
+
+
+# -- a re-read costs nothing (M16c) ------------------------------------------
+
+
+def _seen(**ranges):
+    """A stand-in for EvidenceLedger.covered, keyed by path."""
+    return lambda path: ranges.get(path.replace("\\", "/"), [])
+
+
+async def test_a_fully_covered_range_returns_a_note_not_the_bytes(tmp_path):
+    (tmp_path / "a.py").write_text("\n".join(f"line {n}" for n in range(1, 101)), encoding="utf-8")
+    tool = ReadFileTool(tmp_path, seen=_seen(**{"a.py": [(1, 100)]}))
+    out = await tool.run(path="a.py", start_line=40, end_line=90)
+    assert "already shown" in out
+    assert "line 40" not in out
+
+
+async def test_a_partial_overlap_returns_only_the_uncovered_part(tmp_path):
+    (tmp_path / "a.py").write_text("\n".join(f"line {n}" for n in range(1, 101)), encoding="utf-8")
+    tool = ReadFileTool(tmp_path, seen=_seen(**{"a.py": [(1, 40)]}))
+    out = await tool.run(path="a.py", start_line=1, end_line=60)
+    assert "line 41" in out
+    assert "line 40" not in out
+    assert "1-40 already shown" in out
+
+
+async def test_an_interior_hit_is_never_carved_out_of_the_window(tmp_path):
+    """A grep records the single lines it matched. Trimming those from the
+    middle would split the window in two, and a hit shown out of context is
+    not the same as having read around it."""
+    (tmp_path / "a.py").write_text("\n".join(f"line {n}" for n in range(1, 101)), encoding="utf-8")
+    tool = ReadFileTool(tmp_path, seen=_seen(**{"a.py": [(40, 40)]}))
+    out = await tool.run(path="a.py", start_line=1, end_line=60)
+    assert "line 40" in out
+    assert "already shown" not in out
+
+
+async def test_a_different_file_is_unaffected(tmp_path):
+    (tmp_path / "a.py").write_text("\n".join(f"line {n}" for n in range(1, 101)), encoding="utf-8")
+    (tmp_path / "b.py").write_text("\n".join(f"line {n}" for n in range(1, 101)), encoding="utf-8")
+    tool = ReadFileTool(tmp_path, seen=_seen(**{"a.py": [(1, 100)]}))
+    out = await tool.run(path="b.py", start_line=1, end_line=10)
+    assert "line 5" in out
+
+
+async def test_without_an_accessor_nothing_is_suppressed(tmp_path):
+    (tmp_path / "a.py").write_text("\n".join(f"line {n}" for n in range(1, 11)), encoding="utf-8")
+    out = await ReadFileTool(tmp_path).run(path="a.py")
+    assert "line 5" in out

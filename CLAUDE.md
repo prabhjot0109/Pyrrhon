@@ -84,9 +84,26 @@ runs it next. The same care applies to the pipecat exception in
    reviewed set, so this step is a deliberate checkpoint rather than bookkeeping.
 5. Add a spoken filler to `TOOL_FILLERS` in `pyrrhon/voice/bridge.py`. A test
    requires one per belt tool, and no filler may contain a `path:line`.
+6. Run `tests/test_tool_schemas.py`. There is nothing to add there — it
+   parametrises over whatever `build_agent` registers, which is the point — but
+   it is where a schema that disagrees with its own `run()` signature shows up.
+   **The signature is the truth and the schema is the copy.** If they disagree,
+   fix the schema; if the signature has a default the schema calls required,
+   the default is what is wrong, because it turns a correctable
+   `ERROR: bad arguments` into whatever the empty value happens to do.
 
 The belt's total schema size is capped by a test: it rides on every tool-bearing
-turn, so it is a latency property, not a style one.
+turn, so it is a latency property, not a style one. The ceiling moves with the
+belt rather than the newcomer being trimmed to fit under it — see the measured
+history in `tests/test_safety.py`, which records what each addition cost and
+what it bought. `Tool.schema` seals every arguments object with
+`additionalProperties: false`, so a tool cannot forget to; a tool whose schema
+genuinely takes free-form extras (an MCP server's own `inputSchema`) says so and
+keeps saying so.
+
+If the tool writes anything, add its module to `WRITE_ALLOWLIST` in
+`tests/test_safety.py` — a grep-level fence, in the same shape as the
+subprocess one, and the same kind of deliberate checkpoint as `EXPECTED_BELT`.
 
 ### How to add an event
 
@@ -692,6 +709,77 @@ not worth trading it for. The seam belongs to M16e's move of verification
 upstream, or to a wording change in `RESUME_INSTRUCTION`, whichever a live
 listen argues for.
 
+**The tool contract (M16c, 2026-08-30).** Three changes, each closing a way the
+belt was easy to misuse or expensive to use.
+
+**The schema and the signature are held together by a test, not by review.**
+`tests/test_tool_schemas.py` parametrises over whatever `build_agent` registers
+and asserts three things: the schema promises no parameter `run()` refuses,
+every `required` key is a parameter without a default, and every parameter
+without a default is declared required. `run_parameters` reads the signature off
+a **bound** method, so `self` disappears without being stripped by name. The
+whole belt held exactly one disagreement and it pointed the *opposite* way from
+`repo_map`'s: `read_image`'s schema required `path` and `question` while `run()`
+defaulted both to `""`, so a call with no path reached `_load("")` and came back
+"not an image I can read" — a confident diagnosis of the wrong problem. The
+defaults are gone.
+
+`additionalProperties: false` is set in `Tool.schema`, not on each tool, because
+it is true of every one of them and a per-tool opt-in is twenty places to forget
+it once. **`setdefault` semantics, not an override**: an MCP server owns its own
+`inputSchema`, so a remote tool that really does take free-form extras keeps
+saying so. `repo_map`'s description says it takes none, because empty
+`properties` alone reads as "nothing worth describing" — the schema stops the
+call, the description stops the *attempt*, and an attempt costs a round even
+when it is rejected.
+
+**`ToolGuard.clip` files an oversized result instead of dropping its tail.**
+`core/tools/results.py` writes the whole thing under `<repo>/.pyrrhon/results/`
+and puts a pointer on the end of the head, and `read_result` reads on from it.
+Context costs exactly what it cost before, because the head is the same head;
+what is new is that the model can *see* how much it is missing. Four things
+about it are load-bearing. Every path comes from the store's own counter and
+`page` resolves an id through the in-memory index first, so `../../etc/passwd`
+is an unknown id rather than a traversal — `WRITE_ALLOWLIST` in
+`tests/test_safety.py` is the fence, in the same shape as the subprocess one.
+The Agent reads the store **off the belt the turn was actually offered**, so a
+turn that withholds the pager is never handed a pointer it cannot follow. A
+`read_result` page is recorded as evidence for the call that *produced* it
+(`results.attribute`), because the ledger's branches are keyed by tool name and
+its `read_file` branch reads `path` out of the arguments — a page carries an id
+instead, so recording it under `read_result` would silently drop every line in
+the window. And the aggregate cap degrades to **truncation**, today's behaviour,
+so the worst case is no worse than now. The deep subagent keeps truncating for
+the same reason it keeps no store: a pager there could only follow pointers the
+fast loop minted.
+
+Nothing in either channel closes a session, so `ResultStore.close()` is a
+courtesy the crash path never pays. The store sweeps sibling directories older
+than a day on its first write instead — an age check rather than a liveness one,
+because a store younger than that may be a second Pyrrhon on the same repo right
+now.
+
+**A re-read costs nothing, and the ledger is what says so.** `read_file` trims
+the requested window against `EvidenceLedger.covered(path)` and `is_duplicate`
+refuses a range already contained in one. Both ask what was **displayed**, never
+what was previously *asked for*: `read_file` clamps at `MAX_READ_LINES`, so a
+call for 1-1000 displayed 1-400, and an argument-based check would then refuse
+401-600 as a repeat of lines nobody ever saw. Three details are decisions rather
+than mechanics. The trim is **edges only, never an interior hole** — `grep`
+records the single lines it matched, and carving those out of the middle would
+split a window in two, when a hit shown out of context is not the same as having
+read around it. `read_file` and `git_blame` spell the span identically and mean
+different things by it, since `-L n,n` blames one line while `read_file` with
+only a start reads to EOF, so `_requested_range` keeps them apart. And the deep
+subagent gets its **own** `ReadFileTool` instance, the one exception to the two
+belts sharing instances: the accessor is bound to the fast loop's ledger, whose
+contents the subagent's history does not contain, and "already shown this turn"
+about lines it cannot see is strictly worse than showing them twice.
+
+The tool reaches the ledger through one narrow callable that `build_agent`
+patches in, the same shape `RepoMapTool` uses for `mentions` and for the same
+reason: a tool must not hold a back-reference to the thing that calls it.
+
 **LLM lane and vision (M15b).** LLM providers are rows in
 `core/providers/registry.py`; `BUILTIN_PROVIDERS` and the wizard's catalog are
 both derived from it, and no model ids are hardcoded anywhere. Token usage is
@@ -782,12 +870,16 @@ the prompt forbidding claims about unloaded code) so the egress gate becomes a
 cheap safety net rather than the mechanism. That is what would make S2S viable
 later; it is M16 work, not a licence to weaken the gate now.
 
-**Planned next. M16a and M16b are closed; M16c is the next thing to start.**
-Spec: `docs/superpowers/specs/2026-08-29-pyrrhon-m16-agent-harness-design.md`;
-the five plans are `m16a` through `m16e` in `docs/superpowers/plans/`. M16b's
-runtime pass (the grounding eval, the tuning of the policy numbers, and driving
-both channels) is the one part left open, and it is blocked on a provider key
-rather than on code.
+**Planned next. M16a, M16b and M16c are closed; M16d is the next thing to
+start.** Spec:
+`docs/superpowers/specs/2026-08-29-pyrrhon-m16-agent-harness-design.md`; the
+five plans are `m16a` through `m16e` in `docs/superpowers/plans/`. Two runtime
+passes are the parts left open, and both are blocked on a working provider key
+rather than on code (the one in `~/.pyrrhon/credentials.toml` answers `401`): M16b's (the grounding eval, the tuning of the policy
+numbers, and driving both channels) and M16c's (a transcript replay confirming
+that no read exceeds what the preceding search pointed at, and a grounding-eval
+comparison confirming that suppressing a re-read costs the gate no citation it
+needed).
 
 **M16a was verified against a real Groq account on 2026-08-30, and the run
 found a fault the plan did not know about** — see the plan's "Runtime
@@ -840,9 +932,9 @@ LLM-lane feature with its own design question; M16's job is the harness, and
 the seam exists precisely so the harness never has to know which driver it
 holds.
 
-Next is the rest of **M16 — the harness**: the tool contract (M16c), the
-context firewall (M16d), and verification moved upstream (M16e). The turn state
-machine (M16b) is done. That is the moat; M15 exists to make the seam thin
+Next is the rest of **M16 — the harness**: the context firewall (M16d) and
+verification moved upstream (M16e). The turn state machine (M16b) and the tool
+contract (M16c) are done. That is the moat; M15 exists to make the seam thin
 enough that M16 never thinks about audio. The S2S paragraph above is M16e's
 brief.
 

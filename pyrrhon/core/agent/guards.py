@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from contextlib import nullcontext
 
 from pyrrhon.core.tools.results import ResultStore
@@ -28,6 +29,32 @@ DUPLICATE_NOTE = (
     "the result has not changed. Use what you have or try different arguments."
 )
 
+# Tools whose arguments name a span of a file, so a repeat can be recognised by
+# CONTAINMENT rather than only by exact equality. Both spell the span the same
+# way, which tests/test_tool_schemas.py would surface immediately if a third
+# tool arrived spelling it differently.
+RANGE_TOOLS = frozenset({"read_file", "git_blame"})
+
+# Stands in for "to the end of the file", matching evidence.py's own sentinel.
+_WHOLE_FILE = 10**9
+
+
+def _requested_range(name: str, args: dict) -> tuple[int, int]:
+    """What span of the file this call asks for.
+
+    The two tools default differently and it is not a spelling difference:
+    read_file with only a start reads on to EOF, while git_blame with only a
+    start blames that one line, because that is what `-L n,n` means. Reading
+    them as if they agreed would suppress a whole-file read as a repeat of one
+    blamed line.
+    """
+    start, end = args.get("start_line"), args.get("end_line")
+    if name == "git_blame":
+        if start is None:
+            return 1, _WHOLE_FILE
+        return int(start), int(end if end is not None else start)
+    return int(start or 1), int(end) if end else _WHOLE_FILE
+
 
 class ToolGuard:
     def __init__(
@@ -35,9 +62,14 @@ class ToolGuard:
         max_result_chars: int = MAX_TOOL_RESULT_CHARS,
         max_total_chars: int = MAX_TURN_TOOL_CHARS,
         store: ResultStore | None = None,
+        covered: Callable[[str], list[tuple[int, int]]] | None = None,
     ):
         self.max_result_chars = max_result_chars
         self.max_total_chars = max_total_chars
+        # The turn's evidence ledger, reached through one narrow accessor
+        # rather than handed over whole. None disables containment, which is
+        # what the deep subagent gets: it keeps no ledger.
+        self._covered = covered
         # Session-scoped, so a pointer minted this turn still resolves three
         # turns later. None means truncate, which is what the deep subagent
         # does: it has no read_result on its belt to follow a pointer with.
@@ -50,7 +82,33 @@ class ToolGuard:
         if key in self._seen:
             return True
         self._seen.add(key)
-        return False
+        return self._already_shown(name, args)
+
+    def _already_shown(self, name: str, args: dict) -> bool:
+        """A range the model has ALREADY been shown, asked for again.
+
+        Exact-argument matching catches a repeat nobody makes. What actually
+        happens is a re-request at a slightly different range — read lines
+        1-400, then ask for 40-90 of the same file — which costs a round trip
+        and a tool call to hand back bytes that are already in context.
+
+        Asked of the EVIDENCE LEDGER rather than of the previous arguments,
+        because the two differ and the difference is not academic: read_file
+        clamps at MAX_READ_LINES, so a call for 1-1000 displayed 1-400, and an
+        argument-based check would then refuse 401-600 as a repeat of lines
+        nobody ever saw. The ledger records what was displayed, which is the
+        only version of this question that has a safe answer.
+        """
+        if self._covered is None or name not in RANGE_TOOLS:
+            return False
+        path = args.get("path")
+        if not isinstance(path, str) or not path:
+            return False
+        try:
+            first, last = _requested_range(name, args)
+        except (TypeError, ValueError):
+            return False  # unparseable range: let the call through, as before
+        return any(start <= first and last <= end for start, end in self._covered(path))
 
     async def clip(self, result: str, name: str = "", args: dict | None = None) -> str:
         """The per-call cap, applied to CONTEXT rather than to the result.

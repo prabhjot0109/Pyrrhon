@@ -557,7 +557,14 @@ class Agent:
         # eventually stopped had to be reconstructed from whichever branch
         # happened to break out.
         state = TurnState()
-        guard = ToolGuard(max_total_chars=policy.max_tool_chars, store=self._store_for(policy))
+        guard = ToolGuard(
+            max_total_chars=policy.max_tool_chars,
+            store=self._store_for(policy),
+            # A lambda, not the bound method: _evidence is REASSIGNED at
+            # the top of every turn, so a bound method would pin this
+            # guard to the ledger of the turn before it.
+            covered=lambda path: self._evidence.covered(path),
+        )
         # Stream on EVERY channel, not just voice: buffering a whole reply
         # makes time-to-first-output equal to time-to-last-token, which is the
         # single biggest source of "it feels slow" on the screen paths too.

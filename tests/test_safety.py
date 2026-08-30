@@ -373,3 +373,17 @@ def test_the_result_store_writes_only_under_the_session_directory(tmp_path):
     assert written and all(guard_dir in p.parents for p in written)
     assert asyncio.run(store.page("../../../evil", 0)).startswith("ERROR:")
     assert not (tmp_path.parent / "evil").exists()
+
+
+def test_the_deep_subagent_gets_its_own_read_file(agent):
+    """Instances are shared between the two belts, with one exception.
+
+    read_file's re-read suppression is bound to the fast loop's evidence
+    ledger, and the deep subagent's history contains none of what that ledger
+    recorded. Sharing the instance would answer "already shown this turn"
+    about lines the subagent cannot see.
+    """
+    deep = agent.tools["think_deeper"]
+    assert deep.tools["read_file"] is not agent.tools["read_file"]
+    assert deep.tools["read_file"]._seen("anything.py") == []
+    assert deep.tools["grep"] is agent.tools["grep"]

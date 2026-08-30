@@ -12,6 +12,7 @@ import json
 import os
 import re
 import shutil
+from collections.abc import Callable
 from fnmatch import fnmatch
 from pathlib import Path
 
@@ -68,6 +69,29 @@ def _iter_files(root: Path):
     yield from sorted(files, key=lambda p: p.as_posix())
 
 
+def _trim_to_unseen(
+    first: int, last: int, covered: list[tuple[int, int]]
+) -> tuple[int, int]:
+    """Shrink [first, last] past whatever has already been displayed.
+
+    EDGES ONLY, never an interior hole. A grep records the single lines it
+    matched, so a scattered point at line 40 inside a 1-90 request would
+    otherwise carve the window into two — and a hit shown out of context is
+    not the same as having read around it. Trimming from the ends is exactly
+    the case that costs tokens in practice: a re-request at a slightly wider
+    range, which used to return the whole thing a second time.
+
+    Returns first > last when nothing is left.
+    """
+    for start, end in covered:
+        if start <= first <= end:
+            first = end + 1
+    for start, end in reversed(covered):
+        if start <= last <= end:
+            last = start - 1
+    return first, last
+
+
 class ReadFileTool(Tool):
     name = "read_file"
     description = (
@@ -84,8 +108,14 @@ class ReadFileTool(Tool):
         "required": ["path"],
     }
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, seen: Callable[[str], list[tuple[int, int]]] | None = None):
         self.root = root
+        # A callable, not the ledger and certainly not the Agent: the tool must
+        # not hold a back-reference to the thing that calls it. Same shape
+        # RepoMapTool uses for `mentions`, patched in by build_agent for the
+        # same reason — what has been seen is a property of the live turn.
+        # None means "show everything", which is what a direct caller gets.
+        self._seen = seen or (lambda path: [])
 
     async def run(self, path: str, start_line: int = 1, end_line: int | None = None) -> str:
         return await asyncio.to_thread(self._read, path, start_line, end_line)
@@ -97,9 +127,23 @@ class ReadFileTool(Tool):
         if not target.is_file():
             return f"ERROR: '{path}' does not exist."
         lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
-        first = max(start_line, 1)
-        last = min(end_line or len(lines), first - 1 + MAX_READ_LINES, len(lines))
+        asked_first = max(start_line, 1)
+        asked_last = min(end_line or len(lines), asked_first - 1 + MAX_READ_LINES, len(lines))
+        first, last = _trim_to_unseen(asked_first, asked_last, self._seen(path))
+        if first > last:
+            return (
+                f"(lines {asked_first}-{asked_last} of {path} were already shown "
+                f"this turn — nothing new in that range. Use what you have, or "
+                f"ask for a different range.)"
+            )
         numbered = [f"{n:>5}| {lines[n - 1]}" for n in range(first, last + 1)]
+        omitted = []
+        if first > asked_first:
+            omitted.append(f"{asked_first}-{first - 1}")
+        if last < asked_last:
+            omitted.append(f"{last + 1}-{asked_last}")
+        if omitted:
+            numbered.insert(0, f"(lines {', '.join(omitted)} already shown this turn)")
         return "\n".join(numbered) or f"(no lines in range for {path})"
 
 

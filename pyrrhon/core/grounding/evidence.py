@@ -90,6 +90,24 @@ class EvidenceLedger:
             start <= line <= end for start, end in self._ranges.get(_normalise(rel), ())
         )
 
+    def covered(self, rel: str) -> list[tuple[int, int]]:
+        """Merged line ranges displayed for `rel` this turn, ascending.
+
+        `observed` answers "was this one line shown"; this answers "which of
+        these lines were", which is the question a re-read has to ask before
+        it spends a round fetching bytes already in context. Merged so a
+        caller can trim a requested window against it without re-deriving the
+        overlaps, and adjacent ranges join because 1-200 followed by 201-400
+        is one span to anything that reads it.
+        """
+        merged: list[tuple[int, int]] = []
+        for start, end in sorted(self._ranges.get(_normalise(rel), ())):
+            if merged and start <= merged[-1][1] + 1:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        return merged
+
     def fingerprint(self) -> tuple[frozenset[str], frozenset[tuple[str, int, int]]]:
         """A comparable snapshot of everything seen so far.
 

@@ -127,3 +127,52 @@ async def test_no_narration_event_when_reply_has_no_text():
     events = [e async for e in agent.run_turn([], "q")]
     speech = [e for e in events if isinstance(e, SpeechChunk)]
     assert len(speech) == 1
+
+
+# -- range containment (M16c) ------------------------------------------------
+
+
+def _covered(**ranges):
+    return lambda path: ranges.get(path, [])
+
+
+def test_a_range_already_shown_is_a_duplicate_even_with_new_arguments():
+    """Exact-argument matching catches a repeat nobody makes. What actually
+    happens is a re-request at a narrower range inside one already read."""
+    guard = ToolGuard(covered=_covered(**{"loop.py": [(1, 400)]}))
+    assert guard.is_duplicate("read_file", {"path": "loop.py", "start_line": 40, "end_line": 90})
+
+
+def test_a_range_reaching_past_what_was_shown_is_not_a_duplicate():
+    guard = ToolGuard(covered=_covered(**{"loop.py": [(1, 400)]}))
+    assert not guard.is_duplicate(
+        "read_file", {"path": "loop.py", "start_line": 350, "end_line": 500}
+    )
+
+
+def test_an_unbounded_read_is_not_a_duplicate_of_a_bounded_one():
+    """read_file with only a start reads to EOF, so 1-400 does not contain it."""
+    guard = ToolGuard(covered=_covered(**{"loop.py": [(1, 400)]}))
+    assert not guard.is_duplicate("read_file", {"path": "loop.py"})
+
+
+def test_blame_defaults_to_one_line_where_read_file_defaults_to_the_file():
+    """The two spell the span the same way and mean different things by it:
+    `-L n,n` blames one line. Reading them as if they agreed would suppress a
+    whole-file read as a repeat of a single blamed line."""
+    guard = ToolGuard(covered=_covered(**{"loop.py": [(40, 40)]}))
+    assert guard.is_duplicate("git_blame", {"path": "loop.py", "start_line": 40})
+    assert not guard.is_duplicate("read_file", {"path": "loop.py", "start_line": 40})
+
+
+def test_containment_is_off_for_tools_that_name_no_range():
+    guard = ToolGuard(covered=_covered(**{"loop.py": [(1, 400)]}))
+    assert not guard.is_duplicate("grep", {"pattern": "def ", "path": "loop.py"})
+
+
+def test_without_a_ledger_only_exact_repeats_count():
+    """The deep subagent keeps no ledger, so its guard must behave as before."""
+    guard = ToolGuard()
+    args = {"path": "loop.py", "start_line": 40, "end_line": 90}
+    assert not guard.is_duplicate("read_file", args)
+    assert guard.is_duplicate("read_file", args)

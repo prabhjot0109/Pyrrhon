@@ -275,10 +275,22 @@ def build_agent(
     if plugin_prompts:
         system_prompt += f"\n# Plugin context\n\n{plugin_prompts}\n"
     # Derived, not hand-listed — see DEEP_EXCLUDED. Instances are shared with
-    # the main belt rather than rebuilt: every tool is immutable after
-    # construction (the only mutable state, the parse cache and its locks,
-    # lives on SymbolIndex, which both belts already shared).
-    deep_tools = [t for t in builtin_tools if t.name not in DEEP_EXCLUDED]
+    # the main belt rather than rebuilt, because a tool carries no per-agent
+    # state worth separating (the parse cache and its locks live on
+    # SymbolIndex, which both belts already shared).
+    #
+    # read_file is the one exception, since M16c gave it one, and it is spelled
+    # out below rather than left to the reader to notice.
+    deep_tools = [
+        # A FRESH read_file: the suppression accessor patched in further down
+        # is bound to the FAST loop's evidence ledger, and the deep subagent's
+        # own message history contains none of what that ledger recorded.
+        # Telling it "already shown this turn" about lines it cannot see is
+        # strictly worse than showing them a second time.
+        ReadFileTool(repo_root) if tool.name == "read_file" else tool
+        for tool in builtin_tools
+        if tool.name not in DEEP_EXCLUDED
+    ]
     agent = Agent(
         llm=llm,
         tools=tools,
@@ -302,6 +314,10 @@ def build_agent(
     for tool in tools:
         if isinstance(tool, RepoMapTool):
             tool._mentions = lambda: agent._mentions_now
+        # Same shape, same reason: what the turn has already been SHOWN is the
+        # Agent's to know, and read_file must not hold a reference back to it.
+        elif isinstance(tool, ReadFileTool):
+            tool._seen = lambda path: agent._evidence.covered(path)
     return agent
 
 
