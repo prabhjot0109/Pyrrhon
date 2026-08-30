@@ -753,6 +753,15 @@ so the worst case is no worse than now. The deep subagent keeps truncating for
 the same reason it keeps no store: a pager there could only follow pointers the
 fast loop minted.
 
+`PAGE_CHARS` is 7000 against a per-call cap of 8000, and the gap is load-bearing
+rather than arbitrary: **a page comes back through `clip` like any other tool
+result**, so a page sized at the cap is persisted itself and the model pages
+through pages. `guards.py` imports `results.py`, so the two constants cannot see
+each other and the relationship is pinned by a test. The store also writes its
+own `.gitignore` containing `*`, because `.pyrrhon/` is deliberately not ignored
+— `memory.md` and `trusted` are meant to be committable — and derived session
+scratch has no business in a user's `git status`.
+
 Nothing in either channel closes a session, so `ResultStore.close()` is a
 courtesy the crash path never pays. The store sweeps sibling directories older
 than a day on its first write instead — an age check rather than a liveness one,
@@ -760,8 +769,12 @@ because a store younger than that may be a second Pyrrhon on the same repo right
 now.
 
 **A re-read costs nothing, and the ledger is what says so.** `read_file` trims
-the requested window against `EvidenceLedger.covered(path)` and `is_duplicate`
-refuses a range already contained in one. Both ask what was **displayed**, never
+the requested window against `EvidenceLedger.covered(path)` and
+`ToolGuard.duplicate_note` refuses a range already contained in one. That method
+returns the **note** rather than a bool, because a flag cannot say why a call was
+skipped: the caller reached for the only note it had and told the model "you
+already called read_file with exactly these arguments" about a call whose
+arguments were new and whose lines were not. Both ask what was **displayed**, never
 what was previously *asked for*: `read_file` clamps at `MAX_READ_LINES`, so a
 call for 1-1000 displayed 1-400, and an argument-based check would then refuse
 401-600 as a repeat of lines nobody ever saw. Three details are decisions rather
