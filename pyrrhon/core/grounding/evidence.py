@@ -90,6 +90,24 @@ class EvidenceLedger:
             start <= line <= end for start, end in self._ranges.get(_normalise(rel), ())
         )
 
+    def fingerprint(self) -> tuple[frozenset[str], frozenset[tuple[str, int, int]]]:
+        """A comparable snapshot of everything seen so far.
+
+        The turn state machine takes one either side of a tool round to ask
+        whether the round added anything. Ranges collapse into a set, so a
+        round that re-read lines already seen reads as barren — which is the
+        intent: re-reading is not progress, and the duplicate-call guard only
+        catches the case where the ARGUMENTS were identical too.
+        """
+        return (
+            frozenset(self.files),
+            frozenset(
+                (rel, start, end)
+                for rel, ranges in self._ranges.items()
+                for start, end in ranges
+            ),
+        )
+
     def record_tool_result(self, name: str, args: Any, result: Any) -> None:
         """Fold one tool result into the ledger.
 

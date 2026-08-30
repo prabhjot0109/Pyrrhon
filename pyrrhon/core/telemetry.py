@@ -151,6 +151,10 @@ class TurnTrace:
     schema_chars: int = 0
     turn_type: str = "repo_question"
     streamed: bool = False
+    # Why the loop stopped: a policy.StopReason, or "error" when a provider
+    # failure ended the turn. Recorded rather than inferred — reconstructing it
+    # from which branch happened to return is what this milestone deleted.
+    stop_reason: str = "answered"
 
     # -- recording -----------------------------------------------------------
 

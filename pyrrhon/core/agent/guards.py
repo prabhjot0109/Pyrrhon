@@ -55,6 +55,16 @@ class ToolGuard:
         return result
 
     @property
+    def spent(self) -> int:
+        """Tool-result characters this turn has consumed.
+
+        Read by the turn state machine, which owns the budget decision now.
+        `exhausted` stays for the deep subagent's own loop, which has no
+        TurnState and does not want one.
+        """
+        return self._spent
+
+    @property
     def exhausted(self) -> bool:
         return self._spent >= self.max_total_chars
 

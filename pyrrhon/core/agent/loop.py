@@ -26,7 +26,13 @@ from contextlib import nullcontext
 from pathlib import Path
 
 from pyrrhon.core.agent.escalate import ThinkDeeperTool
-from pyrrhon.core.agent.guards import ToolGuard, assistant_tool_message, run_tool_round
+from pyrrhon.core.agent.guards import (
+    MAX_TURN_TOOL_CHARS,
+    ToolGuard,
+    assistant_tool_message,
+    run_tool_round,
+)
+from pyrrhon.core.agent.policy import Stop, TurnPolicy, TurnState, decide
 from pyrrhon.core.agent.prompts import ESCALATION_NOTE, TEXT_STYLE, VOICE_STYLE
 from pyrrhon.core.agent.turn_type import classify, needs_tools
 from pyrrhon.core.context import (
@@ -508,13 +514,22 @@ class Agent:
         trace.prompt_chars = sum(
             len(m["content"]) for m in history if isinstance(m.get("content"), str)
         )
-        guard = ToolGuard()
-        nudged_invalid_tool = False
-        context_recoveries = 0
-        # Per ROUND, not per turn: cleared below whenever a round lands intact,
-        # so a long investigation is not denied a resume because an earlier
-        # round used one.
-        truncation_resumes = 0
+        # Everything this turn has spent, in one object, against one table
+        # row. The five locals this replaced -- a range() counter, two
+        # booleans, a recovery count and a per-round resume count -- each
+        # encoded part of "may this turn keep going", and the reason it
+        # eventually stopped had to be reconstructed from whichever branch
+        # happened to break out.
+        state = TurnState()
+        policy = TurnPolicy(
+            max_rounds=self.max_tool_rounds,
+            max_tool_chars=MAX_TURN_TOOL_CHARS,
+            withheld=frozenset() if schemas is not None else None,
+            # No nudge yet: this task is restructuring only, and the table's
+            # own nudge_at arrives with the table in the next one.
+            nudge_at=1.0,
+        )
+        guard = ToolGuard(max_total_chars=policy.max_tool_chars)
         # Stream on EVERY channel, not just voice: buffering a whole reply
         # makes time-to-first-output equal to time-to-last-token, which is the
         # single biggest source of "it feels slow" on the screen paths too.
@@ -523,7 +538,10 @@ class Agent:
         streaming = hasattr(self.llm, "stream")
         trace.streamed = streaming
 
-        for _ in range(self.max_tool_rounds):
+        # `while True`, bounded by `decide`. Every exit runs through it or
+        # through a return, so a reader looking for "when does this stop" has
+        # exactly one place to look.
+        while True:
             spoken_text: str | None = None
             stream_slot: dict | None = None
             # Holds the live assistant slot the moment _stream_round creates it,
@@ -556,13 +574,13 @@ class Agent:
                 # The model called a tool that isn't in our list (a gpt-oss
                 # built-in, typically). Nudge once with the real names and let
                 # it retry; if it happens again, degrade honestly.
-                if not nudged_invalid_tool:
-                    nudged_invalid_tool = True
+                if state.issue_nudge("invalid_tool"):
                     self._seal_partial(history, live)
                     history.append(
                         {"role": "user", "content": _invalid_tool_nudge(list(self.tools))}
                     )
                     continue
+                trace.stop_reason = "error"
                 sealed = self._seal_partial(history, live)
                 async for event in self._emit_final(
                     history, TOOL_RETRY_EXHAUSTED_MESSAGE, trace, streaming,
@@ -580,8 +598,8 @@ class Agent:
                 # be a closed message or the next stream appends into a history
                 # that ends with a live, still-growing one.
                 sealed = self._seal_partial(history, live)
-                if context_recoveries < MAX_CONTEXT_RECOVERIES:
-                    context_recoveries += 1
+                if state.recoveries < MAX_CONTEXT_RECOVERIES:
+                    state.recoveries += 1
                     elided = hard_compact_tool_results(history)
                     summarized = await maybe_summarize(
                         history,
@@ -593,10 +611,11 @@ class Agent:
                     )
                     logger.warning(
                         "context overflow: recovered (elided=%d, summarized=%s, "
-                        "attempt=%d)", elided, summarized, context_recoveries
+                        "attempt=%d)", elided, summarized, state.recoveries
                     )
                     if elided or summarized:
                         continue
+                trace.stop_reason = "error"
                 async for event in self._emit_final(
                     history, CONTEXT_FULL_MESSAGE, trace, streaming, record=not sealed
                 ):
@@ -605,6 +624,7 @@ class Agent:
             except RateLimitExceededError as exc:
                 # Reaches here only once the client has waited out whatever
                 # wait was worth taking and any fallback chain has been tried.
+                trace.stop_reason = "error"
                 sealed = self._seal_partial(history, live)
                 async for event in self._emit_final(
                     history,
@@ -617,6 +637,7 @@ class Agent:
                 return
             except Exception as exc:  # provider/network error — never die silently
                 logger.warning("llm.chat failed mid-turn: %s: %s", type(exc).__name__, exc)
+                trace.stop_reason = "error"
                 sealed = self._seal_partial(history, live)
                 async for event in self._emit_final(
                     history, PROVIDER_ERROR_MESSAGE, trace, streaming, record=not sealed
@@ -635,8 +656,8 @@ class Agent:
             # wrong recovery for it.
             if reply.finish_reason == "length" and not reply.tool_calls:
                 partial = (spoken_text if streaming else reply.text) or ""
-                if truncation_resumes < MAX_TRUNCATION_RESUMES:
-                    truncation_resumes += 1
+                if state.truncation_resumes < MAX_TRUNCATION_RESUMES:
+                    state.truncation_resumes += 1
                     async for event in self._seal_for_resume(
                         history, partial, stream_slot, streaming
                     ):
@@ -648,6 +669,7 @@ class Agent:
                 # A second `length` on the same answer is a configuration fact.
                 # Say it, name the key, and never present the fragment as
                 # though it were finished.
+                trace.stop_reason = "error"
                 sealed = self._seal_partial(history, live, TRUNCATED_MARKER)
                 text = (
                     TRUNCATED_MESSAGE
@@ -659,7 +681,6 @@ class Agent:
                 ):
                     yield event
                 return
-            truncation_resumes = 0
             if not reply.tool_calls:
                 if streaming:
                     # Sentences were gated + spoken (and citations emitted, and
@@ -716,6 +737,11 @@ class Agent:
                 {"role": "tool", "tool_call_id": call.id, "content": result}
                 for call, result in zip(reply.tool_calls, results, strict=True)
             )
+            # Taken either side of the recording, so the round can be asked
+            # whether it added anything. This is the diminishing-returns
+            # signal: a round that opened no new line range and named no new
+            # path added nothing, whatever it cost in tokens.
+            before = self._evidence.fingerprint()
             for call, result in zip(reply.tool_calls, results, strict=True):
                 # Record BEFORE the event: the next round's answer may cite
                 # what this result showed, and the gate consults the ledger.
@@ -723,11 +749,19 @@ class Agent:
                 yield ToolCallFinished(
                     name=call.name, result_preview=result[:PREVIEW_LEN]
                 )
-            if guard.exhausted:
-                break
+            state.tool_chars = guard.spent
+            state.note_round(productive=self._evidence.fingerprint() != before)
 
-        # Budget exhausted (rounds or output volume): ONE answer-only call so
-        # the evidence gathered so far isn't wasted on a canned apology.
+            outcome = decide(state, policy)
+            if isinstance(outcome, Stop):
+                trace.stop_reason = outcome.reason
+                break
+            if outcome.nudge:
+                history.append({"role": "user", "content": outcome.nudge})
+
+        # Budget spent (rounds, output volume, or a run of rounds that found
+        # nothing): ONE answer-only call so the evidence gathered so far isn't
+        # wasted on a canned apology.
         with trace.time_forced_answer():
             text = await self._forced_answer(history)
         async for event in self._emit_final(history, text, trace, streaming):
