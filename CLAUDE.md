@@ -673,6 +673,14 @@ allowance, which the score alone hid completely. And M16a's rate-limit path is
 verified live as a side effect: a spent allowance ends a turn with "it should
 clear in about 952 seconds" rather than a wait.
 
+The account has **two** ceilings and they fail differently, which cost an hour
+to work out. `x-ratelimit-limit-tokens` advertises 8 000 tokens per minute and
+is what M16a learns from; a 200 000-tokens-per-day budget appears in no header
+and only in a 429 body. Once the daily one is spent a small request still
+succeeds while a belt-bearing one does not, which reads exactly like a
+per-minute bucket about to refill and is not. Read the 429 body before
+diagnosing from request size.
+
 The policy numbers are still first guesses. The signal for tuning them is
 `Stop(reason="rounds")` in real traces rather than intuition, and that needs
 allowance rather than code. M16a's handoff — trimming a sealed partial back to its last
