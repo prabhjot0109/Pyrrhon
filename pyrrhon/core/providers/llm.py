@@ -15,12 +15,14 @@ import httpx
 from openai import APIConnectionError, APIStatusError, AsyncOpenAI
 
 from pyrrhon.config.settings import ModelSlot, Settings
+from pyrrhon.core.context import history_tokens
 from pyrrhon.core.providers.errors import (
     ContextLengthExceededError,
     InvalidToolCallError,
     RateLimitExceededError,
     classify,
 )
+from pyrrhon.core.providers.limits import LearnedLimit
 
 logger = logging.getLogger("pyrrhon.providers")
 
@@ -29,25 +31,6 @@ class MissingAPIKeyError(RuntimeError):
     pass
 
 
-def _raise_if_typed(exc: APIStatusError) -> None:
-    """Re-raise a provider failure as a typed error the agent loop recovers
-    from, or return so the caller re-raises it verbatim.
-
-    The kinds that get a type are exactly the ones something downstream knows
-    how to act on. `credentials` and `outage` deliberately fall through: a bad
-    key is user error the message already names, and an outage is
-    FallbackLLM's to answer, which it does by inspecting the SDK exception —
-    so wrapping it here would take that decision away from it.
-    """
-    fault = classify(exc)
-    if fault is None:
-        return
-    if fault.kind == "tool_validation":
-        raise InvalidToolCallError(fault.message) from exc
-    if fault.kind == "too_large":
-        raise ContextLengthExceededError(fault.message) from exc
-    if fault.kind == "rate_limited":
-        raise RateLimitExceededError(fault.message, fault.retry_after) from exc
 
 
 @dataclass(frozen=True)
@@ -121,9 +104,39 @@ class OpenAICompatLLM:
         self.model = model
         self.max_tokens = max_tokens
         self.temperature = temperature
+        # One per client, so a fallback chain learns each provider's ceiling
+        # separately — they are different accounts with different tiers.
+        self.limits = LearnedLimit()
         self._client = AsyncOpenAI(
             api_key=api_key, base_url=base_url, max_retries=max_retries
         )
+
+    def _raise_if_typed(self, exc: APIStatusError, messages: list[dict]) -> None:
+        """Re-raise a provider failure as a typed error the agent loop recovers
+        from, or return so the caller re-raises it verbatim.
+
+        The kinds that get a type are exactly the ones something downstream
+        knows how to act on. `credentials` and `outage` deliberately fall
+        through: a bad key is user error the message already names, and an
+        outage is FallbackLLM's to answer, which it does by inspecting the SDK
+        exception — so wrapping it here would take that decision away from it.
+
+        A `too_large` also teaches the learned limit. The size is derived here
+        from the very `messages` that were refused rather than being threaded
+        in from the loop: it is the same number the loop computes, it costs
+        nothing on the happy path, and a local cannot be cross-contaminated by
+        a second turn sharing this client.
+        """
+        fault = classify(exc)
+        if fault is None:
+            return
+        if fault.kind == "tool_validation":
+            raise InvalidToolCallError(fault.message) from exc
+        if fault.kind == "too_large":
+            self.limits.observe_failure(history_tokens(messages))
+            raise ContextLengthExceededError(fault.message) from exc
+        if fault.kind == "rate_limited":
+            raise RateLimitExceededError(fault.message, fault.retry_after) from exc
 
     def _generation_kwargs(self) -> dict:
         """Only send knobs that were actually configured.
@@ -150,10 +163,16 @@ class OpenAICompatLLM:
         if tools:
             kwargs["tools"] = tools
         try:
-            response = await self._client.chat.completions.create(**kwargs)
+            # .with_raw_response, not .create: the rate-limit headers ride
+            # every response and are the only place the endpoint says how big
+            # a request it will accept. .parse() then returns exactly what the
+            # plain call would have, so nothing below this line changed.
+            raw = await self._client.chat.completions.with_raw_response.create(**kwargs)
         except APIStatusError as exc:
-            _raise_if_typed(exc)
+            self._raise_if_typed(exc, messages)
             raise
+        self.limits.observe_headers(raw.headers)
+        response = raw.parse()
         message = response.choices[0].message
         calls = tuple(
             ToolCall(
@@ -191,10 +210,14 @@ class OpenAICompatLLM:
         if tools:
             kwargs["tools"] = tools
         try:
-            stream = await self._client.chat.completions.create(**kwargs)
+            raw = await self._client.chat.completions.with_raw_response.create(**kwargs)
         except APIStatusError as exc:
-            _raise_if_typed(exc)
+            self._raise_if_typed(exc, messages)
             raise
+        # HTTP response headers land before the body, so the streaming path is
+        # not the poor relation here: the ceiling is known before chunk one.
+        self.limits.observe_headers(raw.headers)
+        stream = raw.parse()
         text_parts: list[str] = []
         usage: TokenUsage | None = None
         # Arrives on the LAST content delta, before the usage chunk — whose
@@ -230,7 +253,7 @@ class OpenAICompatLLM:
                     if tc.function and tc.function.arguments:
                         slot["args"] += tc.function.arguments
         except APIStatusError as exc:
-            _raise_if_typed(exc)
+            self._raise_if_typed(exc, messages)
             raise
         calls = tuple(
             ToolCall(
@@ -307,6 +330,17 @@ class FallbackLLM:
     @property
     def model(self) -> str:
         return self.chain[self._active].model
+
+    @property
+    def limits(self):
+        """The ACTIVE provider's learned limit.
+
+        Each link learns its own, because they are different accounts on
+        different tiers. Reading through to the active one means a fallover
+        re-points the budget at the provider actually answering, rather than
+        leaving it measured against a link nobody is using.
+        """
+        return self.chain[self._active].limits
 
     async def chat(
         self, messages: list[dict], tools: list[dict] | None = None
