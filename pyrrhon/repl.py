@@ -36,6 +36,7 @@ from pyrrhon.core.citation_link import citation_markup
 from pyrrhon.core.events import (
     AskUser,
     Citation,
+    ProviderRetrying,
     ScreenArtifact,
     SpeechChunk,
     ToolCallStarted,
@@ -96,6 +97,12 @@ class ConsoleRenderer(EventRenderer):
         # Design mode's Socratic question, rendered distinctly (spec: M6).
         self._console.print(f"[bold magenta]? {event.question}[/bold magenta]")
 
+    def on_provider_retrying(self, event: ProviderRetrying) -> None:
+        self._console.print(
+            f"[yellow]Rate limited — retrying in "
+            f"{event.delay_seconds:.0f}s.[/yellow]"
+        )
+
 
 def run_repl(repo: str, voice: bool = False, trust_repo: bool = False) -> None:
     console = Console()
@@ -151,6 +158,7 @@ async def _repl_loop(
     plugins: list[LoadedPlugin] | None = None,
 ) -> None:
     ui = ConsoleUI(console)
+    renderer = ConsoleRenderer(console, ui, agent.repo_root)
     if isinstance(agent.llm, FallbackLLM):
         llm = agent.llm
         # Spec: provider failure -> fallback chain "with a one-sentence
@@ -158,6 +166,13 @@ async def _repl_loop(
         llm.on_switch = lambda i: ui.notify(
             f"My primary model stopped responding — switching to {llm.chain[i].model}."
         )
+    # Same attachment shape as on_switch, but the payload is a core event, so
+    # the dispatch table decides how each channel says it rather than each
+    # channel inventing a second notify format. Set on whatever driver is
+    # configured, chain or not; a test double simply grows an unread attribute.
+    agent.llm.on_retry = lambda delay, reason: renderer.render(
+        ProviderRetrying(delay_seconds=delay, reason=reason)
+    )
     session = Session(agent)
     # voice stays None: the plain REPL is a text channel; /voice answers honestly.
     ctx = CommandContext(
@@ -184,14 +199,16 @@ async def _repl_loop(
             if ui.exiting:
                 break
             continue
-        await _turn(session, user, console, ui)
+        await _turn(session, user, renderer)
         if session.last_turn_latency_ms is not None:
             console.print(
                 f"[dim](first response in {session.last_turn_latency_ms:.0f} ms)[/dim]"
             )
 
 
-async def _turn(session: Session, user: str, console: Console, ui: ConsoleUI) -> None:
-    renderer = ConsoleRenderer(console, ui, session.agent.repo_root)
+async def _turn(session: Session, user: str, renderer: ConsoleRenderer) -> None:
+    """One REPL turn, rendered. A seam rather than an inline loop because
+    tests/test_channels_session.py drives it directly to check that a turn
+    reaches the console at all."""
     async for event in session.run_turn(user):
         renderer.render(event)

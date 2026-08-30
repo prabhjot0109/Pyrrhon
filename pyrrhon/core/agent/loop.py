@@ -54,6 +54,7 @@ from pyrrhon.core.grounding.gate import (
 from pyrrhon.core.providers.errors import (
     ContextLengthExceededError,
     InvalidToolCallError,
+    RateLimitExceededError,
 )
 from pyrrhon.core.telemetry import RoundTrace, TurnTrace
 from pyrrhon.core.tools.base import Tool, run_tool
@@ -121,6 +122,26 @@ MAX_CONTEXT_RECOVERIES = 2
 # large reply blows through, and silently overriding a configured number is
 # the kind of helpfulness that makes a harness untrustworthy.
 MAX_TRUNCATION_RESUMES = 1
+
+
+def rate_limited_message(retry_after: float | None) -> str:
+    """What a spent token allowance sounds like.
+
+    Not PROVIDER_ERROR_MESSAGE. "It returned an error" sends the user to
+    /settings to check a model that is configured correctly; the account is
+    simply out of tokens for the minute, and when it clears is the one fact
+    that makes the difference actionable.
+    """
+    if not retry_after:
+        return (
+            "My model provider is rate limiting this account right now. Give "
+            "it a moment and ask again, or switch providers in /settings."
+        )
+    return (
+        "My model provider is rate limiting this account — it should clear in "
+        f"about {round(retry_after)} seconds. Ask me again then, or switch "
+        "providers in /settings."
+    )
 
 
 def _invalid_tool_nudge(names: list[str]) -> str:
@@ -527,6 +548,19 @@ class Agent:
                         continue
                 async for event in self._emit_final(
                     history, CONTEXT_FULL_MESSAGE, trace, streaming, record=not sealed
+                ):
+                    yield event
+                return
+            except RateLimitExceededError as exc:
+                # Reaches here only once the client has waited out whatever
+                # wait was worth taking and any fallback chain has been tried.
+                sealed = self._seal_partial(history, live)
+                async for event in self._emit_final(
+                    history,
+                    rate_limited_message(exc.retry_after),
+                    trace,
+                    streaming,
+                    record=not sealed,
                 ):
                     yield event
                 return

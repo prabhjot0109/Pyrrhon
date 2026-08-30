@@ -7,7 +7,7 @@ from pyrrhon.bootstrap import build_agent
 from pyrrhon.commands.debug_cmd import format_history
 from pyrrhon.core.providers.llm import LLMReply
 from pyrrhon.core.session import Session
-from pyrrhon.repl import ConsoleUI, _turn
+from pyrrhon.repl import ConsoleRenderer, ConsoleUI, _turn
 from tests.helpers import FakeLLM
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_repo"
@@ -19,7 +19,9 @@ async def test_repl_turn_consumes_a_session():
     buffer = io.StringIO()
     console = Console(file=buffer, force_terminal=False)
 
-    await _turn(session, "where is greet defined?", console, ConsoleUI(console))
+    ui = ConsoleUI(console)
+    renderer = ConsoleRenderer(console, ui, session.agent.repo_root)
+    await _turn(session, "where is greet defined?", renderer)
 
     out = buffer.getvalue()
     assert "greet lives at" in out

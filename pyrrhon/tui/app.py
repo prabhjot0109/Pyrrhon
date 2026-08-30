@@ -36,7 +36,7 @@ from pyrrhon.commands.registry import CommandContext, dispatch
 from pyrrhon.config.settings import load_settings
 from pyrrhon.core.agent.loop import Agent
 from pyrrhon.core.context import history_tokens
-from pyrrhon.core.events import Citation
+from pyrrhon.core.events import Citation, ProviderRetrying
 from pyrrhon.core.mcp import MCPManager
 from pyrrhon.core.providers.llm import FallbackLLM
 from pyrrhon.core.session import Session
@@ -128,6 +128,14 @@ class PyrrhonApp(App):
                 self.notify,
                 f"My primary model stopped responding — switching to {llm.chain[i].model}.",
             )
+        # Same attachment shape as on_switch, but the payload is a core event,
+        # so the dispatch table decides how each channel says it. `render`,
+        # not `_render_event`: the hook is a plain row mount, and this fires
+        # from inside the client's own await rather than the message pump.
+        agent.llm.on_retry = lambda delay, reason: self.call_later(
+            self._renderer.render,
+            ProviderRetrying(delay_seconds=delay, reason=reason),
+        )
         self.voice = VoiceController(
             self.session,
             load_settings(repo_root),

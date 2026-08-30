@@ -196,13 +196,15 @@ ODD_BODY = {"error": {"message": "malformed json in messages[0]"}}
         (429, LIMIT_BODY, RateLimitExceededError),
     ],
 )
-async def test_recoverable_failures_become_typed_errors(mock_llm, drive, status, body, expected):
+async def test_recoverable_failures_become_typed_errors(
+    mock_llm, provider_waits, drive, status, body, expected
+):
     with pytest.raises(expected):
         await drive(mock_llm(_failing(status, body)))
 
 
 @pytest.mark.parametrize("drive", [_drive_chat, _drive_stream])
-async def test_rate_limit_carries_its_delay(mock_llm, drive):
+async def test_rate_limit_carries_its_delay(mock_llm, provider_waits, drive):
     llm = mock_llm(_failing(429, LIMIT_BODY, {"retry-after": "20"}))
     with pytest.raises(RateLimitExceededError) as caught:
         await drive(llm)
@@ -256,3 +258,74 @@ async def test_a_good_reply_still_works(mock_llm):
     reply = await _drive_chat(mock_llm(ok))
     assert reply.text == "hello"
     assert reply.usage is not None and reply.usage.prompt == 5
+
+
+# --- A retry policy that understands a token bucket -------------------------
+
+from pyrrhon.core.events import ProviderRetrying  # noqa: E402
+from pyrrhon.core.providers.llm import (  # noqa: E402
+    MAX_RATE_LIMIT_WAIT,
+    MAX_RATE_LIMIT_WAITS,
+)
+
+OK_BODY = {
+    "id": "x", "object": "chat.completion", "created": 0, "model": "m",
+    "choices": [
+        {"index": 0, "message": {"role": "assistant", "content": "hello"},
+         "finish_reason": "stop"}
+    ],
+    "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
+}
+
+
+def _rate_limited_then_ok(headers: dict, refusals: int = 1):
+    seen = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["n"] += 1
+        if seen["n"] <= refusals:
+            return httpx.Response(429, json=LIMIT_BODY, headers=headers)
+        return httpx.Response(200, json=OK_BODY)
+
+    return handler
+
+
+async def test_a_429_is_waited_out_and_announced(mock_llm, provider_waits):
+    retries: list[ProviderRetrying] = []
+    llm = mock_llm(_rate_limited_then_ok({"retry-after": "1"}))
+    llm.on_retry = lambda delay, reason: retries.append(
+        ProviderRetrying(delay_seconds=delay, reason=reason)
+    )
+
+    reply = await _drive_chat(llm)
+
+    assert reply.text == "hello"
+    assert provider_waits == [1.0]
+    assert len(retries) == 1 and retries[0].delay_seconds == 1.0
+
+
+async def test_the_wait_is_bounded(mock_llm, provider_waits):
+    """Past the bound a second provider is a better answer than a longer wait,
+    and FallbackLLM is the thing that can supply one."""
+    llm = mock_llm(_rate_limited_then_ok({"retry-after": "1"}, refusals=99))
+    with pytest.raises(RateLimitExceededError):
+        await _drive_chat(llm)
+    assert len(provider_waits) == MAX_RATE_LIMIT_WAITS
+
+
+async def test_a_wait_too_long_to_be_worth_taking_is_declined(mock_llm, provider_waits):
+    """Waiting the ceiling out and THEN reporting failure is strictly worse
+    than reporting now with the real number in hand."""
+    long_wait = str(int(MAX_RATE_LIMIT_WAIT) + 25)
+    llm = mock_llm(_rate_limited_then_ok({"retry-after": long_wait}, refusals=99))
+    with pytest.raises(RateLimitExceededError) as caught:
+        await _drive_chat(llm)
+    assert provider_waits == []
+    assert caught.value.retry_after == float(long_wait)
+
+
+async def test_the_streaming_path_waits_too(mock_llm, provider_waits):
+    llm = mock_llm(_rate_limited_then_ok({"retry-after": "1"}, refusals=99))
+    with pytest.raises(RateLimitExceededError):
+        await _drive_stream(llm)
+    assert len(provider_waits) == MAX_RATE_LIMIT_WAITS

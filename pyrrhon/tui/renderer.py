@@ -18,6 +18,7 @@ from pyrrhon.core.citation_link import citation_uri
 from pyrrhon.core.events import (
     AskUser,
     Citation,
+    ProviderRetrying,
     ScreenArtifact,
     SpeechChunk,
     ToolCallFinished,
@@ -108,6 +109,16 @@ class TuiRenderer(EventRenderer):
         self._mount(NoticeRow(event.text, is_error=event.is_error))
         self._app.notify(
             event.text, severity="error" if event.is_error else "information"
+        )
+
+    def on_provider_retrying(self, event: ProviderRetrying) -> None:
+        """The ⚠ rail, because the answer is late for a reason Pyrrhon could
+        not verify away — not the ✗ rail, because nothing has failed yet."""
+        self._mount(
+            NoticeRow(
+                f"Rate limited by the provider — retrying in "
+                f"{event.delay_seconds:.0f}s."
+            )
         )
 
     def on_speech(self, event: SpeechChunk) -> None:

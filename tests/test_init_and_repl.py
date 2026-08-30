@@ -48,12 +48,13 @@ async def test_console_ui_tracks_citations_for_code_command():
 
     from pyrrhon.core.events import Citation
     from pyrrhon.core.session import Session
-    from pyrrhon.repl import ConsoleUI, _turn
+    from pyrrhon.repl import ConsoleRenderer, ConsoleUI, _turn
 
     console = Console(file=io.StringIO())
     ui = ConsoleUI(console)
     fake = FakeLLM([LLMReply(text="greet lives at utils/helpers.py:1.")])
     session = Session(build_agent(FIXTURE, llm=fake))
 
-    await _turn(session, "where is greet?", console, ui)
+    renderer = ConsoleRenderer(console, ui, session.agent.repo_root)
+    await _turn(session, "where is greet?", renderer)
     assert ui.last_citation == Citation(file="utils/helpers.py", line=1)

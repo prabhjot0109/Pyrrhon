@@ -76,3 +76,27 @@ async def test_generic_provider_error_degrades_visibly():
     assert speech and speech[-1].text == PROVIDER_ERROR_MESSAGE
     # History still ends coherently on the spoken message.
     assert history[-1]["role"] == "assistant"
+
+
+async def test_a_rate_limit_says_so_instead_of_the_generic_error():
+    """The live crash this milestone exists for. PROVIDER_ERROR_MESSAGE sends
+    the user to /settings to check a model that is configured correctly; the
+    account is out of tokens for the minute, and when it clears is the fact
+    that makes the difference actionable."""
+    from pyrrhon.core.agent.loop import PROVIDER_ERROR_MESSAGE
+    from pyrrhon.core.providers.errors import RateLimitExceededError
+
+    agent = make_agent([RateLimitExceededError("TPM exhausted", retry_after=20.0)])
+    events = await collect(agent, [], "where is the agent loop?")
+    said = [e.text for e in events if isinstance(e, SpeechChunk)][-1]
+    assert said != PROVIDER_ERROR_MESSAGE
+    assert "rate limiting" in said and "20 seconds" in said
+
+
+async def test_a_rate_limit_without_a_delay_still_says_what_happened():
+    from pyrrhon.core.providers.errors import RateLimitExceededError
+
+    agent = make_agent([RateLimitExceededError("TPM exhausted")])
+    events = await collect(agent, [], "where is the agent loop?")
+    said = [e.text for e in events if isinstance(e, SpeechChunk)][-1]
+    assert "rate limiting" in said

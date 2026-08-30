@@ -153,7 +153,7 @@ async def test_a_too_large_failure_teaches_the_ceiling(mock_llm):
     assert llm.limits.limit == int(history_tokens(REFUSED) * FAILURE_BACKOFF)
 
 
-async def test_a_rate_limit_teaches_nothing_about_size(mock_llm):
+async def test_a_rate_limit_teaches_nothing_about_size(mock_llm, provider_waits):
     """A 429 says the bucket is empty, not that this request was too big."""
 
     def refuse(request: httpx.Request) -> httpx.Response:

@@ -24,6 +24,7 @@ from inspect import isawaitable
 from pyrrhon.core.events import (
     AskUser,
     Citation,
+    ProviderRetrying,
     ScreenArtifact,
     SpeechChunk,
     ToolCallFinished,
@@ -47,6 +48,7 @@ EVENT_HOOKS: dict[type, str] = {
     AskUser: "on_question",
     Transcription: "on_transcription",
     VoiceNotice: "on_voice_notice",
+    ProviderRetrying: "on_provider_retrying",
     TruncateSpeech: "on_interrupted",
     TurnFinished: "on_turn_finished",
 }
@@ -114,5 +116,6 @@ class EventRenderer:
     def on_question(self, event: AskUser) -> None: ...
     def on_transcription(self, event: Transcription) -> None: ...
     def on_voice_notice(self, event: VoiceNotice) -> None: ...
+    def on_provider_retrying(self, event: ProviderRetrying) -> None: ...
     def on_interrupted(self, event: TruncateSpeech) -> None: ...
     def on_turn_finished(self, event: TurnFinished) -> None: ...

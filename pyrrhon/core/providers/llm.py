@@ -6,6 +6,7 @@ endpoint — a new provider is a config entry, not new code.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -25,6 +26,21 @@ from pyrrhon.core.providers.errors import (
 from pyrrhon.core.providers.limits import LearnedLimit
 
 logger = logging.getLogger("pyrrhon.providers")
+
+# How many times ONE request may wait out a 429 before giving up. One: past
+# that, a second provider is a better answer than a longer wait, and
+# FallbackLLM is the thing that can supply one.
+MAX_RATE_LIMIT_WAITS = 1
+
+# The longest wait worth taking. A retry-after above this is not clamped and
+# served — it is declined outright, because waiting 20 seconds and THEN
+# reporting a failure is strictly worse than reporting it now with the real
+# number in hand. The user gets "clears in about 45 seconds" immediately.
+MAX_RATE_LIMIT_WAIT = 20.0
+
+# A 429 with no retry-after at all. Long enough to be worth taking against a
+# token bucket, short enough not to strand a voice turn.
+DEFAULT_RATE_LIMIT_WAIT = 5.0
 
 
 class MissingAPIKeyError(RuntimeError):
@@ -107,6 +123,10 @@ class OpenAICompatLLM:
         # One per client, so a fallback chain learns each provider's ceiling
         # separately — they are different accounts with different tiers.
         self.limits = LearnedLimit()
+        # callable(delay_seconds: float, reason: str) | None. Same attachment
+        # shape as FallbackLLM.on_switch: the channel sets it and decides what
+        # to draw. A wait this long with nothing on screen reads as a hang.
+        self.on_retry = None
         self._client = AsyncOpenAI(
             api_key=api_key, base_url=base_url, max_retries=max_retries
         )
@@ -152,6 +172,47 @@ class OpenAICompatLLM:
             kwargs["temperature"] = self.temperature
         return kwargs
 
+    async def _create(self, kwargs: dict, messages: list[dict]):
+        """One request, waiting out a 429 if the wait is worth taking.
+
+        .with_raw_response, not .create: the rate-limit headers ride every
+        response and are the only place the endpoint says how big a request it
+        will accept. .parse() returns exactly what the plain call would have,
+        so every caller below is unchanged.
+
+        The SDK's own max_retries stays for transient 5xx — its backoff is
+        sub-ten-second and uniform, which is right for an upstream blip and
+        useless against a token bucket refilling over a full minute. Raising
+        it would also lengthen every 5xx retry, which is a different failure
+        with a different right answer.
+
+        `asyncio.sleep` rather than a timer: the wait sits inside the Session's
+        cancellable task, so a barge-in kills it like anything else.
+        """
+        waits = 0
+        while True:
+            try:
+                return await self._client.chat.completions.with_raw_response.create(
+                    **kwargs
+                )
+            except APIStatusError as exc:
+                fault = classify(exc)
+                delay = (fault.retry_after or DEFAULT_RATE_LIMIT_WAIT) if fault else 0.0
+                if (
+                    fault is not None
+                    and fault.kind == "rate_limited"
+                    and waits < MAX_RATE_LIMIT_WAITS
+                    and delay <= MAX_RATE_LIMIT_WAIT
+                ):
+                    waits += 1
+                    logger.warning("rate limited; retrying in %.0fs", delay)
+                    if self.on_retry is not None:
+                        self.on_retry(delay, fault.message)
+                    await asyncio.sleep(delay)
+                    continue
+                self._raise_if_typed(exc, messages)
+                raise
+
     async def chat(
         self, messages: list[dict], tools: list[dict] | None = None
     ) -> LLMReply:
@@ -162,15 +223,7 @@ class OpenAICompatLLM:
         }
         if tools:
             kwargs["tools"] = tools
-        try:
-            # .with_raw_response, not .create: the rate-limit headers ride
-            # every response and are the only place the endpoint says how big
-            # a request it will accept. .parse() then returns exactly what the
-            # plain call would have, so nothing below this line changed.
-            raw = await self._client.chat.completions.with_raw_response.create(**kwargs)
-        except APIStatusError as exc:
-            self._raise_if_typed(exc, messages)
-            raise
+        raw = await self._create(kwargs, messages)
         self.limits.observe_headers(raw.headers)
         response = raw.parse()
         message = response.choices[0].message
@@ -209,11 +262,7 @@ class OpenAICompatLLM:
         }
         if tools:
             kwargs["tools"] = tools
-        try:
-            raw = await self._client.chat.completions.with_raw_response.create(**kwargs)
-        except APIStatusError as exc:
-            self._raise_if_typed(exc, messages)
-            raise
+        raw = await self._create(kwargs, messages)
         # HTTP response headers land before the body, so the streaming path is
         # not the poor relation here: the ceiling is known before chunk one.
         self.limits.observe_headers(raw.headers)
@@ -301,12 +350,14 @@ def create_llm(
 # errors in APIConnectionError (APITimeoutError subclasses it); we catch the
 # raw httpx layer too so a bare httpx error from a future adapter also falls
 # over. APIStatusError is in the tuple, but chat() only falls over on 5xx —
-# 4xx re-raises.
+# 4xx re-raises, EXCEPT the rate-limited case, which arrives typed rather than
+# as a status error and is the one 4xx a second provider genuinely answers.
 _FALLBACK_ERRORS = (
     httpx.ConnectError,
     httpx.TimeoutException,
     APIConnectionError,
     APIStatusError,
+    RateLimitExceededError,
 )
 
 
@@ -326,6 +377,17 @@ class FallbackLLM:
         self.chain = list(chain)
         self.on_switch = on_switch  # callable(provider_index) | None
         self._active = 0
+
+    @property
+    def on_retry(self):
+        return self.chain[self._active].on_retry
+
+    @on_retry.setter
+    def on_retry(self, callback) -> None:
+        """Fan out to every link, so a channel wires this the same one line
+        whether the user configured a chain or a single provider."""
+        for link in self.chain:
+            link.on_retry = callback
 
     @property
     def model(self) -> str:
@@ -350,8 +412,14 @@ class FallbackLLM:
             try:
                 return await self.chain[index].chat(messages, tools=tools)
             except _FALLBACK_ERRORS as exc:
+                # The rule was "never fall over on a 4xx", because a 4xx is
+                # normally a bad key and a bad key on provider two is no
+                # better than on provider one. A 429 is the exception: the
+                # account's allowance is spent, which is an availability
+                # problem, and it reaches here typed because the link already
+                # waited out whatever wait was worth taking.
                 if isinstance(exc, APIStatusError) and exc.status_code < 500:
-                    raise  # 4xx: not a provider outage — never fall over
+                    raise
                 if index + 1 >= len(self.chain):
                     raise  # chain exhausted: re-raise the last error
                 index += 1
@@ -377,6 +445,7 @@ class FallbackLLM:
             except StopAsyncIteration:
                 return
             except _FALLBACK_ERRORS as exc:
+                # See chat(): a rate limit is the one 4xx worth falling over on.
                 if isinstance(exc, APIStatusError) and exc.status_code < 500:
                     raise
                 if index + 1 >= len(self.chain):

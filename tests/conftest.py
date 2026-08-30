@@ -11,6 +11,7 @@ under test. Tests that index a repo must use a disposable copy.
 
 from __future__ import annotations
 
+import asyncio
 import shutil
 from pathlib import Path
 
@@ -104,3 +105,21 @@ async def mock_llm():
     yield build
     for client in clients:
         await client.close()
+
+
+@pytest.fixture
+def provider_waits(monkeypatch):
+    """Records the client's rate-limit waits instead of taking them.
+
+    The bounded wait in OpenAICompatLLM._create is real seconds, so any test
+    that drives a 429 through it pays them. Recording makes the wait
+    assertable as well as instant, which is better than skipping it: the
+    length of the wait is part of what the retry policy promises.
+    """
+    waits: list[float] = []
+
+    async def record(seconds: float) -> None:
+        waits.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", record)
+    return waits

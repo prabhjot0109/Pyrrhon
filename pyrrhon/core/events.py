@@ -80,6 +80,23 @@ class VoiceNotice:
 
 
 @dataclass(frozen=True)
+class ProviderRetrying:
+    """The provider said "not now" and we are waiting before asking again.
+
+    A 429 is a token bucket refilling over a full minute, so the wait is long
+    enough that a spinner alone reads as a hang. Telling the user what is
+    happening and for how long is the difference between "it's broken" and
+    "it's busy".
+
+    Not an error: the request has not failed yet. The channel that renders it
+    should say so in a register that matches.
+    """
+
+    delay_seconds: float
+    reason: str
+
+
+@dataclass(frozen=True)
 class TruncateSpeech:
     """The one reverse-direction event (channel → core).
 
@@ -118,6 +135,7 @@ Event = (
     | AskUser
     | Transcription
     | VoiceNotice
+    | ProviderRetrying
     | TruncateSpeech
     | TurnFinished
 )
