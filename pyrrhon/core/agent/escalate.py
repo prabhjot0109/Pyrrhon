@@ -1,32 +1,26 @@
-"""Deep-model escalation: a bounded subagent behind the think_deeper tool.
+"""Deep-model escalation: `think_deeper` over the shared subagent runner.
 
 The fast model stays the low-latency voice and decides when to dispatch
 (escalation is a tool, not a router). With `tools`, the deep model runs its
 own read-only investigation loop in a FRESH context — isolated from the
-conversation history — and returns a compact cited report. Depth is
-structurally 1: the belt may not contain think_deeper. Without `tools` it
-degrades to the M4 single-shot consultant.
+conversation history — and returns a compact cited report. Without `tools` it
+degrades to the M4 single-shot consultant, which is the same runner with an
+empty belt: the first reply carries no tool calls, so it is the answer.
 
-Cancellation: run() is awaited inside Agent.run_turn, which runs inside the
-Session's cancellable task — barge-in kills the whole investigation.
+M16d moved the loop itself to `subagent.py`. What is left here is what was
+always deep-specific: which prompt, how the question and the fast model's
+notes are composed into one task, and the round budget a deep pass gets.
 """
 
 from __future__ import annotations
 
-from pyrrhon.core.agent.guards import (
-    ToolGuard,
-    assistant_tool_message,
-    run_tool_round,
-)
+from collections.abc import Callable
+
 from pyrrhon.core.agent.prompts import DEEP_AGENT_PROMPT, DEEP_SYSTEM_PROMPT
-from pyrrhon.core.tools.base import Tool, run_tool
+from pyrrhon.core.agent.subagent import check_depth, run_subagent
+from pyrrhon.core.tools.base import Tool
 
 DEEP_MAX_ROUNDS = 12
-
-_REPORT_NUDGE = (
-    "Investigation budget exhausted. Write your report now from the evidence "
-    "above; cite only path:line locations you actually saw."
-)
 
 
 class ThinkDeeperTool(Tool):
@@ -53,45 +47,32 @@ class ThinkDeeperTool(Tool):
     }
 
     def __init__(self, deep_llm, tools: list[Tool] | None = None,
-                 max_rounds: int = DEEP_MAX_ROUNDS):
-        if any(tool.name == self.name for tool in tools or []):
-            raise ValueError("think_deeper must not be in its own tool belt")
+                 max_rounds: int = DEEP_MAX_ROUNDS,
+                 on_progress: Callable[[str, int, str], object] | None = None):
+        check_depth(tools or [])
         self.deep_llm = deep_llm  # anything with async chat(messages, tools=None)
         self.tools = {tool.name: tool for tool in (tools or [])}
         self.max_rounds = max_rounds
+        # Round-boundary progress, wired by whoever built the Agent. A deep
+        # pass can run for tens of seconds behind one unchanging tool row.
+        self._on_progress = on_progress
 
     async def run(self, question: str, context: str) -> str:
-        prompt = DEEP_AGENT_PROMPT if self.tools else DEEP_SYSTEM_PROMPT
-        messages = [
-            {"role": "system", "content": prompt},
-            {
-                "role": "user",
-                "content": f"{question}\n\n# Context gathered by the fast model\n\n{context}",
-            },
-        ]
-        schemas = [tool.schema() for tool in self.tools.values()] or None
-        guard = ToolGuard()
-        try:
-            for _ in range(self.max_rounds):
-                reply = await self.deep_llm.chat(messages, tools=schemas)
-                if not reply.tool_calls:
-                    return reply.text or "ERROR: deep model returned no text."
-                messages.append(assistant_tool_message(reply))
-                # Concurrent, same as the fast loop: a subagent round that
-                # reads four files should cost one read, not four.
-                results = await run_tool_round(reply.tool_calls, self._run_tool, guard)
-                messages.extend(
-                    {"role": "tool", "tool_call_id": call.id, "content": result}
-                    for call, result in zip(reply.tool_calls, results, strict=True)
-                )
-                if guard.exhausted:
-                    break
-            reply = await self.deep_llm.chat(
-                [*messages, {"role": "user", "content": _REPORT_NUDGE}], tools=None
-            )
-            return reply.text or "ERROR: deep model returned no text."
-        except Exception as exc:  # provider/network failure must not kill the turn
-            return f"ERROR: deep model call failed: {exc}"
+        return await run_subagent(
+            self.deep_llm,
+            list(self.tools.values()),
+            DEEP_AGENT_PROMPT if self.tools else DEEP_SYSTEM_PROMPT,
+            f"{question}\n\n# Context gathered by the fast model\n\n{context}",
+            max_rounds=self.max_rounds,
+            label="deep model",
+            on_round=self._round_reporter(),
+        )
 
-    async def _run_tool(self, name: str, args: dict) -> str:
-        return await run_tool(self.tools, name, args)
+    def _round_reporter(self) -> Callable[[int, str], object] | None:
+        # Bound to a local before the closure: reading the attribute inside
+        # the lambda would re-check a field that may be None by then, and the
+        # narrowing above would not carry into the call.
+        sink = self._on_progress
+        if sink is None:
+            return None
+        return lambda number, detail: sink(self.name, number, detail)
