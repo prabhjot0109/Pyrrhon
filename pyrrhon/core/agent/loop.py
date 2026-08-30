@@ -88,9 +88,39 @@ CONTEXT_FULL_MESSAGE = (
 # model stopped, and the difference matters when reading a transcript back.
 CUT_OFF_MARKER = " …[cut off by a provider error]"
 
+# The same shape for the OTHER way an answer stops early. Distinct wording
+# because the causes are distinct: this one is the configured reply-length
+# limit, which the user can raise, and no error occurred at all.
+TRUNCATED_MARKER = " …[cut off at the model's reply-length limit]"
+
+TRUNCATED_MESSAGE = (
+    "That answer hit my reply-length limit twice, so it stops early. "
+    "Raise max_tokens under [model] in /settings, or ask me for a narrower "
+    "piece of it."
+)
+
+# Copied from Claude Code's max_output_tokens_recovery in intent, and the
+# wording is load-bearing: a model told only "continue" restates its previous
+# paragraph and spends the whole new budget on the recap.
+RESUME_INSTRUCTION = (
+    "Your previous message stopped at the reply-length limit, mid-thought. "
+    "Continue it from exactly where it stopped. Resume directly — no apology, "
+    "no recap, no restating what you were doing. If a lot remains, cover the "
+    "most important part first and keep it short."
+)
+
 # How many times one turn may recover from a context-window overflow by
 # compacting and retrying before it gives up honestly.
 MAX_CONTEXT_RECOVERIES = 2
+
+# How many times ONE round may be resumed after stopping at max_tokens.
+# One, deliberately. A second `length` on the same answer is a configuration
+# fact rather than something to retry around, and the reference's other tier —
+# silently re-running at a much larger max_tokens — is not adopted: max_tokens
+# is a user-set value in [model], a voice turn has a latency budget a very
+# large reply blows through, and silently overriding a configured number is
+# the kind of helpfulness that makes a harness untrustworthy.
+MAX_TRUNCATION_RESUMES = 1
 
 
 def _invalid_tool_nudge(names: list[str]) -> str:
@@ -253,7 +283,9 @@ class Agent:
             self.tools[deep_tool.name] = deep_tool
             self.system_prompt = system_prompt + "\n" + ESCALATION_NOTE
 
-    def _seal_partial(self, history: list[dict], live: list[dict]) -> bool:
+    def _seal_partial(
+        self, history: list[dict], live: list[dict], marker: str = CUT_OFF_MARKER
+    ) -> bool:
         """Close out a streamed answer whose round then failed.
 
         The text is already on screen or already spoken, so it stays in
@@ -273,10 +305,44 @@ class Agent:
             return False
         content = slot.get("content")
         if isinstance(content, str) and content.strip():
-            slot["content"] = content + CUT_OFF_MARKER
+            slot["content"] = content + marker
             return True
         history.pop()  # nothing was ever spoken — drop the empty slot
         return False
+
+    async def _seal_for_resume(
+        self,
+        history: list[dict],
+        partial: str,
+        stream_slot: dict | None,
+        streaming: bool,
+    ) -> AsyncIterator[Event]:
+        """Close a truncated answer into history so the next round continues it.
+
+        The two paths need opposite work, which is the whole reason this is a
+        function. `_stream_round` has already gated each chunk, spoken it, and
+        written it into its own assistant slot, so there is nothing to say and
+        nothing to append. The whole-reply path has done neither — and skipping
+        it there would drop the first half of the answer on the floor, since
+        the resumed round returns only the continuation.
+
+        No CUT_OFF_MARKER: nothing was cut off from the user's point of view.
+        The continuation is about to arrive.
+        """
+        if streaming:
+            if stream_slot is None and partial:
+                history.append({"role": "assistant", "content": partial})
+            return
+        if not partial:
+            return
+        text = partial
+        if self.grounding_gate is not None:
+            text = (
+                await self.grounding_gate.check(partial, self._evidence)
+            ).speech_text
+        if text.strip():
+            history.append({"role": "assistant", "content": text})
+            yield SpeechChunk(text=text)
 
     def set_deep_llm(self, llm) -> None:
         """Point escalation at a different model for the rest of the session.
@@ -373,6 +439,10 @@ class Agent:
         guard = ToolGuard()
         nudged_invalid_tool = False
         context_recoveries = 0
+        # Per ROUND, not per turn: cleared below whenever a round lands intact,
+        # so a long investigation is not denied a resume because an earlier
+        # round used one.
+        truncation_resumes = 0
         # Stream on EVERY channel, not just voice: buffering a whole reply
         # makes time-to-first-output equal to time-to-last-token, which is the
         # single biggest source of "it feels slow" on the screen paths too.
@@ -469,6 +539,42 @@ class Agent:
                     yield event
                 return
             self._calibrate(reply, sent_estimate)
+            # The other way a provider says no: HTTP 200, a well-formed body,
+            # and an answer that simply stops. Nothing downstream can tell that
+            # from a finished one — spoken aloud it is a confident sentence
+            # that ends mid-thought, with no citation to check it against.
+            #
+            # Only when there are no tool calls. A `length` alongside tool
+            # calls means the ARGUMENTS were cut off, which json.loads has
+            # already rejected inside the client; resuming prose would be the
+            # wrong recovery for it.
+            if reply.finish_reason == "length" and not reply.tool_calls:
+                partial = (spoken_text if streaming else reply.text) or ""
+                if truncation_resumes < MAX_TRUNCATION_RESUMES:
+                    truncation_resumes += 1
+                    async for event in self._seal_for_resume(
+                        history, partial, stream_slot, streaming
+                    ):
+                        yield event
+                    history.append(
+                        {"role": "user", "content": RESUME_INSTRUCTION}
+                    )
+                    continue
+                # A second `length` on the same answer is a configuration fact.
+                # Say it, name the key, and never present the fragment as
+                # though it were finished.
+                sealed = self._seal_partial(history, live, TRUNCATED_MARKER)
+                text = (
+                    TRUNCATED_MESSAGE
+                    if sealed or not partial
+                    else partial + TRUNCATED_MARKER + "\n\n" + TRUNCATED_MESSAGE
+                )
+                async for event in self._emit_final(
+                    history, text, trace, streaming, record=not sealed
+                ):
+                    yield event
+                return
+            truncation_resumes = 0
             if not reply.tool_calls:
                 if streaming:
                     # Sentences were gated + spoken (and citations emitted, and

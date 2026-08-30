@@ -14,7 +14,11 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+import httpx
 import pytest
+from openai import AsyncOpenAI
+
+from pyrrhon.core.providers.llm import OpenAICompatLLM
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SAMPLE_REPO = FIXTURES / "sample_repo"
@@ -64,3 +68,39 @@ def _fixtures_stay_pristine():
         f"{[str(p.relative_to(FIXTURES)) for p in strays]}. "
         "Use the `sample_repo` fixture (a disposable copy) instead."
     )
+
+
+PROVIDER_BASE_URL = "http://provider.test/v1"
+
+
+@pytest.fixture
+async def mock_llm():
+    """Builds an OpenAICompatLLM whose transport is `handler`, and closes it.
+
+    Closing matters more than it looks: an httpx.AsyncClient left open past
+    its event loop raises "Event loop is closed" from a finaliser, which
+    surfaces as an unraisable warning in whatever test happens to run next.
+    tests/conftest.py exists because of exactly that class of cross-test
+    leakage.
+
+    max_retries=0 throughout: the SDK's own backoff sleeps for real on a 429,
+    and no suite using this is testing the SDK's retry.
+    """
+    clients: list[AsyncOpenAI] = []
+
+    def build(handler, **kwargs) -> OpenAICompatLLM:
+        llm = OpenAICompatLLM(
+            model="m", api_key="k", base_url=PROVIDER_BASE_URL, max_retries=0, **kwargs
+        )
+        llm._client = AsyncOpenAI(
+            api_key="k",
+            base_url=PROVIDER_BASE_URL,
+            max_retries=0,
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        )
+        clients.append(llm._client)
+        return llm
+
+    yield build
+    for client in clients:
+        await client.close()

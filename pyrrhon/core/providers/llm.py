@@ -91,9 +91,21 @@ def _usage_from(response) -> TokenUsage | None:
 
 @dataclass(frozen=True)
 class LLMReply:
+    """One reply, and how it ended.
+
+    `finish_reason` is the provider's own word for why generation stopped —
+    "stop" for a finished answer, "length" for one cut off at max_tokens,
+    "tool_calls" for a round that wants tools. Carrying it is what lets the
+    loop tell a fragment from an answer; without it a half-sentence goes
+    through the grounding gate and gets spoken as though it were finished.
+    None when the provider omits it, in which case the loop behaves as it did
+    before this field existed.
+    """
+
     text: str | None = None
     tool_calls: tuple[ToolCall, ...] = ()
     usage: TokenUsage | None = None
+    finish_reason: str | None = None
 
 
 class OpenAICompatLLM:
@@ -152,7 +164,10 @@ class OpenAICompatLLM:
             for tc in (message.tool_calls or ())
         )
         return LLMReply(
-            text=message.content, tool_calls=calls, usage=_usage_from(response)
+            text=message.content,
+            tool_calls=calls,
+            usage=_usage_from(response),
+            finish_reason=response.choices[0].finish_reason,
         )
 
     async def stream(self, messages: list[dict], tools: list[dict] | None = None):
@@ -182,6 +197,10 @@ class OpenAICompatLLM:
             raise
         text_parts: list[str] = []
         usage: TokenUsage | None = None
+        # Arrives on the LAST content delta, before the usage chunk — whose
+        # `choices` list is empty, so it cannot clobber this. Kept as "last
+        # non-None wins" rather than "last chunk wins" for the same reason.
+        finish_reason: str | None = None
         # index -> {"id", "name", "args"} accumulated across delta chunks
         frags: dict[int, dict] = {}
         try:
@@ -192,6 +211,8 @@ class OpenAICompatLLM:
                     usage = _usage_from(chunk)
                 if not chunk.choices:
                     continue
+                if chunk.choices[0].finish_reason is not None:
+                    finish_reason = chunk.choices[0].finish_reason
                 delta = chunk.choices[0].delta
                 if delta is None:
                     continue
@@ -223,7 +244,10 @@ class OpenAICompatLLM:
         yield (
             "reply",
             LLMReply(
-                text="".join(text_parts) or None, tool_calls=calls, usage=usage
+                text="".join(text_parts) or None,
+                tool_calls=calls,
+                usage=usage,
+                finish_reason=finish_reason,
             ),
         )
 
