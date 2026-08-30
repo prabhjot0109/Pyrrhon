@@ -236,6 +236,8 @@ class TurnTrace:
             "schema_chars": self.schema_chars,
             "turn_type": self.turn_type,
             "streamed": self.streamed,
+            "stop_reason": self.stop_reason,
+            "compaction": self.compaction,
             "per_round": [
                 {
                     "index": r.index,
