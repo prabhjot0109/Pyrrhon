@@ -621,15 +621,39 @@ later; it is M16 work, not a licence to weaken the gate now.
 `docs/superpowers/specs/2026-08-29-pyrrhon-m16-agent-harness-design.md`; the
 five plans are `m16a` through `m16e` in `docs/superpowers/plans/`.
 
-**M16a's runtime verification is outstanding and is not a formality.** Its plan
-requires replaying the failing transcript against a real rate-limited account
-on the TUI and text channels, and forcing a truncation on `--voice` to confirm
-no fragment is spoken as though it were finished. Unit tests show a branch
-behaves a certain way, not that the bug is gone — and the truncation fault is
-about what a *listener* hears, which no unit test hears. The only credential on
-this machine is a placeholder that answers 401, so those three checks and the
-preconnect latency measurement are unrun. Do them before treating M16a as
-finished.
+**M16a was verified against a real Groq account on 2026-08-30, and the run
+found a fault the plan did not know about** — see the plan's "Runtime
+verification" section for the full record. Four things from it are worth
+carrying:
+
+The account's `x-ratelimit-limit-tokens` is **8000**, against which the harness
+used to budget 90000. No plausible constant would have been right, which is the
+case for the learned limit in one number.
+
+A mid-stream failure has **no HTTP status**. When a 200 response's SSE body
+carries an `error` event the SDK raises a bare `openai.APIError`, and
+`APIStatusError` is its *subclass*, so `except APIStatusError` silently missed
+it. Groq answers that way when gpt-oss reaches for a built-in tool on a request
+carrying no `tools` array, which is every turn `needs_tools()` withholds the
+belt from — so a greeting could die with `PROVIDER_ERROR_MESSAGE`. `classify`
+now has a no-status branch, and it is the one place the prose tiebreakers run
+with no status behind them.
+
+**The resume seam the plan predicted actually happened.** Wording alone did not
+prevent it: a round ending mid-clause on "...guarantees that its" was continued
+with "by verifying once, the assistant guarantees that its knowledge base...",
+duplicating the clause. Trimming the sealed partial back to its last complete
+sentence would fix it and would trade against `_seal_partial`'s invariant that
+history records what was *heard*, since on the streaming path that clause was
+already spoken. Left as a decision for M16b rather than taken quietly.
+
+**Preconnect is worth its lines**: 127ms median off time-to-first-token, warm
+beating cold in all six samples.
+
+One check remains and it needs a human, not a key. The resume ladder is
+verified live on the streaming path, which is the path voice uses, but nobody
+has *heard* it. Run `uv run pyrrhon --voice .` with `[model] max_tokens` set low
+and confirm no fragment is spoken as though it were finished.
 
 M15a and M15b are both done on branch `m15`, and the 2026-08-22 pass closed the
 three gaps that were left in Phase 3's own honesty claim: tier 3 pushes a real
