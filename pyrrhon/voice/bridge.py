@@ -91,6 +91,7 @@ TOOL_FILLERS = {
     "read_image": "Taking a look at that image…",
     "grep": "Searching the repo for that…",
     "glob": "Looking for the right files…",
+    "read_result": "Reading on from where that left off…",
     "find_symbol": "Finding where that's defined…",
     "symbol_context": "Pulling up that symbol and what calls it…",
     "list_dependencies": "Tracing the imports…",

@@ -20,7 +20,7 @@ from pyrrhon.core.tools.spec_writer import SPEC_FILENAMES, WriteSpecTool
 from tests.helpers import FakeLLM  # scripted-replies double, defined in tests/helpers.py
 
 EXPECTED_BELT = {
-    "read_file", "read_image", "grep", "glob", "remember",
+    "read_file", "read_image", "grep", "glob", "remember", "read_result",
     "find_symbol", "symbol_context", "list_dependencies", "repo_map",
     "git_log", "git_blame", "git_show",
     "web_search", "web_fetch", "write_spec", "think_deeper",
@@ -31,7 +31,9 @@ READ_ONLY = EXPECTED_BELT - {"write_spec", "remember", "think_deeper"}
 # What think_deeper actually gets. Narrower than READ_ONLY: the web tools are
 # read-only with respect to the repo, but a subagent loop is excluded from
 # them on cost grounds, not safety ones — repo questions stay in the repo.
-EXPECTED_DEEP_BELT = READ_ONLY - {"web_search", "web_fetch"}
+# read_result joins them for a different reason: the deep loop's ToolGuard
+# holds no store, so a pager there could only follow the fast loop's pointers.
+EXPECTED_DEEP_BELT = READ_ONLY - {"web_search", "web_fetch", "read_result"}
 
 
 @pytest.fixture
@@ -129,7 +131,13 @@ def test_the_deep_subagent_belt_gained_symbol_context_and_stayed_read_only(agent
 # TypeError, and costing a full round trip to discover. repo_map's "takes no
 # arguments" line is the other 33 chars, and it exists to stop the ATTEMPT
 # rather than the call.
-MAX_BELT_SCHEMA_CHARS = 8500
+#
+# 8574 over 17 once read_result joined. 507 chars against a 504-char belt
+# average, so it pays its own way rather than being absorbed: the ceiling moves
+# with the belt, exactly as it did for read_image. What the seventeenth slot
+# buys is the round a truncated result used to cost — re-running a tool with
+# narrower arguments the model has to guess blind.
+MAX_BELT_SCHEMA_CHARS = 9000
 
 
 def test_the_belt_schema_stays_within_its_latency_budget(agent):
@@ -322,3 +330,46 @@ def test_the_escape_hatch_this_rule_allows_is_still_the_only_one():
 
     assert "from pyrrhon.voice.registry import" in inspect.getsource(catalog._providers)
     assert "from pyrrhon.voice" not in catalog.__dict__.get("__doc__", "")
+
+
+# Modules in pyrrhon/core/tools/ permitted to write to disk at all. The belt is
+# read-only outside .pyrrhon/ and docs/design/, and this is the grep-level
+# fence that keeps a new tool from quietly acquiring a write path.
+#
+# ast_index.py writes <repo>/.pyrrhon/cache.db, a derived symbol cache.
+# memory.py appends <repo>/.pyrrhon/memory.md, the one thing `remember` does.
+# spec_writer.py writes six filenames under docs/design/, pinned above.
+# results.py is M16c's addition and the only new write path in M16: it writes
+# oversized tool results under <repo>/.pyrrhon/results/, from ids it minted
+# itself, and deletes the directory on close().
+WRITE_ALLOWLIST = {"ast_index.py", "memory.py", "spec_writer.py", "results.py"}
+
+_WRITE_VERBS = ("write_text", "write_bytes", "mkdir", "open(", "NamedTemporary", "os.remove")
+
+
+def test_no_tool_writes_to_disk_except_the_allowlist():
+    import pyrrhon.core.tools as tools_pkg
+
+    offenders = []
+    for path in Path(tools_pkg.__path__[0]).glob("*.py"):
+        if path.name in WRITE_ALLOWLIST:
+            continue
+        text = path.read_text(encoding="utf-8")
+        offenders += [f"{path.name} ({verb})" for verb in _WRITE_VERBS if verb in text]
+    assert offenders == []
+
+
+def test_the_result_store_writes_only_under_the_session_directory(tmp_path):
+    """The store's paths come from its own counter, never from model input, so
+    an id it did not issue is refused before a path is built."""
+    from pyrrhon.core.tools.results import ResultStore
+
+    store = ResultStore(tmp_path, page_chars=10, max_chars=1000)
+    guard_dir = tmp_path / ".pyrrhon" / "results"
+    import asyncio
+
+    asyncio.run(store.persist("x" * 100, 10, "grep", {"pattern": "a"}))
+    written = [p for p in tmp_path.rglob("*") if p.is_file()]
+    assert written and all(guard_dir in p.parents for p in written)
+    assert asyncio.run(store.page("../../../evil", 0)).startswith("ERROR:")
+    assert not (tmp_path.parent / "evil").exists()

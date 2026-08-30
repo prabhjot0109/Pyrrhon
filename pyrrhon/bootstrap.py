@@ -53,6 +53,7 @@ from pyrrhon.core.tools.images import ReadImageTool
 from pyrrhon.core.tools.memory import RememberTool
 from pyrrhon.core.tools.orientation import build_orientation
 from pyrrhon.core.tools.repo import GlobTool, GrepTool, ReadFileTool
+from pyrrhon.core.tools.results import ReadResultTool, ResultStore
 from pyrrhon.core.tools.spec_writer import WriteSpecTool
 from pyrrhon.core.tools.symbol_context import SymbolContextTool
 from pyrrhon.core.tools.web import WebFetchTool, WebSearchTool
@@ -79,6 +80,12 @@ DEEP_EXCLUDED = frozenset({
     "remember",      # the fast model owns memory
     "web_search",    # repo questions stay in the repo
     "web_fetch",
+    # The deep subagent's ToolGuard has no store, so its own oversized results
+    # still truncate — a pager on its belt could only follow pointers the FAST
+    # loop minted, which is not what a bounded read-only pass is for. Its
+    # budget bounds it anyway; paging would only let it spend that budget on
+    # tails it did not fetch.
+    "read_result",
 })
 
 
@@ -228,6 +235,10 @@ def build_agent(
         ReadImageTool(repo_root, vision_llm),
         GrepTool(repo_root),
         GlobTool(repo_root),
+        # Holds the session's persisted-result store. The Agent reads the
+        # store back OFF this tool rather than from a field of its own, so a
+        # result is written exactly when the pager is on the belt to read it.
+        ReadResultTool(ResultStore(repo_root)),
         RememberTool(repo_root),
         FindSymbolTool(index),
         # symbol_context replaces find_references (M14): same `name` argument,

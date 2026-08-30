@@ -71,6 +71,7 @@ from pyrrhon.core.providers.errors import (
 )
 from pyrrhon.core.telemetry import RoundTrace, TurnTrace
 from pyrrhon.core.tools.base import Tool, run_tool
+from pyrrhon.core.tools.results import ResultStore, attribute
 
 logger = logging.getLogger("pyrrhon.agent")
 
@@ -556,7 +557,7 @@ class Agent:
         # eventually stopped had to be reconstructed from whichever branch
         # happened to break out.
         state = TurnState()
-        guard = ToolGuard(max_total_chars=policy.max_tool_chars)
+        guard = ToolGuard(max_total_chars=policy.max_tool_chars, store=self._store_for(policy))
         # Stream on EVERY channel, not just voice: buffering a whole reply
         # makes time-to-first-output equal to time-to-last-token, which is the
         # single biggest source of "it feels slow" on the screen paths too.
@@ -792,7 +793,8 @@ class Agent:
             for call, result in zip(reply.tool_calls, results, strict=True):
                 # Record BEFORE the event: the next round's answer may cite
                 # what this result showed, and the gate consults the ledger.
-                self._evidence.record_tool_result(call.name, call.arguments, result)
+                origin, args = attribute(call, guard.store)
+                self._evidence.record_tool_result(origin, args, result)
                 yield ToolCallFinished(
                     name=call.name, result_preview=result[:PREVIEW_LEN]
                 )
@@ -855,6 +857,21 @@ class Agent:
             self._schema_cache_key = key
             self._schema_cache = [self.tools[name].schema() for name in names]
         return self._schema_cache
+
+    def _store_for(self, policy: TurnPolicy) -> ResultStore | None:
+        """Where this turn's oversized results go, or None to truncate them.
+
+        Read off the belt this turn is actually offered, not held as a field.
+        That makes one invariant true by construction: a result is persisted
+        exactly when `read_result` is there to read it back. A turn that
+        withholds the pager must not be handed a pointer it cannot follow —
+        that would be strictly worse than the truncation it replaced, because
+        the model would spend a round discovering the tool does not exist.
+        """
+        names = policy.belt_for(self.tools)
+        if names is None or "read_result" not in names:
+            return None
+        return getattr(self.tools["read_result"], "store", None)
 
     async def _forced_answer(self, history: list[dict]) -> str:
         nudge = {

@@ -36,9 +36,11 @@ def test_guard_flags_exact_duplicates_only():
     assert guard.is_duplicate("grep", {"pattern": "b"}) is False
 
 
-def test_guard_clips_and_tracks_budget():
+async def test_guard_clips_and_tracks_budget():
+    # No store: truncation is still what a guard without one does, and the
+    # deep subagent's guard has none.
     guard = ToolGuard(max_result_chars=10, max_total_chars=15)
-    clipped = guard.clip("x" * 50)
+    clipped = await guard.clip("x" * 50)
     assert clipped.startswith("xxxxxxxxxx")
     assert "truncated" in clipped
     assert guard.exhausted  # 10 + suffix >= 15
