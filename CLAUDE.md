@@ -608,37 +608,74 @@ recent, then summarize. `hard_compact_tool_results` is gone — it differed from
 is a `keep_recent` parameter now rather than a second function with a duplicated
 body.
 
-The turn's own pre-flight passes **`summarize=False`**, and that is load-bearing
-rather than an oversight. M16b's plan puts the summarize rung in the pre-flight
+**How far up the ladder a caller may go is a `mode`, and the pre-flight gets
+`FIT_CHEAP` — rung 2 only.** `FIT_FULL` is every rung, still gated on the
+estimate, and is what `Session._compact` runs in dead time; `FIT_FORCED` is
+every rung with the estimate ignored, for the safety net after a refusal. One
+mode rather than two booleans, because of the four combinations only three mean
+anything: "ignore the estimate but stop early" is a contradiction, since the
+estimate is the only reason to stop early.
+
+Both rungs above the cheap one were promoted into the pre-flight by M16b's plan
+and both had to come back out, for the same reason stated twice.
+
+Rung 4 costs a round trip, which M10 moved off the critical path on purpose —
+it used to sit in front of the first token of every over-budget turn, and
+`test_the_turn_itself_makes_no_summarize_call` pins that. The plan puts it back
 *and* describes the loop as compacting "locally and cheaply"; those cannot both
-hold, and M10 moved that round trip off the critical path on purpose — it used
-to sit in front of the first token of every over-budget turn.
-`test_the_turn_itself_makes_no_summarize_call` pins it. So the ladder owns all
-four rungs, the critical path runs the two pure ones, and the round trip stays
-where it belongs: `Session`'s background pass in dead time, or the safety net
-after the provider has already said no.
+hold.
+
+Rung 3 costs the current turn's own evidence, which is worse and was invisible
+until Task 7 ran against a real account. That account's learned ceiling is 8000
+tokens, so `request_budget` allowed the history 2012 against a system prompt of
+~1250: the history was over budget from round one and never came back under, so
+rung 3 fired on **every** round, stripped every tool result but the most recent,
+and still left the request over budget. The model lost what it had just read and
+re-read it. Rung 2's last-user boundary is precisely that protection, and rung 3
+ignores it by design because it was written as *recovery* compaction — that is
+what makes it wrong as a routine rung and right behind a refusal.
+
+`Session._compact` therefore runs the whole ladder rather than
+`maybe_summarize` alone, and that is the necessary other half rather than a
+tidy-up: with the pre-flight at rung 2, dead time is the only place rung 3 runs
+outside a provider refusal, and without it a session on a small ceiling piles up
+bulky results that nothing elides until the provider says no. The cost is that
+`_cancel_compaction` can now land with tool results elided rather than with
+history byte-identical; elision is idempotent, grounding-neutral (the ledger is
+separate from history), and exactly what the next refusal would have done.
 
 `Agent.request_budget` nets the belt's schemas off the top, because they ride
 the same request as the history and a budget that ignored them would aim the
 compactor at a number the request was always going to exceed. `Session.
 _schedule_compaction` reads the **same** function: it used to budget against
 `context_budget_tokens`, a looser number, which would schedule a round trip to
-fix a history the turn had just fitted. `_cancel_compaction` is deliberately
-untouched — its contract depends on `maybe_summarize`'s single await landing
-before any mutation of history, and routing the background pass through the
-whole ladder would put pure mutations in front of that await to buy microseconds
-off a rung that is already free.
+fix a history the turn had just fitted.
+
+Watch the size of what `request_budget` returns on a small-ceiling account
+before assuming a compaction bug is a compaction bug. 8000 minus
+`CONTEXT_RESERVE_TOKENS` minus ~1.9k of schema leaves ~2k for history, which is
+less than the system prompt plus one tool result. Nothing in the ladder can fix
+a budget smaller than the irreducible prompt, and a rung that keeps firing to no
+effect is the symptom.
 
 `MAX_CONTEXT_RECOVERIES` is **1**. The `ContextLengthExceededError` handler is
 what its name says now: reaching it means the *estimate* was wrong, not that
 nothing was tried, so it runs the same ladder once with `force=True` — every
 rung, regardless of what the estimate says — and then degrades honestly.
 
-Two things this milestone deliberately did **not** do. The eval and the runtime
-checks in Task 7 need a working provider key, and `~/.pyrrhon/credentials.toml`
-carries a placeholder for Groq, so the policy numbers are first guesses and the
-signal for tuning them is `Stop(reason="rounds")` in real traces rather than
-intuition. And M16a's handoff — trimming a sealed partial back to its last
+**Task 7 ran live on 2026-08-30 and found the rung-3 defect above** — see the
+plan's "Runtime verification" section for the record, including why the
+3/6-vs-5/6 eval comparison is confounded and must not be read as an improvement.
+Two things from it are worth carrying. `TurnTrace.stop_reason` paid for itself
+within the hour: a 3/6 run that looked like a regression was six turns with
+`stop_reason=error`, `rounds=1`, `tool_calls=0` — dead turns from a spent
+allowance, which the score alone hid completely. And M16a's rate-limit path is
+verified live as a side effect: a spent allowance ends a turn with "it should
+clear in about 952 seconds" rather than a wait.
+
+The policy numbers are still first guesses. The signal for tuning them is
+`Stop(reason="rounds")` in real traces rather than intuition, and that needs
+allowance rather than code. M16a's handoff — trimming a sealed partial back to its last
 complete sentence so the resume seam cannot duplicate a clause — is **declined**,
 not deferred: on the streaming path that clause was already spoken, and
 `_seal_partial`'s "history records what was heard" invariant is what barge-in
