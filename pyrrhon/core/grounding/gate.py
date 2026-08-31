@@ -51,6 +51,56 @@ LINE_HEDGE = "I couldn't confirm the exact line."
 # except the one thing that matters, which is whether we looked.
 LINE_UNSEEN_HEDGE = "I haven't actually opened that line this session."
 
+@dataclass
+class GateCounters:
+    """What the gate did, since the gate was built. Diagnostics, never state.
+
+    M16e is measured by one number and the gate is the only place that can
+    produce it: the three-way sort in `_check_sync` (promote / hedge / strip)
+    already exists, and until now the tally was thrown away — `last_unseen`
+    kept one of the three arms and nothing kept the other two. A record rather
+    than three ints on the Agent, because the arms are one taxonomy: a change
+    that moves `stripped` down and `hedged` up has not improved anything, and
+    only reading them together says so.
+
+    `checks` counts calls, and a call is one streamed chunk on the streaming
+    path and one whole answer off it — the spec's "sentence". A turn that runs
+    the self-correction retry counts its answer twice, which inflates both
+    halves of the rate slightly; the retry only fires off the streaming path,
+    which is not the path the eval or voice takes.
+
+    Mutated from inside `asyncio.to_thread`, which is safe only because gate
+    checks are awaited one at a time by a single turn. Nothing here is worth a
+    lock; if a second caller ever shares a gate, this is what to revisit.
+    """
+
+    checks: int = 0
+    intervened: int = 0
+    promoted: int = 0
+    hedged: int = 0
+    stripped: int = 0
+
+    def __add__(self, other: GateCounters) -> GateCounters:
+        """Totals across gates. The eval builds one agent per case, so the
+        run-level number only exists if the per-case ones can be summed."""
+        return GateCounters(
+            checks=self.checks + other.checks,
+            intervened=self.intervened + other.intervened,
+            promoted=self.promoted + other.promoted,
+            hedged=self.hedged + other.hedged,
+            stripped=self.stripped + other.stripped,
+        )
+
+    @property
+    def intervention_rate(self) -> float:
+        """Fraction of checks in which the gate hedged or stripped something.
+
+        The number M16e must move down. Zero checks reads as 0.0 rather than
+        raising: an eval run that produced no prose intervened in nothing.
+        """
+        return self.intervened / self.checks if self.checks else 0.0
+
+
 # Distinct cited paths cached before the caches are dropped and rebuilt.
 # Comfortably above any real repo's file count; it exists to bound a model
 # that invents paths, not to bound normal use.
@@ -116,6 +166,9 @@ class GroundingGate:
         # once per spoken sentence — the same two or three files, over and
         # over, for the whole answer.
         self._line_counts: dict[str, tuple[tuple[int, int], int | None]] = {}
+        # Read by the grounding eval off the agent it built. Cumulative over
+        # the gate's life, which is one agent, which is one eval case.
+        self.counters = GateCounters()
 
     async def check(
         self, text: str, evidence: EvidenceLedger | None = None
@@ -188,6 +241,19 @@ class GroundingGate:
         if unverified or unseen:
             hedge = _hedge_for(unverified, replacement)
             speech = f"{speech} {hedge}" if speech else hedge
+
+        # Counted from the sorted lists rather than incremented at each branch
+        # above: one place to read, and the arms cannot drift apart. `hedged`
+        # and `stripped` split `unverified` by what survived into the text —
+        # a real file keeps its path, an invented one keeps nothing — and the
+        # unseen arm is a hedge by construction.
+        stripped = sum(1 for ref in unverified if not replacement[ref])
+        self.counters.checks += 1
+        self.counters.promoted += len(verified)
+        self.counters.stripped += stripped
+        self.counters.hedged += len(unverified) - stripped + len(unseen)
+        if unverified or unseen:
+            self.counters.intervened += 1
 
         return GroundedText(
             speech_text=speech,

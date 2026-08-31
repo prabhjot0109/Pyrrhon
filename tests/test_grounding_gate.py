@@ -252,3 +252,56 @@ async def test_verified_citations_are_stripped_from_speech(tmp_path):
     # A citation merely moved to the screen must NOT trigger the hedge.
     assert "I couldn't verify" not in result.speech_text
     assert result.speech_text == "The retry lives in and it backs off."
+
+
+async def test_counters_sort_every_reference_into_exactly_one_arm(tmp_path):
+    """M16e's criterion has to be readable before anything is changed.
+
+    The gate already sorts three ways; until now it kept no tally, so "the
+    intervention rate fell" was unfalsifiable. Each arm is counted from what
+    survived into the text: a real line promotes, a real file with a bad line
+    keeps its path, an invented file keeps nothing.
+    """
+    (tmp_path / "app.py").write_text("\n".join(f"line {i}" for i in range(1, 51)))
+    gate = GroundingGate(tmp_path)
+
+    await gate.check("nothing to cite here.")
+    await gate.check("the retry is at app.py:12.")
+    await gate.check("see app.py:999 and made/up.py:3.")
+
+    assert gate.counters.checks == 3
+    assert gate.counters.promoted == 1
+    assert gate.counters.hedged == 1
+    assert gate.counters.stripped == 1
+    # One check of three intervened. The third carried TWO failures and still
+    # counts once: the rate is per sentence, not per claim, which is why the
+    # raw arms are reported beside it.
+    assert gate.counters.intervened == 1
+    assert gate.counters.intervention_rate == 1 / 3
+
+
+async def test_unopened_line_counts_as_a_hedge_not_a_strip(tmp_path):
+    """The provenance arm is a hedge by construction: the path IS verified,
+    only the "we looked at it" claim is not. Counting it as a strip would make
+    require_provenance look like it fabricates paths."""
+    (tmp_path / "app.py").write_text("\n".join(f"line {i}" for i in range(1, 51)))
+    gate = GroundingGate(tmp_path, require_provenance=True)
+
+    out = await gate.check("the retry is at app.py:12.", EvidenceLedger())
+
+    assert out.unseen == ("app.py:12",)
+    assert (gate.counters.hedged, gate.counters.stripped) == (1, 0)
+    assert gate.counters.promoted == 0
+
+
+def test_counters_sum_across_gates():
+    """The eval builds one agent per case, so a run-level number only exists
+    if per-case counters add."""
+    from pyrrhon.core.grounding.gate import GateCounters
+
+    total = GateCounters(checks=2, intervened=1, promoted=3) + GateCounters(
+        checks=1, hedged=1, stripped=2
+    )
+    assert total == GateCounters(
+        checks=3, intervened=1, promoted=3, hedged=1, stripped=2
+    )

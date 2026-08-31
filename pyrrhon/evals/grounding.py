@@ -44,6 +44,7 @@ from pathlib import Path
 import yaml
 
 from pyrrhon.core.events import Citation
+from pyrrhon.core.grounding.gate import GateCounters
 
 LINE_TOLERANCE = 5
 
@@ -76,6 +77,12 @@ class EvalReport:
     # this is non-zero on cases the model got RIGHT, the ledger is
     # under-recording and the fix is a better ledger, not a looser gate.
     downgrades: int = field(default=0, compare=False)
+    # M16e's criterion. `downgrades` above is one arm of the gate's three-way
+    # sort; this is all three plus the denominator, so "interventions fell"
+    # can be checked against "citations did not fall with them". Reported
+    # together on purpose: a run that hedges less because it cites less is a
+    # regression wearing a win's clothes.
+    gate: GateCounters = field(default_factory=GateCounters, compare=False)
 
     @property
     def latency(self) -> dict:
@@ -118,6 +125,7 @@ async def _run_cases(cases: list[dict], agent_factory, repeat: int = 1) -> EvalR
     failures: list[str] = []
     traces: list[dict] = []
     downgrades = 0
+    gate = GateCounters()
     for _ in range(max(1, repeat)):
         for case in cases:
             agent = agent_factory()
@@ -132,6 +140,10 @@ async def _run_cases(cases: list[dict], agent_factory, repeat: int = 1) -> EvalR
             # getattr: an agent double without the attribute simply contributes
             # nothing, the same tolerance last_trace already gets.
             downgrades += len(getattr(agent, "last_unseen", ()))
+            # Same tolerance: an agent double with no gate contributes nothing.
+            case_gate = getattr(getattr(agent, "grounding_gate", None), "counters", None)
+            if case_gate is not None:
+                gate = gate + case_gate
             problems = [
                 p for p in (
                     _check(citations, case),
@@ -148,6 +160,7 @@ async def _run_cases(cases: list[dict], agent_factory, repeat: int = 1) -> EvalR
         failures=failures,
         traces=traces,
         downgrades=downgrades,
+        gate=gate,
     )
 
 
@@ -222,6 +235,18 @@ def compare_latency(
     return regressions
 
 
+def _gate_line(gate: GateCounters) -> str:
+    """One line, both numbers. A before/after diff of two eval runs has to be
+    readable by eye, so the rate and the counts that produced it stay together
+    — the rate alone cannot distinguish "cited less" from "cited better"."""
+    return (
+        f"{gate.intervened}/{gate.checks} checks "
+        f"({gate.intervention_rate:.1%})   "
+        f"promoted {gate.promoted}, hedged {gate.hedged}, "
+        f"stripped {gate.stripped}"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m pyrrhon.evals.grounding",
@@ -264,6 +289,7 @@ def main(argv: list[str] | None = None) -> int:
     report = run_eval(args.yaml_path, lambda: build_agent(repo_root), args.repeat)
     print(f"grounding eval: {report.passed}/{report.total} passed")
     print(f"  provenance downgrades: {report.downgrades}")
+    print(f"  gate intervention rate: {_gate_line(report.gate)}")
     for failure in report.failures:
         print(f"  FAIL {failure}")
 
@@ -279,6 +305,14 @@ def main(argv: list[str] | None = None) -> int:
                     "passed": report.passed,
                     "failures": report.failures,
                     "downgrades": report.downgrades,
+                    "gate": {
+                        "checks": report.gate.checks,
+                        "intervened": report.gate.intervened,
+                        "promoted": report.gate.promoted,
+                        "hedged": report.gate.hedged,
+                        "stripped": report.gate.stripped,
+                        "intervention_rate": report.gate.intervention_rate,
+                    },
                     "latency": latency,
                     "traces": report.traces,
                 },
