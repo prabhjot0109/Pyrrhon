@@ -888,6 +888,85 @@ other three. The open question `policy.py` records for `think_deeper` applies
 to it unchanged: a dispatch is one tool call, so it fits inside one round and
 the round cap does not bound it.
 
+**Verification upstream (M16e, 2026-08-31).** The gate is unchanged, and
+deliberately so: `require_provenance` is still privileged and still off, and
+nothing here relaxes a check. What changed is the model's *reasons* to trip
+one, in three places.
+
+**The prompt states admissibility as a rule.** "Use your tools to LOOK before
+you cite" is guidance a model satisfies by having looked at some point. The
+rule is that a location may be stated only if a tool result in **this turn**
+showed it — which is exactly what the evidence ledger already encodes by being
+rebuilt fresh each turn, and the prompt was the half that had not caught up.
+Recollection is inadmissible because the file may have changed and a stale
+in-range line passes every check the gate makes.
+
+**The counterweight ships in the same block and is not decoration.** The
+central risk of the milestone is a model told never to state an unread location
+retreating into hedging everything, which reads as honesty and is a loss. So
+the rule bounds citations, not confidence. `tests/test_prompt_policy.py` pins
+the *direction* of both halves rather than their wording, the same precedent
+M16b set for the land-nudge.
+
+The tool-use section grows the policy M16b, M16c and M16d each need the model
+to know, argued rather than listed, because the surrounding section earns its
+length by explaining why: search before read, read the range the search pointed
+at, past about three files dispatch `explore`, a truncated result is paged
+rather than re-run, and `repo_map` takes no arguments.
+
+**Three ways a location was still reaching history outside a tool result, all
+three reachable, one of them carrying a fabricated path.** The test was written
+before the fix and the list is the finding.
+
+The narration beside a tool call was gated for *speech* and recorded raw:
+`assistant_tool_message` took `reply.text`, so a coordinate the model invented
+came back to it a round later reading as something the conversation had
+established. It takes the gated text now; a subagent runner with no gate passes
+nothing and is unchanged.
+
+A streamed answer that gates away to nothing fell back to `reply.text`, which
+nothing had gated. Reachable whenever the answer is little more than its
+citation. The fallback is gated now and its citations are **dropped rather than
+re-emitted**, because if deltas arrived `_stream_round` already emitted them and
+a second copy is a duplicate row.
+
+`SUMMARY_PROMPT` demanded every `path:line` be kept EXACTLY. That was right
+while history was the model's source of code facts and it is precisely wrong
+now: a summary outlives the tool result that justified it, and a stale in-range
+line is indistinguishable from a right one. The file name is the part that
+stays true and costs one read to re-anchor. The prompt says why and
+`citations.strip_line_numbers` makes it an invariant rather than a request — an
+instruction the model may ignore is not an invariant.
+`tests/test_history_invariant.py` exempts exactly two roles and the exemption
+is the point: a `tool` message IS the admissible source, and a `user` message
+is the user's own words.
+
+**`GateCounters` exists because M16e is judged by a number the gate was not
+keeping.** The three-way sort was already there; the tally of exactly one arm
+(`last_unseen`) was, so "the intervention rate fell" was unfalsifiable before it
+was asserted. A record rather than three ints, because the arms are one
+taxonomy: a change that moves `stripped` down and `hedged` up has improved
+nothing, and only reading them together says so. The eval prints the rate and
+the raw arms on one line for the same reason, plus mean tool calls and mean
+rounds per turn — mean, not median, since one question ground out over six
+rounds is the failure the tool policy exists to prevent and a median hides it.
+The eval also grew a `history` key per case, because the one probe this rule is
+most about — a follow-up the model could answer from recollection — was
+inexpressible against empty history.
+
+**The number is not measured, and that is the honest state of the milestone.**
+Both stored keys answer 4xx (Groq `401`, Cerebras `403`), so the eval runs end
+to end and reports zeros because every turn died before producing prose. Until
+a baseline and an after-run exist, **M16e's criterion is unmet and S2S stays
+blocked.** Do not read the mechanism landing as the criterion being met; they
+are different claims, and the plan is explicit that failing to move the rate is
+an acceptable result to record, never an argument for relaxing a check.
+
+One trap worth carrying: a run against a dead key scores 4/8 on the fixture
+set, because every `must_not_cite: "*"` case passes trivially when the model
+produces no citations at all. The same confound M16b's record flags for its
+3/6-vs-5/6 comparison. Read `stop_reason` before reading the score.
+
 **LLM lane and vision (M15b).** LLM providers are rows in
 `core/providers/registry.py`; `BUILTIN_PROVIDERS` and the wizard's catalog are
 both derived from it, and no model ids are hardcoded anywhere. Token usage is
@@ -970,26 +1049,35 @@ no TTY means refuse.
 from anywhere; repo-level plugin *code* runs only after one consent prompt per
 repo. Worked example in `tests/fixtures/plugins/hello-reviewer/`.
 
-Gemini Live speech-to-speech is parked on purpose: it would bypass the grounding
-gate. Note the real shape of that constraint — gate-*before*-speech is what
-blocks S2S, not verification itself. The direction of travel is to move
-verification upstream (tool results as the only admissible source of code facts,
-the prompt forbidding claims about unloaded code) so the egress gate becomes a
-cheap safety net rather than the mechanism. That is what would make S2S viable
-later; it is M16 work, not a licence to weaken the gate now.
+Gemini Live speech-to-speech is **still parked**, and M16e did not unpark it.
+The constraint's real shape is unchanged — gate-*before*-speech is what blocks
+S2S, not verification itself — and M16e built the mechanism that was meant to
+remove the reason for it: tool results as the only admissible source of code
+facts, stated as a rule in the prompt and closed off in history. What is
+missing is the evidence. S2S becomes viable when the gate's intervention rate
+falls substantially *with citation accuracy held*, measured by the eval, and
+neither number has been taken because no provider key works. The mechanism
+landing is not the criterion being met. Until both numbers exist the block
+stands, and it is not a licence to weaken the gate.
 
-**Planned next. M16a through M16d are closed; M16e is the next thing to
-start.** Spec:
+**Planned next. M16a through M16e are code-complete; every runtime pass is
+outstanding, and all of them wait on one working provider key.** Spec:
 `docs/superpowers/specs/2026-08-29-pyrrhon-m16-agent-harness-design.md`; the
 five plans are `m16a` through `m16e` in `docs/superpowers/plans/`. Two runtime
 passes are the parts left open, and both are blocked on a working provider key
-rather than on code (the one in `~/.pyrrhon/credentials.toml` answers `401`): M16b's (the grounding eval, the tuning of the policy
+rather than on code (as of 2026-08-31 the Groq key in
+`~/.pyrrhon/credentials.toml` answers `401` and the Cerebras one `403`):
+M16b's (the grounding eval, the tuning of the policy
 numbers, and driving both channels) and M16c's (a transcript replay confirming
 that no read exceeds what the preceding search pointed at, and a grounding-eval
 comparison confirming that suppressing a re-read costs the gate no citation it
 needed). M16d adds a third: a genuinely multi-file question driven through both
 channels, confirming `/debug-history` shows one `explore` result rather than a
-dozen tool results, plus the live half of its context-saving comparison.
+dozen tool results, plus the live half of its context-saving comparison. M16e
+adds the fourth and it is the one the milestone is judged by: the eval's
+intervention rate and its accuracy taken together, once before the prompt
+change and once after, plus both channels driven against a question about code
+that does not exist and a question spanning several files.
 
 **M16a was verified against a real Groq account on 2026-08-30, and the run
 found a fault the plan did not know about** — see the plan's "Runtime
@@ -1042,11 +1130,14 @@ LLM-lane feature with its own design question; M16's job is the harness, and
 the seam exists precisely so the harness never has to know which driver it
 holds.
 
-Next is the last of **M16 — the harness**: verification moved upstream (M16e).
-The turn state machine (M16b), the tool contract (M16c) and the context
-firewall (M16d) are done. That is the moat; M15 exists to make the seam thin
-enough that M16 never thinks about audio. The S2S paragraph above is M16e's
-brief.
+**M16 — the harness** is code-complete. The provider boundary (M16a), the turn
+state machine (M16b), the tool contract (M16c), the context firewall (M16d)
+and verification upstream (M16e) are all built and tested. That is the moat;
+M15 exists to make the seam thin enough that M16 never thinks about audio.
+What is not done is the evidence: four runtime passes, one key. M16e in
+particular is code-complete and **unproven** — its criterion is a number, the
+number has not been taken, and the milestone does not get to be called
+finished on the strength of its diff.
 
 Deferred on purpose, with triggers recorded in the M15a plan: the
 `SoundfileMixer` thinking bed, until someone decides what it should sound like.
