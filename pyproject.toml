@@ -4,7 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pyrrhon"
-version = "0.1.0"
+# Derived from `pyrrhon/__init__.py`, which is where the splash, the status bar
+# and `--version` already read it. Two literals cannot disagree if there is only
+# one, and the pair could disagree silently — nothing imports the pyproject
+# value at runtime, so a release would have shipped one number on PyPI and
+# printed another on screen.
+dynamic = ["version"]
 description = "A voice-first senior-engineer agent for understanding and designing software."
 readme = "README.md"
 # Upper bound, and it is load-bearing rather than cautious. `pipecat-ai[local]`
@@ -94,6 +99,9 @@ markers = [
 # Tier 3 is opt-in: `uv run pytest` must never reach the network or spend a
 # provider quota. `-m live` overrides this on purpose.
 addopts = "-m 'not live'"
+
+[tool.hatch.version]
+path = "pyrrhon/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["pyrrhon"]
