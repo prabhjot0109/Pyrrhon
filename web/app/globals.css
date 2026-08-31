@@ -63,6 +63,32 @@
     --border: 0 0% 14%; /* was 100% at 0.10 alpha over the ground */
     --ring: 0 0% 80%;
 
+    /*
+      The only two hued tokens on a greyscale site, and the exception is
+      deliberate rather than a leak. Everything above is a *surface*, where a
+      residual tint next to the dithered background reads as a mistake. These
+      two are not surfaces — they are the answer to "did that work?", and
+      green-yes / red-no is the one pairing a reader does not have to be
+      taught. Rendering that answer in --foreground makes it unreadable: a
+      grey tick sits in the same ink as the grey icon it replaced, which is
+      how a copy button that had succeeded and one that had failed came to
+      look identical.
+
+      --destructive was already named by tailwind.config.ts and by the
+      `destructive` variant in components/ui/button.tsx, and defined nowhere,
+      so `bg-destructive` compiled to `hsl(var(--destructive))` — invalid,
+      dropped by the parser, and inherited from the parent. Defining it here
+      is what makes that variant exist at all.
+
+      Bare `H S% L%` triples with no alpha, like every token above, for the
+      reason the palette comment gives.
+    */
+    --success: 145 58% 45%;
+    --success-foreground: 0 0% 6%;
+
+    --destructive: 0 62% 52%;
+    --destructive-foreground: 0 0% 96%;
+
     --radius: 0.5rem;
   }
 }
