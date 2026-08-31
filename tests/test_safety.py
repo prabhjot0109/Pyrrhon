@@ -456,3 +456,29 @@ def test_a_scout_report_stays_below_the_per_call_result_cap():
     from pyrrhon.core.tools.explore import MAX_REPORT_CHARS
 
     assert MAX_REPORT_CHARS < MAX_TOOL_RESULT_CHARS
+
+
+def test_requires_python_agrees_with_the_classifiers():
+    """The resolver reads `requires-python`; nothing reads a classifier.
+
+    They disagreed, and the cost landed on a stranger: `pipecat-ai[local]`
+    pulls `pyaudio`, which ships no cp314 wheel, so `>=3.12` with no ceiling
+    let pip select Pyrrhon on 3.14 and then fail inside a C build of a
+    transitive dependency the user never named. A reviewed checkpoint in the
+    same shape as EXPECTED_BELT: when the ceiling moves, this is the line that
+    makes someone state which Pythons are actually supported.
+    """
+    import tomllib
+
+    root = Path(__file__).resolve().parents[1]
+    project = tomllib.loads(
+        (root / "pyproject.toml").read_text(encoding="utf-8")
+    )["project"]
+
+    declared = {
+        c.rsplit(" :: ", 1)[1]
+        for c in project["classifiers"]
+        if c.startswith("Programming Language :: Python :: 3.")
+    }
+    assert declared == {"3.12", "3.13"}
+    assert project["requires-python"] == ">=3.12,<3.14"

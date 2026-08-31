@@ -7,7 +7,15 @@ name = "pyrrhon"
 version = "0.1.0"
 description = "A voice-first senior-engineer agent for understanding and designing software."
 readme = "README.md"
-requires-python = ">=3.12"
+# Upper bound, and it is load-bearing rather than cautious. `pipecat-ai[local]`
+# pulls `pyaudio`, whose latest release (0.2.14) ships wheels for cp312 and
+# cp313 and NOT cp314. Without the cap, pip happily selects Pyrrhon on 3.14 and
+# then hands the user a C compiler error from a transitive dependency they
+# never named — a failure that looks like our bug and cannot be fixed from
+# here. The classifiers below already claimed only 3.12 and 3.13; this makes
+# the resolver agree with them, since nothing resolves on a classifier.
+# Lift it the release after pyaudio ships a cp314 wheel.
+requires-python = ">=3.12,<3.14"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Prabhjot Singh" }]
