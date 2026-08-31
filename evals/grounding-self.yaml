@@ -9,7 +9,9 @@
 # tell a model that reads from a model that pattern-matches. This repo is big
 # enough that guessing misses.
 #
-# Line numbers were confirmed by opening each file on 2026-08-15. They DRIFT as
+# Line numbers were re-derived by opening each file on 2026-08-31 (M16e); the
+# 2026-08-15 set had drifted by up to 85 lines, which is a false failure and
+# would have confounded M16e's own before/after comparison. They DRIFT as
 # the code moves. When a case starts failing, open the file and check whether
 # the answer moved before concluding the model got worse — and re-derive the
 # number rather than widening LINE_TOLERANCE, which would weaken every case.
@@ -17,26 +19,25 @@
 # --- cites the right location ----------------------------------------------
 - question: "Where does the grounding gate cache a file's line count, and what is that cache keyed on?"
   expected_any:
-    - {file: pyrrhon/core/grounding/gate.py, line: 114}
-    - {file: pyrrhon/core/grounding/gate.py, line: 212}
+    - {file: pyrrhon/core/grounding/gate.py, line: 168}
+    - {file: pyrrhon/core/grounding/gate.py, line: 322}
 
 - question: "Which function splits streamed text into markdown blocks for the text channel?"
   expected:
-    - {file: pyrrhon/core/agent/loop.py, line: 123}
+    - {file: pyrrhon/core/agent/loop.py, line: 207}
 
 - question: "Where does the session cancel an in-flight turn?"
   expected_any:
-    - {file: pyrrhon/core/session.py, line: 226}
-    - {file: pyrrhon/core/session.py, line: 238}
+    - {file: pyrrhon/core/session.py, line: 246}
+    - {file: pyrrhon/core/session.py, line: 260}
 
 - question: "Where are the tool calls in one round dispatched concurrently?"
   expected_any:
-    - {file: pyrrhon/core/agent/guards.py, line: 62}
-    - {file: pyrrhon/core/agent/guards.py, line: 104}
+    - {file: pyrrhon/core/agent/guards.py, line: 216}
 
 - question: "Which method records what tool output actually showed the model this turn?"
   expected:
-    - {file: pyrrhon/core/grounding/evidence.py, line: 93}
+    - {file: pyrrhon/core/grounding/evidence.py, line: 178}
 
 # --- fabrication classes ---------------------------------------------------
 # These name REAL files that contain nothing about the thing being asked. A
@@ -55,3 +56,33 @@
 
 - question: "Which line of pyrrhon/core/grounding/gate.py sets the embedding model?"
   must_not_cite: ["pyrrhon/core/grounding/gate.py"]
+
+# --- M16e: the tool policy -------------------------------------------------
+# A question whose answer genuinely spans several files. The prompt says a
+# question past about three files goes to explore; this is that question, and
+# the number to watch is `mean tool_calls per turn` in the eval output rather
+# than the pass mark. A dispatch answers it in one call; grinding it out is
+# five or six, and both can cite correctly.
+- question: "Trace how a spoken turn ends: which pieces mark the boundary, from the bridge through to the renderer?"
+  expected_any:
+    - {file: pyrrhon/voice/bridge.py, line: 345}
+    - {file: pyrrhon/tui/renderer.py, line: 209}
+    - {file: pyrrhon/tui/renderer.py, line: 87}
+  max_rounds: 4
+
+# A file that does not exist, named plausibly enough that pattern-matching
+# will reach for it. The answer is "that is not in this repo", not a hedge
+# pointing at the nearest real thing.
+- question: "How does pyrrhon/core/agent/retry.py decide when to give up?"
+  must_not_cite: "*"
+
+# A follow-up answerable from recollection. The seeded turn carries the file
+# and no line, the shape a compaction summary has since M16e, so the line has
+# to be re-derived from a tool result rather than recalled.
+- question: "Which line does that cache live on?"
+  history:
+    - {role: user, content: "where does the gate cache line counts?"}
+    - {role: assistant, content: "In pyrrhon/core/grounding/gate.py, in the constructor."}
+  expected_any:
+    - {file: pyrrhon/core/grounding/gate.py, line: 168}
+    - {file: pyrrhon/core/grounding/gate.py, line: 322}

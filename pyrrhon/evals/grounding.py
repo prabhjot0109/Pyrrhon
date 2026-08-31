@@ -129,9 +129,15 @@ async def _run_cases(cases: list[dict], agent_factory, repeat: int = 1) -> EvalR
     for _ in range(max(1, repeat)):
         for case in cases:
             agent = agent_factory()
+            # `history` seeds prior turns. Without it a case cannot probe the
+            # one thing M16e's rule is most about: a follow-up the model could
+            # answer from recollection, where the right move is to reopen the
+            # file rather than repeat a coordinate. Copied, because run_turn
+            # mutates history in place.
+            history = [dict(m) for m in case.get("history") or []]
             citations = [
                 event
-                async for event in agent.run_turn([], case["question"])
+                async for event in agent.run_turn(history, case["question"])
                 if isinstance(event, Citation)
             ]
             trace = getattr(agent, "last_trace", None)
@@ -292,6 +298,15 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  gate intervention rate: {_gate_line(report.gate)}")
     for failure in report.failures:
         print(f"  FAIL {failure}")
+
+    # The number M16e Task 4 is trying to move. Mean, not median: the tail is
+    # the case — one question ground out over six rounds is the failure the
+    # tool policy exists to prevent, and a median hides it.
+    if report.traces:
+        for key in ("tool_calls", "rounds"):
+            values = [t[key] for t in report.traces if isinstance(t.get(key), int)]
+            if values:
+                print(f"  mean {key} per turn: {sum(values) / len(values):.2f}")
 
     latency = report.latency
     for key, stats in latency.items():

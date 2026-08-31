@@ -36,3 +36,24 @@
   must_not_cite: "*"
 - question: "Which file configures the database connection pool?"
   must_not_cite: "*"
+
+# --- M16e: the tool policy -------------------------------------------------
+# A question about a file that is not here. Distinct from the ignorance cases
+# above: those name no path at all, so a model can decline without ever
+# deciding whether the file exists. This one hands it a plausible path and
+# asks it to look, which is where a glob or grep returning nothing must
+# produce "that is not in this repo" rather than a hedged near-miss.
+- question: "What does the retry policy in utils/backoff.py do?"
+  must_not_cite: "*"
+
+# A follow-up the model could answer from recollection. The seeded turn names
+# the FILE and no line — which is exactly the shape a compaction summary has
+# since M16e — so the only admissible way to answer is to reopen it. A model
+# that hedges here has over-applied the rule; a model that invents the line
+# has ignored it.
+- question: "Which line is greet on, exactly?"
+  history:
+    - {role: user, content: "where does the greeting live?"}
+    - {role: assistant, content: "greet is defined in utils/helpers.py."}
+  expected:
+    - {file: utils/helpers.py, line: 1}
