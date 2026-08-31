@@ -18,7 +18,17 @@ up: `PRD.md`, `HLD.md`, `LLD.md`, `api.md`, `database.md`, `risks.md`.
 
 ## Install
 
-Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
+Requires Python 3.12 or 3.13. Not 3.14 yet: `pyaudio`, which the voice stack
+pulls in, ships no wheel for it, and a version cap turns that into one clear
+sentence instead of a compiler error.
+
+```bash
+uv tool install pyrrhon      # recommended: an isolated install with `pyrrhon` on PATH
+pipx install pyrrhon         # same idea without uv
+pip install pyrrhon          # into the current environment
+```
+
+To work on Pyrrhon itself:
 
 ```bash
 git clone https://github.com/prabhjot0109/Pyrrhon && cd Pyrrhon
@@ -26,10 +36,11 @@ uv sync                  # text, TUI, and voice
 ```
 
 One command installs everything, every speech provider included. Nothing in the
-provider menu needs a second install step. The cost is a larger environment,
-since on-device turn detection and the local speech engines bring their own
-model runtimes. Text and TUI still never import the audio stack at runtime, and
-`--voice` degrades to text mode with a readable reason if it cannot start.
+provider menu needs a second install step. The cost is a larger environment —
+about 1.2 GB, because on-device turn detection and the local speech engines
+bring their own model runtimes. Text and TUI still never import the audio stack
+at runtime, and `--voice` degrades to text mode with a readable reason if it
+cannot start.
 
 ## Usage
 

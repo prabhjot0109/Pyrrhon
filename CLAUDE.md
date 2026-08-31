@@ -13,9 +13,11 @@ two acts:
 2. **Design** a system you're about to build: Socratic interrogation of your
    choices, then it writes the spec (`PRD.md`, `HLD.md`, and the rest).
 
-`README.md` is the pitch. `VISION.md` is the source of truth for scope, the two
-acts in detail, and the verifiable v1 success criteria. Read `VISION.md` before
-making any product or scope decision.
+`README.md` is the pitch. `docs/superpowers/VISION.md` is the source of truth
+for scope, the two acts in detail, and the verifiable v1 success criteria. Read
+it before making any product or scope decision. Note the path: it is under
+`docs/`, which is never committed, so a fresh clone does not have it and this
+reference dangles there by design.
 
 Dont commit any docs to any brach and docs is commneted out of gitignore deliabertaly so you can read them so dont commits gitignore and docs to any branch.
 
