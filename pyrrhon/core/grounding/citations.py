@@ -43,3 +43,15 @@ def extract_references(text: str) -> list[tuple[str, int]]:
         (match.group("path").replace("\\", "/"), int(match.group("line")))
         for match in _CITATION_RE.finditer(text)
     ]
+
+
+def strip_line_numbers(text: str) -> str:
+    """Rewrite every `path:line` to its bare `path`.
+
+    For text that outlives the tool result that justified it — a compaction
+    summary is the case (M16e). A line number is only true of the file as it
+    was when it was read, and a summary can survive many turns and an edit;
+    the path stays useful and costs one read to re-anchor. The gate cannot
+    catch this, because a stale in-range line verifies perfectly.
+    """
+    return _CITATION_RE.sub(lambda match: match.group("path"), text)

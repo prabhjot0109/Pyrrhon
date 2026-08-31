@@ -22,6 +22,8 @@ from __future__ import annotations
 import json
 from typing import Literal
 
+from pyrrhon.core.grounding.citations import strip_line_numbers
+
 # The whole estimate, in one number. Provider-agnostic on purpose — see the
 # module docstring on why this is calibrated rather than replaced.
 CHARS_PER_TOKEN = 4
@@ -145,11 +147,19 @@ FIT_FULL: FitMode = "full"
 FIT_FORCED: FitMode = "forced"
 
 
+# Amended 2026-08-31 (M16e). This used to demand EVERY path:line be kept
+# EXACTLY as written, which was right while history was the model's source of
+# code facts. Under upstream verification it is the one instruction that
+# manufactures a stale coordinate: a summary outlives the tool result that
+# justified it, the file may have changed since, and a stale in-range line
+# passes every check the gate makes. The file name is the part that stays true,
+# and re-anchoring it costs one read.
 SUMMARY_PROMPT = (
     "Summarize the conversation below so it can be continued later. Keep: the "
-    "user's goals, decisions made, key findings about the codebase, and EVERY "
-    "path:line citation EXACTLY as written (e.g. utils/helpers.py:12). Drop "
-    "tool output noise and dead ends. 300 words maximum. Output only the summary."
+    "user's goals, decisions made, and key findings about the codebase — name "
+    "the FILE a finding came from (e.g. utils/helpers.py) and never a line "
+    "number, because the file may have changed since it was read. Drop tool "
+    "output noise and dead ends. 300 words maximum. Output only the summary."
 )
 
 SUMMARY_HEADER = "Summary of earlier conversation (older turns were compacted):\n"
@@ -206,9 +216,13 @@ async def maybe_summarize(
     if not reply.text:
         return False
     kept_system = [m for m in middle if m.get("role") == "system"]
+    # Stripped as well as asked for. The prompt above tells the model why; this
+    # is what makes it an invariant rather than a request, and it is cheap
+    # enough to run on every summary that arrives.
+    summary = strip_line_numbers(reply.text)
     history[1:split] = [
         *kept_system,
-        {"role": "system", "content": SUMMARY_HEADER + reply.text},
+        {"role": "system", "content": SUMMARY_HEADER + summary},
     ]
     return True
 

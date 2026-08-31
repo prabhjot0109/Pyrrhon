@@ -228,15 +228,21 @@ async def run_tool_round(calls, runner, guard: ToolGuard, round_trace=None) -> l
     return results
 
 
-def assistant_tool_message(reply) -> dict:
+def assistant_tool_message(reply, content: str | None = None) -> dict:
     """Chat-API-shaped assistant message carrying tool calls.
 
     Lives here (not loop.py) so escalate.py can use it without a circular
     import — loop.py imports ThinkDeeperTool from escalate.py.
+
+    `content` overrides `reply.text` with what the gate cleared (M16e). The
+    narration beside a tool call was gated for SPEECH and recorded raw, so a
+    coordinate the model invented went back into the request on the next
+    round, where it reads as something the conversation established. A
+    subagent runner with no gate passes nothing and keeps `reply.text`.
     """
     return {
         "role": "assistant",
-        "content": reply.text,
+        "content": reply.text if content is None else content,
         "tool_calls": [
             {
                 "id": call.id,

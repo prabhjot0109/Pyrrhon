@@ -756,7 +756,16 @@ class Agent:
                     # the answer written into stream_slot in history) inside
                     # _stream_round. Just backfill an empty slot and, in design
                     # mode, surface the Socratic question.
-                    answer = spoken_text or reply.text or "(no answer)"
+                    # `reply.text` is the fallback for a provider that puts
+                    # the whole answer on the reply object rather than in
+                    # deltas — nothing gated it, so it cannot go into history
+                    # as it stands. Its citations are dropped rather than
+                    # emitted: if deltas DID arrive, _stream_round already
+                    # emitted them and a second copy is a duplicate row.
+                    answer = spoken_text
+                    if not answer and reply.text:
+                        answer, _ = await self._gate_sentence(reply.text)
+                    answer = answer or "(no answer)"
                     if stream_slot is None:
                         history.append({"role": "assistant", "content": answer})
                     question = extract_question(answer)
@@ -769,16 +778,20 @@ class Agent:
                     yield event
                 return
 
+            # The narration the model wrote alongside its tool calls. Whatever
+            # produced it, only the gated form is recorded: history is what the
+            # user was shown, and under M16e it is also what the model may
+            # treat as established.
+            narration = spoken_text or "" if streaming else reply.text or ""
             if streaming:
                 # The streamed text was narration, not a standalone answer —
-                # drop its live slot; assistant_tool_message(reply) carries the
-                # same text alongside the tool calls.
+                # drop its live slot; assistant_tool_message carries the same
+                # text alongside the tool calls.
                 if stream_slot is not None and history and history[-1] is stream_slot:
                     history.pop()
-            elif reply.text:
-                # Narration spoken while tools run. It passes the gate too:
-                # a fabricated citation must never be spoken, even mid-turn.
-                narration = reply.text
+            elif narration:
+                # Gated before it is spoken: a fabricated citation must never
+                # be spoken, even mid-turn.
                 if self.grounding_gate is not None:
                     with round_trace.time_gate():
                         narration = (
@@ -787,7 +800,7 @@ class Agent:
                 if narration.strip():
                     yield SpeechChunk(text=narration)
 
-            history.append(assistant_tool_message(reply))
+            history.append(assistant_tool_message(reply, narration))
             # Every start before dispatch, every finish after it, both in call
             # order. Forced anyway — an async generator cannot yield from
             # inside a task — and free: ToolCallFinished has no render branch

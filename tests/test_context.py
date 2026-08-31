@@ -109,7 +109,11 @@ async def test_summarize_replaces_middle_and_keeps_tail_and_system():
     assert await maybe_summarize(history, llm, budget_tokens=100, keep_last=4) is True
     assert history[0]["content"] == "base prompt"           # base prompt untouched
     assert history[1]["role"] == "system"                   # summary is a system msg
-    assert "app.py:3" in history[1]["content"]
+    # M16e: the file survives, the line does not. A summary outlives the tool
+    # result that justified it, so the coordinate goes stale while still
+    # passing every check the gate makes.
+    assert "app.py:3" not in history[1]["content"]
+    assert "app.py handles greeting" in history[1]["content"]
     assert history[-4:] == tail_before                      # recent turns verbatim
     assert len(history) == 2 + 4
     # The summarizer call itself must not offer tools.
