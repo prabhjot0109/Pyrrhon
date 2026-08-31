@@ -132,10 +132,27 @@ class Session:
     async def _run_turn_events(self, user_text: str) -> AsyncIterator[Event]:
         """Run one turn, streaming events. The agent runs in its own task so
         `abort_current_turn()` can cancel it while a channel is consuming."""
-        if self._current is not None and not self._current.done():
-            raise RuntimeError(
-                "A turn is already running; call abort_current_turn() first."
-            )
+        # Three states, not two, and the third is what was missing. A turn can
+        # be absent, live, or winding DOWN — cancelled and not yet unwound.
+        # Nothing that cancels a turn awaits it: `abort_current_turn` returns
+        # the moment it calls `cancel()`, and `voice/bridge.py:_start_turn`
+        # cancels its own task and then immediately starts the replacement. So
+        # a transcription that raced ahead of its own interruption reached here
+        # with `_current` merely cancelled, and the user's second sentence was
+        # answered with a RuntimeError.
+        current = self._current
+        if current is not None and not current.done():
+            if not current.cancelling():
+                raise RuntimeError(
+                    "A turn is already running; call abort_current_turn() first."
+                )
+            # Unbounded on purpose. A cancelled producer's only remaining work
+            # is a `put_nowait` in a finally, plus whatever `asyncio.to_thread`
+            # is already running — and that thread has to finish before a
+            # replacement starts anyway, or two turns mutate `history` at once.
+            # asyncio.wait rather than `await current`, which would re-raise
+            # the predecessor's CancelledError as though it were ours.
+            await asyncio.wait({current})
         # A background compaction must never overlap a turn: maybe_summarize
         # splices history[1:split] on the same list the agent loop iterates.
         self._cancel_compaction()
@@ -151,7 +168,12 @@ class Session:
                 # put_nowait never suspends, so it is safe in a cancelled task.
                 queue.put_nowait(_TURN_DONE)
 
-        self._current = asyncio.create_task(_produce())
+        # Held locally as well as on self. `self._current` means "the live
+        # turn" and the replacement overwrites it, so a superseded generator
+        # finalized afterwards would read the REPLACEMENT out of the finally
+        # below and cancel it — the corpse killing the turn that replaced it.
+        producer = asyncio.create_task(_produce())
+        self._current = producer
         completed_normally = False
         try:
             while True:
@@ -163,8 +185,8 @@ class Session:
         finally:
             # Consumer went away early (generator closed / consuming task
             # cancelled): never leave the agent running headless.
-            if not self._current.done():
-                self._current.cancel()
+            if not producer.done():
+                producer.cancel()
                 self._repair_history()
             # Only on the normal path. A cancelled turn has just had its tail
             # rolled back by _repair_history, and the user is already talking

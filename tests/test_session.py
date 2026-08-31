@@ -140,3 +140,62 @@ async def test_truncate_is_noop_when_last_message_is_not_assistant_text():
 async def _drain(aiter) -> None:
     async for _ in aiter:
         pass
+
+
+async def test_a_replacement_turn_starts_without_awaiting_the_aborted_one():
+    """The voice bridge's defensive path, which CLAUDE.md recorded as broken.
+
+    `_start_turn` cancels its predecessor and calls `abort_current_turn()`,
+    and neither of those AWAITS the cancellation — so `_current` is still
+    not `done()` when the replacement starts, and the user's second sentence
+    was answered with `RuntimeError: A turn is already running`. Reachable
+    whenever a transcription races ahead of its own interruption, which is a
+    normal thing for a person to do.
+    """
+    slow = SlowEchoTool()
+    replies = [
+        LLMReply(tool_calls=(ToolCall(id="c1", name="slow_echo", arguments={}),)),
+        LLMReply(text="answer to the second question"),
+    ]
+    session, _ = make_session(replies, tools=[slow])
+
+    consumer = asyncio.create_task(_drain(session.run_turn("first")))
+    await asyncio.wait_for(slow.started.wait(), timeout=2)
+
+    # Exactly the bridge's sequence: abort, then start the replacement, with
+    # nothing awaited in between.
+    session.abort_current_turn()
+    events = [event async for event in session.run_turn("second")]
+
+    speech = [e for e in events if isinstance(e, SpeechChunk)]
+    assert speech[-1].text == "answer to the second question"
+    await asyncio.wait_for(consumer, timeout=2)
+
+
+async def test_an_abandoned_turn_never_cancels_its_successor():
+    """`_run_turn_events`' finally read `self._current`, which by the time a
+    superseded generator is finalized is the REPLACEMENT turn's task. The
+    corpse would then cancel the live turn and roll back its history.
+
+    Ordered so the first generator is finalized after the second turn is
+    already running, which is the shape a barge-in produces.
+    """
+    slow = SlowEchoTool()
+    replies = [
+        LLMReply(tool_calls=(ToolCall(id="c1", name="slow_echo", arguments={}),)),
+        LLMReply(text="answer to the second question"),
+    ]
+    session, _ = make_session(replies, tools=[slow])
+
+    consumer = asyncio.create_task(_drain(session.run_turn("first")))
+    await asyncio.wait_for(slow.started.wait(), timeout=2)
+    session.abort_current_turn()
+
+    events = [event async for event in session.run_turn("second")]
+    await asyncio.wait_for(consumer, timeout=2)
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    assert [e for e in events if isinstance(e, SpeechChunk)]
+    # The replacement's answer survived the corpse being finalized.
+    assert session.history[-1]["content"] == "answer to the second question"

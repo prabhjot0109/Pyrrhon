@@ -415,13 +415,29 @@ mount, and that task calls its callback synchronously from outside the message
 pump; `_render_event` is async now and would have become a coroutine nobody
 awaited.
 
-One thing found while doing this and deliberately not fixed, because it is a
-session concern and not a screen one: `_start_turn`'s defensive path cannot
-actually start a replacement turn. It cancels its predecessor and calls
-`abort_current_turn()`, but `Session.run_turn` refuses while `_current` is
-merely cancelled and not yet `done()`, so the replacement raises
-`RuntimeError: A turn is already running`. Reachable only when a transcription
-races ahead of its own interruption. M16.
+One thing found while doing this was left to the session layer and is **fixed
+as of 2026-09-01**, along with a worse one beside it. `_start_turn`'s defensive
+path could not start a replacement turn: it cancels its predecessor and calls
+`abort_current_turn()`, and *nothing that cancels a turn awaits it*, so
+`Session._run_turn_events` saw `_current` merely cancelled and raised
+`RuntimeError: A turn is already running`. A transcription racing ahead of its
+own interruption is a normal thing for a person to do, and it answered their
+second sentence with a stack trace.
+
+A turn has **three** states, not two: absent, live, and winding down. The third
+was missing. A predecessor with `cancelling()` set is now awaited through
+`asyncio.wait` — unbounded on purpose, since its only remaining work is a
+`put_nowait` in a finally plus whatever `asyncio.to_thread` is already running,
+and that thread has to finish before a replacement starts anyway or two turns
+mutate `history` at once. `asyncio.wait` rather than `await current`, which
+would re-raise the predecessor's `CancelledError` as though it were ours.
+
+The worse one was `_current` doing double duty. It means "the live turn", which
+is what `abort_current_turn` needs, and the generator's `finally` was also
+reading it to cancel *its own* producer. Once a replacement overwrites it, a
+superseded generator finalized afterwards cancels the turn that replaced it and
+rolls back its history — the corpse killing its successor. The producer is held
+in a local now. Both are pinned by tests in `tests/test_session.py`.
 
 The evidence rail is the signature: one gutter column carrying the epistemic
 status of each row, and it is a widget rather than a character prepended to
