@@ -20,8 +20,9 @@ from collections.abc import AsyncIterator
 from pyrrhon.core.agent.design_prompts import DESIGN_PROMPT
 from pyrrhon.core.agent.loop import Agent
 from pyrrhon.core.context import FIT_FULL, fit_to_budget, history_tokens
-from pyrrhon.core.events import Event, SpeechChunk
+from pyrrhon.core.events import Citation, Event, SpeechChunk
 from pyrrhon.core.telemetry import TurnTrace
+from pyrrhon.core.transcript import Transcript, resolve_session
 
 logger = logging.getLogger("pyrrhon.session")
 
@@ -38,13 +39,64 @@ MODE_PREFIX = "[mode]\n"
 _TURN_DONE = object()
 
 
+def open_session(
+    agent: Agent,
+    repo_root,
+    resume: str | None = None,
+    save: bool = True,
+    home=None,
+) -> tuple["Session", str]:
+    """The Session a channel should serve, plus the one line it should say.
+
+    Lives here rather than in each channel because the sequence has three
+    branches and both screen channels need the same three. `start_channel`
+    exists for exactly this reason: two copies of an ordered startup sequence
+    diverge quietly, and the divergence reads as a bug in one channel rather
+    than as a missing edit.
+
+    `resume` is a session id, or "" for "the most recent one". A resume that
+    finds nothing starts a fresh session and SAYS so — silently starting empty
+    is how a user loses an afternoon believing they are continuing it.
+    """
+    if not save:
+        return Session(agent), ""
+    if resume is None:
+        return Session(agent, transcript=Transcript.start(repo_root, home)), ""
+    path = resolve_session(repo_root, resume or None, home)
+    if path is None:
+        wanted = f" matching {resume!r}" if resume else ""
+        return (
+            Session(agent, transcript=Transcript.start(repo_root, home)),
+            f"No saved session{wanted} for this repo — starting a new one.",
+        )
+    session = Session(agent)
+    transcript = Transcript(path)
+    turns = session.resume(transcript)
+    # The covered ground rides the resume notice rather than waiting to be
+    # asked for. "Where was I" is the first thing a returning user needs and
+    # the last thing they will type a command to find out.
+    anchor = transcript.covered_ground()
+    notice = f"Resumed {path.stem} — {turns} earlier turn(s) in context."
+    return session, (notice + "\n\n" + anchor if anchor else notice)
+
+
 class Session:
     """Owns the conversation history; wraps Agent.run_turn in a cancellable task."""
 
-    def __init__(self, agent: Agent):
+    def __init__(self, agent: Agent, transcript: Transcript | None = None):
         self.agent = agent
         self.history: list[dict] = []
         self.mode: str = "understand"
+        # Where the conversation is saved, or None for a session nobody asked
+        # to keep (every test, and every channel until one opts in).
+        self.transcript = transcript
+        # The turn waiting to be written. Written at the START of the next
+        # turn rather than at the end of its own, because barge-in truncation
+        # reaches Session AFTER the turn's generator has finished — so a
+        # record written at the end preserves words the user cut off, and the
+        # one thing the transcript must not do is disagree with history about
+        # what was heard.
+        self._pending: tuple[str, str, tuple[Citation, ...]] | None = None
         self._current: asyncio.Task | None = None
         # History summarization, moved off the critical path. It used to run
         # inside Agent.run_turn in front of the first token of every
@@ -67,6 +119,63 @@ class Session:
         # finished and published, so recording it there produced a metric that
         # was structurally always zero.
         self.last_compaction_ms: float | None = None
+
+    def _flush_transcript(self) -> None:
+        """Write the previous turn, as history finally holds it.
+
+        The answer is re-read off history rather than trusted from the events,
+        because a barge-in truncation rewrites the last assistant message after
+        the turn is over. History is the authority on what was HEARD, which is
+        the invariant `truncate_last_assistant` exists to keep, and a
+        transcript that disagreed with it would be the one artifact claiming
+        Pyrrhon said something the user never let it finish.
+        """
+        pending, self._pending = self._pending, None
+        if pending is None or self.transcript is None:
+            return
+        question, answer, citations = pending
+        last = self.history[-1] if self.history else {}
+        if last.get("role") == "assistant" and isinstance(last.get("content"), str):
+            answer = last["content"]
+        if question or answer:
+            self.transcript.record(question, answer, citations)
+
+    def close(self) -> None:
+        """End of session: the last turn has nothing after it to flush it."""
+        self._flush_transcript()
+
+    def resume(self, transcript: Transcript) -> int:
+        """Continue a saved session, and return how many turns came back.
+
+        The restored messages are prose with no coordinates in them, so this
+        cannot smuggle evidence across the process boundary: a resumed session
+        has to reopen a file before it may cite one, which is M16e's
+        admissibility rule enforced by the shape of the data rather than by an
+        instruction. That is why this is safe to build now and would not have
+        been before.
+
+        No system message is restored either. `Agent._run_turn` rewrites
+        history[0] on every turn, so a stale one would be overwritten anyway —
+        and until it was, the session would run on a prompt built by a
+        different version of Pyrrhon.
+        """
+        entries = transcript.entries()
+        self.transcript = transcript
+        self.history = transcript.messages()
+        return len(entries)
+
+    def clear(self) -> int:
+        """Start a fresh thread without restarting, returning what was dropped.
+
+        History only. The mode survives, because a user who switched to design
+        mode and then cleared is starting a new design, not leaving one; and
+        the transcript survives, because /clear is about what the MODEL
+        carries, never about destroying what the user has already been told.
+        """
+        dropped = len([m for m in self.history if m.get("role") != "system"])
+        self._cancel_compaction()
+        self.history = []
+        return dropped
 
     def set_mode(self, mode: str) -> None:
         """Switch understand <-> design by REWRITING one layered system message.
@@ -114,8 +223,15 @@ class Session:
         # sub-second voice budget. perf_counter resolves to ~100ns.
         started = time.perf_counter()
         first_speech_seen = False
+        self._flush_transcript()
+        spoken: list[str] = []
+        cited: list[Citation] = []
         try:
             async for event in self._run_turn_events(user_text):
+                if isinstance(event, SpeechChunk):
+                    spoken.append(event.text)
+                elif isinstance(event, Citation):
+                    cited.append(event)
                 if not first_speech_seen and isinstance(event, SpeechChunk):
                     self.last_turn_latency_ms = (
                         time.perf_counter() - started
@@ -128,6 +244,12 @@ class Session:
             # Publish in a finally: a turn cut short by barge-in is exactly the
             # turn whose breakdown you want to look at.
             self.last_turn_trace = self.agent.last_trace
+            # Chunks are joined with the separator the core split on: a space
+            # for a spoken turn, a blank line for a written one. Concatenating
+            # with nothing fuses a paragraph into the list below it, and
+            # nothing downstream can recover the boundary.
+            joiner = " " if self.agent.voice_active else "\n\n"
+            self._pending = (user_text, joiner.join(spoken), tuple(cited))
 
     async def _run_turn_events(self, user_text: str) -> AsyncIterator[Event]:
         """Run one turn, streaming events. The agent runs in its own task so

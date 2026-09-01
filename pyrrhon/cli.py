@@ -41,6 +41,24 @@ def main(argv: list[str] | None = None) -> None:
         help="Start with the voice pipeline on (equivalent to /voice on)",
     )
     parser.add_argument(
+        "-c",
+        "--continue",
+        dest="continue_last",
+        action="store_true",
+        help="Resume this repo's most recent saved session",
+    )
+    parser.add_argument(
+        "--resume",
+        metavar="ID",
+        help="Resume a saved session by id (a leading prefix is enough; see /sessions)",
+    )
+    parser.add_argument(
+        "--no-save",
+        dest="save",
+        action="store_false",
+        help="Do not write this session to ~/.pyrrhon/sessions",
+    )
+    parser.add_argument(
         "-p",
         "--print",
         dest="print_prompt",
@@ -79,6 +97,12 @@ def main(argv: list[str] | None = None) -> None:
 
         run_wizard()
 
+    # "" means "the most recent one", which is what --continue asks for, and
+    # None means "start fresh". One value rather than two flags threaded
+    # separately, because every channel would otherwise re-derive the same
+    # three-way choice.
+    resume = args.resume if args.resume else ("" if args.continue_last else None)
+
     # Channels imported lazily so `--version` works without touching them.
     if args.print_prompt is not None:
         # Checked before --text and --voice rather than beside them: --print
@@ -95,8 +119,20 @@ def main(argv: list[str] | None = None) -> None:
     elif args.text:
         from pyrrhon.repl import run_repl
 
-        run_repl(args.repo, voice=args.voice, trust_repo=args.trust_repo)
+        run_repl(
+            args.repo,
+            voice=args.voice,
+            trust_repo=args.trust_repo,
+            resume=resume,
+            save=args.save,
+        )
     else:
         from pyrrhon.tui.app import run_tui
 
-        run_tui(args.repo, voice=args.voice, trust_repo=args.trust_repo)
+        run_tui(
+            args.repo,
+            voice=args.voice,
+            trust_repo=args.trust_repo,
+            resume=resume,
+            save=args.save,
+        )

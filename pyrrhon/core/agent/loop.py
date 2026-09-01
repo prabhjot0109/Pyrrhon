@@ -71,6 +71,7 @@ from pyrrhon.core.providers.errors import (
     InvalidToolCallError,
     RateLimitExceededError,
 )
+from pyrrhon.core.providers.llm import SessionSpend
 from pyrrhon.core.telemetry import RoundTrace, TurnTrace
 from pyrrhon.core.tools.base import Tool, run_tool
 from pyrrhon.core.tools.results import ResultStore, attribute
@@ -318,6 +319,11 @@ class Agent:
         # wants is a real distinction, not a spelling.
         self._configured_budget = context_budget_tokens
         self.context_keep_last = context_keep_last
+        # What the provider has charged this session for. Filled by _calibrate,
+        # which is the one place every reply passes through, and read by /cost.
+        # The counts arrived on every response since M15b and were discarded
+        # one line after token_scale took the ratio out of them.
+        self.spend = SessionSpend()
         # How wrong len//4 is for whatever model is in the fast slot, learned
         # from the prompt_tokens each reply reports. 1.0 until the first reply
         # comes back, which is the only moment the estimate stands alone.
@@ -506,7 +512,9 @@ class Agent:
         it, because the last provider that DID answer is a better guide than
         the len//4 assumption.
         """
-        scale = token_scale(getattr(reply, "usage", None), sent_estimate)
+        usage = getattr(reply, "usage", None)
+        self.spend.add(usage)
+        scale = token_scale(usage, sent_estimate)
         if scale is not None:
             self.token_scale = scale
 

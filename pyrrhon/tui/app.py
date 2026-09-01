@@ -29,6 +29,7 @@ from pyrrhon.commands import (  # noqa: F401 — registers commands
     mcp_cmd,
     mode_cmd,
     plugins_cmd,
+    session_cmd,
     settings_cmd,
     voice_cmd,
 )
@@ -36,10 +37,10 @@ from pyrrhon.commands.registry import CommandContext, dispatch
 from pyrrhon.config.settings import load_settings
 from pyrrhon.core.agent.loop import Agent
 from pyrrhon.core.context import history_tokens
-from pyrrhon.core.events import Citation, ProviderRetrying
+from pyrrhon.core.events import Citation, ProviderRetrying, ScreenArtifact
 from pyrrhon.core.mcp import MCPManager
 from pyrrhon.core.providers.llm import FallbackLLM
-from pyrrhon.core.session import Session
+from pyrrhon.core.session import Session, open_session
 from pyrrhon.tui import status
 from pyrrhon.tui.completion import CommandMenu, matches
 from pyrrhon.tui.editor import open_in_editor
@@ -99,6 +100,8 @@ class PyrrhonApp(App):
         start_voice: bool = False,
         mcp: MCPManager | None = None,
         plugins: list | None = None,
+        session: Session | None = None,
+        opening_notice: str = "",
     ):
         super().__init__()
         # Before anything else: CSS_PATH is parsed at startup against the
@@ -107,7 +110,10 @@ class PyrrhonApp(App):
         self.register_theme(PYRRHON_THEME)
         self.theme = PYRRHON_THEME.name
         self.repo_root = repo_root
-        self.session = Session(agent)
+        # Handed in when the channel resolved one (a resume, a saved
+        # session); built here otherwise, which is what every test does and
+        # what a run with --no-save wants.
+        self.session = session or Session(agent)
         self.mcp = mcp
         self.plugins = plugins or []
         self.last_citation: Citation | None = None
@@ -117,6 +123,11 @@ class PyrrhonApp(App):
         # terminal to hand an editor, so the tests swap this for a recorder.
         self._open_editor = open_in_editor
         self.last_command_response: str | None = None
+        # What the channel wants said before the first question — today, the
+        # resume notice and the ground the session already covered. Mounted
+        # after the splash rather than printed before the app takes the
+        # terminal, because the alternate screen wipes anything printed there.
+        self._opening_notice = opening_notice
         self._start_voice = start_voice
         self._renderer = TuiRenderer(self)
         if isinstance(agent.llm, FallbackLLM):
@@ -210,6 +221,13 @@ class PyrrhonApp(App):
         # ScreenArtifact, whose hook is a plain row mount, and the orientation
         # task calls its `render` synchronously from outside the message pump.
         self._orient_task = orient_in_background(self.agent, self._renderer.render)
+        if self._opening_notice:
+            # A ScreenArtifact, not a NoticeRow: NoticeRow wears the hedge-amber
+            # rail, which means "Pyrrhon could not verify this", and a list of
+            # what you already covered is not a hedge.
+            self._renderer.render(
+                ScreenArtifact(kind="markdown", content=self._opening_notice)
+            )
         if self._start_voice:
             self.notify(self.voice.start())
 
@@ -462,7 +480,13 @@ class PyrrhonApp(App):
             prompt.focus()
 
 
-def run_tui(repo: str, voice: bool = False, trust_repo: bool = False) -> None:
+def run_tui(
+    repo: str,
+    voice: bool = False,
+    trust_repo: bool = False,
+    resume: str | None = None,
+    save: bool = True,
+) -> None:
     """Entry point for the default (TUI) channel."""
 
     def _ask(question: str) -> bool:
@@ -473,13 +497,21 @@ def run_tui(repo: str, voice: bool = False, trust_repo: bool = False) -> None:
         # run_async() rather than App.run(): start_channel already owns the
         # asyncio.run, and the MCP manager's start()/stop() must be awaited
         # from that same task (anyio cancel-scope rule).
+        session, notice = open_session(agent, agent.repo_root, resume=resume, save=save)
         app = PyrrhonApp(
             repo_root=agent.repo_root,
             agent=agent,
             start_voice=voice,
             mcp=manager,
             plugins=plugins,
+            session=session,
+            opening_notice=notice,
         )
-        await app.run_async()
+        try:
+            await app.run_async()
+        finally:
+            # The last turn has nothing after it to flush it, and the crash
+            # path is precisely the session someone wants back.
+            session.close()
 
     start_channel(repo, _serve, ask=_ask, report=print, trust_repo=trust_repo)

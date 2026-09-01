@@ -71,6 +71,44 @@ class TokenUsage:
     total: int
 
 
+@dataclass
+class SessionSpend:
+    """Everything the provider charged this session for, added up.
+
+    M19. Every reply already reported `usage` and the only consumer was
+    `token_scale`, which reads the RATIO and discards the counts — so a user on
+    a metered key had no way to see what a two-hour walkthrough had cost. The
+    counts were being thrown away one line after they arrived.
+
+    Mutable and per-Agent rather than frozen and per-reply, because the
+    question `/cost` answers is cumulative. Requests are counted separately
+    from tokens: on a per-minute request ceiling the two run out at different
+    times, and a session can be blocked with plenty of token allowance left.
+    """
+
+    requests: int = 0
+    prompt: int = 0
+    completion: int = 0
+
+    @property
+    def total(self) -> int:
+        return self.prompt + self.completion
+
+    def add(self, usage: TokenUsage | None) -> None:
+        """Count one reply. A provider that reports nothing still counted.
+
+        The request is recorded even when `usage` is None, because a local
+        server that omits the block still consumed a request against whatever
+        ceiling the user is watching — and a request count that silently
+        undercounts is worse than one that admits it knows no tokens.
+        """
+        self.requests += 1
+        if usage is None:
+            return
+        self.prompt += usage.prompt
+        self.completion += usage.completion
+
+
 def _usage_from(response) -> TokenUsage | None:
     """Read a usage block off a response or a streamed chunk.
 

@@ -28,6 +28,7 @@ from pyrrhon.commands import (  # noqa: F401 — registers commands
     mcp_cmd,
     mode_cmd,
     plugins_cmd,
+    session_cmd,
     settings_cmd,
     voice_cmd,
 )
@@ -44,7 +45,7 @@ from pyrrhon.core.events import (
 )
 from pyrrhon.core.mcp import MCPManager
 from pyrrhon.core.providers.llm import FallbackLLM
-from pyrrhon.core.session import Session
+from pyrrhon.core.session import Session, open_session
 from pyrrhon.plugins import LoadedPlugin
 
 log = logging.getLogger("pyrrhon.repl")
@@ -116,7 +117,13 @@ class ConsoleRenderer(EventRenderer):
         )
 
 
-def run_repl(repo: str, voice: bool = False, trust_repo: bool = False) -> None:
+def run_repl(
+    repo: str,
+    voice: bool = False,
+    trust_repo: bool = False,
+    resume: str | None = None,
+    save: bool = True,
+) -> None:
     console = Console()
     if voice:
         # Voice is a TUI-channel feature; the plain REPL stays text-only.
@@ -149,9 +156,17 @@ def run_repl(repo: str, voice: bool = False, trust_repo: bool = False) -> None:
         orient = orient_in_background(  # noqa: F841
             agent, lambda brief: console.print(Markdown(brief.content))
         )
-        await _repl_loop(
-            agent, console, agent.repo_root, mcp=manager, plugins=plugins
-        )
+        session, notice = open_session(agent, agent.repo_root, resume=resume, save=save)
+        if notice:
+            console.print(f"[dim]{notice}[/dim]")
+        try:
+            await _repl_loop(
+                agent, console, agent.repo_root, mcp=manager, plugins=plugins,
+                session=session,
+            )
+        finally:
+            # The last turn has nothing after it to flush it.
+            session.close()
 
     start_channel(
         repo,
@@ -168,6 +183,7 @@ async def _repl_loop(
     repo_root: Path,
     mcp: MCPManager | None = None,
     plugins: list[LoadedPlugin] | None = None,
+    session: Session | None = None,
 ) -> None:
     ui = ConsoleUI(console)
     renderer = ConsoleRenderer(console, ui, agent.repo_root)
@@ -189,7 +205,9 @@ async def _repl_loop(
     # shape, and the payload is already an Event, so the dispatch table
     # decides what this channel says about it.
     agent.on_progress = renderer.render
-    session = Session(agent)
+    # Handed in when the channel resolved one; built here otherwise, which is
+    # what every test does and what --no-save wants.
+    session = session or Session(agent)
     # voice stays None: the plain REPL is a text channel; /voice answers honestly.
     ctx = CommandContext(
         repo_root=repo_root,
