@@ -29,6 +29,7 @@ that must stay true.
 | Path | Responsibility |
 |---|---|
 | `pyrrhon/cli.py` | Argument parsing, picks a channel. |
+| `pyrrhon/headless.py` | The non-interactive channel: `--print`, one question, one answer. |
 | `pyrrhon/bootstrap.py` | Composition root. `build_agent` wires the tool belt, both LLM slots, the grounding gate, and the system prompt. `start_channel` runs the shared startup sequence. `load_channel_plugins` is the repo trust gate. |
 | `pyrrhon/channels.py` | `EVENT_HOOKS` plus the `EventRenderer` base. One dispatch table for every channel. |
 | `pyrrhon/repl.py` | Text channel (rich). |
@@ -40,6 +41,7 @@ that must stay true.
 | `pyrrhon/tui/theme.py` | The six colours. The only file under `tui/` with a hex value. |
 | `pyrrhon/tui/pyrrhon.tcss` | All layout and styling, by `$token`. |
 | `pyrrhon/tui/palette.py`, `completion.py`, `prompt.py`, `editor.py`, `splash.py` | Command palette, inline `/` menu, multiline prompt, `$EDITOR` launch, startup splash. |
+| `pyrrhon/evals/strangers.py` | M17's two frozen stranger repos, and how to fetch them. |
 | `pyrrhon/core/providers/registry.py` | The LLM provider table. Data only; `BUILTIN_PROVIDERS` and the wizard's menu derive from it. |
 | `pyrrhon/core/providers/adapters.py` | The one place `core/` may import pipecat, and only `pipecat.adapters`. Seam only so far. |
 | `pyrrhon/voice/registry.py` | The STT/TTS provider table. Data only; imports no Pipecat. |
@@ -49,7 +51,9 @@ that must stay true.
 | `pyrrhon/core/agent/policy.py` | The turn state machine proper: the policy table, `TurnState`, and `decide()`. |
 | `pyrrhon/core/agent/subagent.py` | The bounded read-only subagent runner, shared by `think_deeper` and `explore`. |
 | `pyrrhon/core/tools/explore.py` | The scout: a locating question answered in one round instead of many. |
-| `pyrrhon/core/session.py` | History, modes, cancellable turns, latency. |
+| `pyrrhon/core/session.py` | History, modes, cancellable turns, latency, `open_session`. |
+| `pyrrhon/core/transcript.py` | The saved session: prose only, no coordinates. `/export` and `--resume` read it. |
+| `pyrrhon/core/agent/briefing.py` | What the model is told about the session it is in (M18). |
 | `pyrrhon/core/grounding/` | `gate.py` verifies citations; `evidence.py` records what tool output actually showed. |
 | `pyrrhon/core/tools/` | The belt. One module per family. |
 | `pyrrhon/core/events.py` | The event contract between core and channels. |
@@ -207,7 +211,17 @@ uv run ruff check .            # gated in CI
 uv run mypy pyrrhon/core       # gated in CI
 
 uv run python -m pyrrhon.evals.grounding evals/grounding.yaml   # needs an API key
+uv run python -m pyrrhon.evals.strangers                       # fetch the frozen repos
+uv run pyrrhon --print "question" .                            # headless, one turn
+uv run pyrrhon --continue .                                    # resume the last session
 ```
+
+Both eval runners take `--model provider/model` to override the fast slot for
+one run, which is what M17 item 5 needs (the same set against a weaker model)
+and what makes a two-model comparison possible without editing config between
+runs. The grounding runner **exits non-zero and refuses to certify a score
+when any turn ended in `stop_reason=error`** — see M17 below for why that is a
+check rather than a note in a plan.
 
 The text and TUI channels need one LLM key (`GROQ_API_KEY` by default, or
 configure another provider). Voice needs a key for whichever STT/TTS rows you
@@ -293,8 +307,11 @@ loop is undeniable.
 
 ## Current state
 
-Everything through M16d is implemented and tested, bar the one piece named
-under "Planned next". The parts worth knowing about before you change them:
+Everything through M21 is implemented and tested, bar the measurements named
+under "Planned next" — M16a–M16e (the harness), M17 (the evidence apparatus),
+M18 (the opening context), M19 (the session as a product) and M21 (Act 2 to
+parity). M20 is deliberately not started; see the note at the end of M21's
+section for why. The parts worth knowing about before you change them:
 
 **The TUI redesign (2026-08-23).** The Textual channel had not been designed
 since M2 and had drifted into a channel that measured far more than it showed.
@@ -1101,35 +1118,296 @@ no TTY means refuse.
 from anywhere; repo-level plugin *code* runs only after one consent prompt per
 repo. Worked example in `tests/fixtures/plugins/hello-reviewer/`.
 
+**The evidence apparatus (M17, 2026-09-02).** Every number above it was
+measured on `tests/fixtures/sample_repo` (three files) or on Pyrrhon itself,
+where the author's knowledge contaminates every judgment about whether an
+answer was good. VISION's four criteria are about a repo neither party wrote,
+and none of them had ever been run on one.
+
+`pyrrhon/evals/strangers.py` freezes two: `encode/httpx` at `b5addb64`
+(Python, ~18k lines) and `spf13/cobra` at `adbc8813` (Go, ~17k). Seventeen
+cases each, in `evals/strangers/`. **Freezing the SHA is not a detail** — a
+case says `httpx/_client.py:971`, so a run against a moving `main` compares
+today's model against yesterday's line numbers and calls the difference a
+regression. Every later comparison in the roadmap measures against the
+baseline these two produce.
+
+Cobra is the harder half deliberately: one flat package of very large files,
+so a question is answered by finding the right *function* and never by finding
+the right directory, which is exactly the query lexical search is worst at.
+M20 is gated on what that reports.
+
+**Every line number was read out of the frozen tree with grep and not one came
+from asking Pyrrhon.** A set built by recording what the agent said measures
+only whether the agent is consistent with itself, which it always is. That is
+the one part of this that cannot be automated later.
+
+Three things the sets deliberately do NOT contain, written down in
+`evals/strangers/README.md` rather than left to be rediscovered. Questions
+whose honest answer is "httpx does not implement this, it delegates at
+`_transports/default.py:165`" are absent, because the runner scores citations
+and not prose: the right answer and a confident wrong one cite the same line.
+Three otherwise-obvious baits are absent for the mirror reason — `yaml` and
+`plugin` against cobra, response caching against httpx — because in each case
+one real line carries the word, and a model that found it would be scored as
+fabricating when it had found the only evidence there is.
+
+**The S2S criterion is restated, and the restatement is a check rather than a
+sentence.** M16e's version was "the intervention rate falls substantially", and
+it was 0.0% in both arms, so it had no headroom to fall through — discovered
+only after a day's token budget had gone, and only by reading two reports side
+by side. `grounding.measurability_note` says it at the moment it prints the
+number: a zero rate over enough checks means the run cannot tell whether the
+gate is load-bearing, and therefore cannot support a before/after claim about
+the rate either. Too few checks is a different statement and gets a different
+line. A comparison needs a non-zero arm, which is what five fabrication baits
+per stranger repo exist to produce. If no available model fabricates even
+there, that is a finding rather than a failed run, and it argues the gate is
+cheap insurance rather than load-bearing — unblocking S2S on different grounds
+than the plan expected.
+
+**`grounding.dead_turn_warning` closes the confound that has now bitten three
+times.** A set of `must_not_cite: "*"` cases passes PERFECTLY when nothing
+answers at all, so a total outage scores like a partial success. M16e's pass
+read a 3/6 as a regression when it was six turns of `stop_reason=error`, and
+quoted a 5/5 from a bait arm where every turn had died. Both times the plan
+already said "read `stop_reason` before reading any score". Guidance that fails
+on its own terms twice is a check nobody wrote yet, so it is one now: it prints
+above the score, and the run exits non-zero, so a green CI line cannot certify
+an outage. Verified against a real 402 on 2026-09-02 — the runner reported 4/8,
+said the 4 was not a measurement, and exited 1.
+
+**The opening context (M18, 2026-09-02).** `bootstrap.orient_in_background`
+rendered `build_orientation` as a `ScreenArtifact` for the USER and gave the
+model one line, the repo root path. So every session opened with the human
+looking at a ranked census of the repo and the model looking at nothing, and
+round one went on re-deriving what was already drawn on screen.
+
+`core/agent/briefing.py` renders two blocks. The environment is the half a
+model cannot infer — today's date most of all, because "what changed last
+week" is unanswerable without it and a model with no date answers from its
+training cutoff and sounds certain doing so. The brief is the repo map,
+bounded to `MAX_BRIEF_CHARS` and stripped.
+
+Four things about it are load-bearing.
+
+**The brief carries no coordinate, and that is enforced rather than
+requested.** A system prompt outlives the read that justified a line number in
+exactly the way M16e's compaction summaries did, so `strip_line_numbers` runs
+over it — plus a second pass for the map's own `name:line` symbol rows, which
+carry no extension and are therefore invisible to the citation regex AND to
+the gate. A line number the gate cannot see is the one worth removing here.
+
+**Unknown renders as absent, never as a default.** `capture_git_state` answers
+`(None, None)` for a directory that is not a repo, and the renderer then says
+nothing about the branch. "Clean working tree" invented from a failed
+subprocess is a claim the model repeats and the user cannot check.
+
+**The block is appended after the delivery style, never folded into
+`system_prompt`.** `system_prompt` is the prefix a provider caches and the
+style block already varies with `/voice`, so everything that changes within a
+session sits on one side of that boundary instead of splitting the prefix into
+a cache family per session state.
+
+**Both halves ride the existing orientation task** — one index walk, two
+consumers, where until now only one existed. The model's copy therefore lands
+on whatever turn follows rather than on turn one, which is the trade the
+screen brief has always made.
+
+The prompt itself gained four things `tests/test_prompt_policy.py` pins by
+direction: a worked exemplar (four lines of transcript, where three paragraphs
+had described the same shape), the capability statement (the belt has no
+editor and nothing said so, so the model could offer a change it had no way to
+make), the three failure-recovery cases (an empty grep means the thing may be
+NAMED differently, not that it is absent), and a dispatch table. `TEXT_STYLE`
+gained the thread — "offer the next hop, one at a time" lived only in
+`VOICE_STYLE`, so the podcast quality was voice-only by accident — and a soft
+ceiling, since "you can be thorough" with nothing behind it invites a survey.
+
+**The risk M18 runs is the mirror of M16e's**: a prompt carrying a repo map can
+make a model stop looking and cite from the map. The counterweight ships in the
+same block, the invariant test is the guard, and a rise in the gate's
+`stripped` arm is the symptom. **That measurement is owed** and blocked on the
+same thing everything else is.
+
+**The session as a product (M19, 2026-09-02).** `history` died with the
+process, for a product whose use case is a week-long onboarding. `--continue`
+and `--resume <id>` bring one back; `/clear`, `/compact`, `/cost`, `/export`,
+`/covered` and `/sessions` are the controls.
+
+**Only the prose is persisted, and that is the design rather than a shortcut.**
+A saved assistant message is gated prose, which M16e already strips of
+coordinates on the way into history and which `transcript._prose` strips again
+on the way out of the file — so a resumed session physically cannot cite from
+what it remembers and has to reopen the file. That is M16e's admissibility rule
+enforced by the shape of the data instead of by an instruction the model may
+ignore, and it is why this was safe to build now and would not have been
+before. It is also what makes the file worth reading, which is what `/export`
+hands over.
+
+**The log is not a projection of history and the divergence is deliberate.**
+Compaction summarizes early turns away; the log keeps them. What was said and
+what the model currently holds are different things.
+
+**A turn is written at the START of the next one.** Barge-in truncation reaches
+`Session` after the turn's generator has finished, so a record written at the
+end of its own turn preserves words the user cut off — and the transcript must
+never be the one artifact claiming Pyrrhon said something it was stopped from
+saying. `_flush_transcript` re-reads the answer off history for the same
+reason.
+
+`/compact` is the only place `FIT_FULL` runs on demand, because the turn's own
+pre-flight is capped at rung 2 for the reasons M16b paid to learn; it reports a
+measurement rather than a reassurance, since the complaint was invisibility.
+`/cost` finally spends the counts that rode every response since M15b and were
+discarded one line after `token_scale` took the ratio out of them — requests
+beside tokens, because a per-minute REQUEST ceiling blocks a session with
+plenty of token allowance left, and it says out loud that a daily budget
+appears in no header at all. `/covered` is the questions rather than a summary
+of the conclusions: a summary needs an LLM call and goes stale against a repo
+that moved, where the questions stay true and are what someone scans for
+"where was I". It rides the resume notice rather than waiting to be asked for.
+
+`open_session` lives in `session.py` rather than in each channel for the reason
+`start_channel` exists: two copies of an ordered startup sequence diverge
+quietly, and the divergence reads as a bug in one channel rather than a missing
+edit.
+
+**Act 2 to parity (M21, 2026-09-02).** `DESIGN_PROMPT` never said whether the
+user was designing INTO the open repo or from nothing — a distinction that
+changes every question after the first. It now names it and puts it before the
+first question: an extension is looked at before it is interrogated, because
+the constraints that matter most are already on disk. The counterweight ships
+beside it, since a rule that only says "look at the repo" makes a model force a
+connection to code that has nothing to do with what is being built.
+
+`evals/design.yaml` went from five cases to ten, and the runner grew the two
+keys it needed. `history` lets a case be a later turn: "the reasoning is
+established, so write the spec" is by definition not turn one, so until now the
+only measurable behaviour was refusing to write one, and a model that
+challenges everything and produces nothing scored 5/5. `must_look` asserts the
+open repo was read before a design that extends it — any read tool counts,
+because the check is whether it looked and not which door it used, and
+`write_spec` is excluded because writing the answer is not reading the
+constraints.
+
+**Ops.** `pyrrhon --print` is the headless channel: the answer to stdout and
+nothing else, progress to stderr and suppressed when stderr is not a terminal,
+`--json` for citations plus the turn's trace. The report is written once at the
+end rather than streamed, because a partial answer on stdout is worse than none
+for a caller that will act on it. The trust gate refuses instead of prompting,
+since a headless run from an interactive shell would otherwise stop dead on a
+consent prompt nobody is watching.
+
+`.github/workflows/live-smoke.yml` runs one grounded question against one real
+provider nightly. It asserts on the CITATION rather than the prose: a provider
+returning a polite paragraph and no tool call is exactly the break it exists to
+find, and no check that only asks whether an answer came back can see it. A
+missing key skips rather than fails, and the key is declared at job level
+because a step's `if` reads the env context as it stood *before* the step.
+
+**M20 (retrieval) is deliberately NOT started**, and the reason is the roadmap's
+own sequencing rather than appetite. Lexical search is the wrong tool for
+"where is the thing I can't name", and the two cheap candidates — symbol-name
+fuzzy matching over the existing tree-sitter index, and a ranked docstring and
+comment pass — are cheap enough to be tempting. Building either before M17 has
+reported where the aim is actually bad is optimising against a fixture, which
+is the discipline M16b applied to its own policy numbers. Cobra exists in the
+stranger set precisely to produce that report.
+
 Gemini Live speech-to-speech is **still parked**, and M16e did not unpark it.
 The constraint's real shape is unchanged — gate-*before*-speech is what blocks
 S2S, not verification itself — and M16e built the mechanism that was meant to
 remove the reason for it: tool results as the only admissible source of code
 facts, stated as a rule in the prompt and closed off in history. What is
-missing is the evidence. S2S becomes viable when the gate's intervention rate
-falls substantially *with citation accuracy held*, measured by the eval, and
-neither number has been taken because no provider key works. The mechanism
-landing is not the criterion being met. Until both numbers exist the block
-stands, and it is not a licence to weaken the gate.
+missing is the evidence.
 
-**Planned next. M16a through M16e are code-complete. M16e's runtime pass ran on
-2026-09-01 and is written up above; the other three are still outstanding and
-wait on token allowance rather than on a key.** Spec:
+**M17 restated the criterion, because M16e's version was unmeasurable.** "The
+intervention rate falls substantially" presumes a non-zero starting rate and
+the rate was 0.0% in both arms. The restatement: the gate must intervene on a
+set where a model demonstrably fabricates, so a non-zero baseline is required
+before any before/after comparison is quoted — and `measurability_note` now
+says so at the moment the runner prints the number, rather than leaving it to
+whoever reads two reports side by side. If no available model fabricates even
+on the stranger repos, that is the finding, and it argues the gate is cheap
+insurance rather than a load-bearing component, which unblocks S2S on
+different grounds than the plan expected.
+
+Neither number has been taken, because as of 2026-09-02 both configured
+provider keys are dead — Groq 401 on a truncated key, Cerebras 402 on a spent
+account. The mechanism landing is not the criterion being met. Until the
+numbers exist the block stands, and it is not a licence to weaken the gate.
+
+**Planned next. M16a–M16e, M17, M18, M19 and M21 are code-complete. What is
+missing is measurement, and as of 2026-09-02 that is blocked on CREDENTIALS
+rather than on code, budget, or design.** Spec:
 `docs/superpowers/specs/2026-08-29-pyrrhon-m16-agent-harness-design.md`; the
-five plans are `m16a` through `m16e` in `docs/superpowers/plans/`. Two runtime
-passes are the parts left open, and both are blocked on a working provider key
-rather than on code (the Groq key in `~/.pyrrhon/credentials.toml` works as of
-2026-09-01; its DAILY token budget is what runs out, see the two-ceilings note
-below): M16b's (the grounding eval, the tuning of the policy
-numbers, and driving both channels) and M16c's (a transcript replay confirming
-that no read exceeds what the preceding search pointed at, and a grounding-eval
-comparison confirming that suppressing a re-read costs the gate no citation it
-needed). M16d adds a third: a genuinely multi-file question driven through both
-channels, confirming `/debug-history` shows one `explore` result rather than a
-dozen tool results, plus the live half of its context-saving comparison. M16e's
-own pass is **done** for the eval half and reported above; what it still owes is
-both channels driven by hand against a question about code that does not exist
-and a question spanning several files.
+plans are `m16a` through `m16e` plus `2026-09-01-pyrrhon-post-m16-roadmap.md`
+in `docs/superpowers/plans/`.
+
+**Both configured providers are dead, and they fail differently — check which
+before assuming a budget problem.** Verified 2026-09-02 by running the fixture
+grounding eval against each:
+
+* **Groq** returns `401 Invalid API Key`. The stored key in
+  `~/.pyrrhon/credentials.toml` is **18 characters**, and a real `gsk_` key is
+  around 56, so it is truncated rather than expired. This is a *different*
+  failure from the daily-budget exhaustion recorded on 2026-09-01 and it will
+  not clear on its own. Re-paste the key with `pyrrhon --setup`.
+* **Cerebras** returns `402 Payment required to access this resource`. The key
+  is well-formed and `models.list()` succeeds against it, offering
+  `gpt-oss-120b` and `gemma-4-31b` — so the account authenticates and simply
+  has no quota. A working `models.list()` is not evidence of a usable account,
+  which is worth knowing because `preconnect()` uses exactly that call.
+
+Everything below runs the moment one key works. The apparatus is built and
+`--model provider/model` means none of it needs a config edit between runs.
+
+The owed passes, in the order one sitting should take them:
+
+1. **The M17 baseline.** `uv run python -m pyrrhon.evals.strangers`, then the
+   grounding eval against each stranger repo. This is the number every later
+   comparison is measured against, so it comes first and nothing is changed
+   between it and the runs that follow.
+2. **VISION's four criteria by hand** on both stranger repos, in both
+   channels, transcripts written down verbatim including where it was wrong.
+   Criterion 3 is the one to bait hardest.
+3. **M18's own measurement**, `prompts.py` and `briefing.py` as the only
+   variables, against the M17 set: mean rounds, mean tool calls, citation
+   count, `stop_reason` distribution, accuracy. The exit condition is that
+   first-round tool calls re-deriving repo shape drop measurably while
+   accuracy holds. **Watch `stripped`** — a rise is the symptom of the risk
+   M18 runs, which is a model citing from the map instead of looking.
+4. **The four M16 passes.** M16b's policy-number tuning (`Stop(reason="rounds")`
+   in real traces is the signal) and both channels driven by hand; M16c's
+   transcript replay confirming no read exceeds what the preceding search
+   pointed at, plus the comparison confirming re-read suppression costs the
+   gate no citation; M16d's multi-file question through both channels with
+   `/debug-history` showing one `explore` result rather than a dozen tool
+   results; M16e's remaining half, both channels by hand against code that
+   does not exist and a question spanning several files.
+5. **The S2S criterion, restated.** Run the fabrication baits against a weaker
+   model — `--model` exists for this — and require a non-zero baseline
+   intervention rate before any before/after comparison is quoted. A null
+   across both stranger repos is itself the finding.
+6. **M16a's listen test**, which needs a human rather than a key:
+   `uv run pyrrhon --voice .` with `[model] max_tokens` set low, confirming no
+   fragment is spoken as though it were finished.
+
+Two rules for reading any of it, both paid for. **Read `stop_reason` before
+reading any score** — the runner now refuses to certify a run with dead turns,
+but the discipline still applies to anything you read by eye. And **read the
+429 body before diagnosing from request size**, because the per-minute headers
+read FULL when the daily budget is spent.
+
+One known intermittent, observed several times on 2026-09-02 and never
+reproducible in isolation: `tests/test_tui_voice_turns.py::test_a_late_turn_finished_cannot_close_the_turn_that_replaced_it`
+fails, and `tests/test_adapter_driver.py` reports two teardown ERRORs, in some
+full-suite runs on Windows and not others. Both pass alone and both pass on a
+re-run of the identical command, which places them with the asyncio
+proactor-teardown noise the suite already produces. Not chased, on M17's own
+"collect, do not repair" rule; the likely cause in the first case is a single
+`await pilot.pause()` where the deferred voice hook needs two.
 
 Two things the 2026-09-01 run confirmed live as a side effect, both worth more
 than the milestone they came from. M16a's 429 path declined a `retry-after` of
@@ -1205,8 +1483,19 @@ What is not done is the evidence. M16e's eval pass ran on 2026-09-01: the tool
 policy is **proven** (a fifth of the rounds gone, `Stop(reason="rounds")` from
 two to zero, accuracy up), and its own criterion is **unmeasurable**, because
 the gate's intervention rate was already 0.0% before the change. Three runtime
-passes remain, plus driving both channels by hand, and they wait on daily token
-allowance rather than on a key.
+passes remain, plus driving both channels by hand, and as of 2026-09-02 they
+wait on a working key rather than on allowance.
+
+**Post-M16 (M17-M21) closed everything on the roadmap that code could close,
+and the shape of what is left changed with it.** The gap used to be "the
+harness is built and unproven"; it is now "the harness is built, the apparatus
+to prove it is built, and no provider will answer". Two stranger repos are
+frozen with 34 human-derived cases, the eval runners take `--model` and refuse
+to certify a run whose turns died, the model finally gets the repo map the user
+always got, a session survives the night, Act 2 knows a repo is open, and there
+is a headless channel and a nightly live smoke. Not one of those is a
+measurement, which is the honest summary: M17 built the instrument and did not
+get to take the reading.
 
 Deferred on purpose, with triggers recorded in the M15a plan: the
 `SoundfileMixer` thinking bed, until someone decides what it should sound like.
