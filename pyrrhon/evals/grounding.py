@@ -253,6 +253,48 @@ def _gate_line(gate: GateCounters) -> str:
     )
 
 
+# Below this many gate checks, a 0.0% rate says nothing either way: a set that
+# produced two citations has not tested the gate, it has just been short. Above
+# it, a zero is a real observation about the model and worth saying out loud.
+MEASURABILITY_FLOOR = 10
+
+
+def measurability_note(gate: GateCounters) -> str:
+    """The warning M16e's pass needed and did not have. "" when there is none.
+
+    M16e's S2S criterion was "the intervention rate falls substantially". It
+    was 0.0% in BOTH arms, so the criterion had no headroom to fall through
+    and the eval could neither confirm nor refute it — which was discovered
+    only after a day's token budget had been spent on it, and only by reading
+    two reports side by side.
+
+    So the runner says it now. This is the restated criterion made mechanical:
+    a before/after comparison of the gate means nothing until some arm
+    intervenes, and the only way to get one is a set where a model actually
+    fabricates. If none does even on the stranger repos, that is a finding
+    rather than a failed run, and it argues the gate is cheap insurance rather
+    than a load-bearing component — which unblocks S2S on different grounds
+    than the plan expected.
+    """
+    if gate.checks < MEASURABILITY_FLOOR:
+        return (
+            f"  NOTE: only {gate.checks} gate check(s) — too few to say "
+            "anything about the intervention rate either way."
+        )
+    if gate.intervened:
+        return ""
+    return "\n".join(
+        (
+            "  NOTE: the gate intervened on nothing. This run CANNOT tell "
+            "whether the gate is load-bearing,",
+            "        so it cannot support a before/after claim about the "
+            "intervention rate either.",
+            "        A comparison needs a set where some arm is non-zero — "
+            "see evals/strangers/README.md.",
+        )
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m pyrrhon.evals.grounding",
@@ -296,6 +338,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"grounding eval: {report.passed}/{report.total} passed")
     print(f"  provenance downgrades: {report.downgrades}")
     print(f"  gate intervention rate: {_gate_line(report.gate)}")
+    note = measurability_note(report.gate)
+    if note:
+        print(note)
     for failure in report.failures:
         print(f"  FAIL {failure}")
 

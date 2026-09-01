@@ -2,7 +2,7 @@ from pathlib import Path
 
 from pyrrhon.core.agent.loop import Agent
 from pyrrhon.core.events import Citation
-from pyrrhon.core.grounding.gate import GroundingGate
+from pyrrhon.core.grounding.gate import GateCounters, GroundingGate
 from pyrrhon.core.providers.llm import LLMReply
 from pyrrhon.evals.grounding import EvalReport, _check, run_eval
 from tests.helpers import FakeLLM
@@ -323,3 +323,36 @@ def test_a_case_can_cap_the_number_of_model_rounds():
 
 def test_a_case_without_a_cap_never_fails_on_rounds():
     assert _check_rounds({}, rounds=99) is None
+
+
+def test_a_zero_intervention_rate_says_it_cannot_be_compared():
+    """M17's restated S2S criterion, made mechanical.
+
+    M16e's criterion was "the intervention rate falls substantially". It was
+    0.0% in BOTH arms, so it had no headroom to fall through — and that was
+    discovered only after a day's token budget had been spent, and only by
+    reading two reports side by side. The runner says it now, at the moment
+    the number is printed.
+    """
+    from pyrrhon.evals.grounding import measurability_note
+
+    silent = GateCounters(checks=26, promoted=26)
+    note = measurability_note(silent)
+    assert "CANNOT tell whether" in note
+    assert "evals/strangers/README.md" in note
+
+
+def test_a_gate_that_intervened_needs_no_warning():
+    from pyrrhon.evals.grounding import measurability_note
+
+    assert measurability_note(GateCounters(checks=26, intervened=1, promoted=25, stripped=1)) == ""
+
+
+def test_too_few_checks_is_its_own_answer():
+    """A set that produced two citations has not tested the gate, it has just
+    been short. Saying "the gate never intervened" about that is a stronger
+    claim than the run can support."""
+    from pyrrhon.evals.grounding import measurability_note
+
+    note = measurability_note(GateCounters(checks=2, promoted=2))
+    assert "too few" in note
