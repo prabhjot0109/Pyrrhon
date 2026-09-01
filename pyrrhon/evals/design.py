@@ -49,6 +49,12 @@ def _check_design(events: list, case: dict) -> str | None:
     required = case.get("must_write")
     if required and SPEC_TOOL not in tools:
         return f"expected {SPEC_TOOL} for {required}, got tools: {tools or 'none'}"
+    # M21. A repo is open, so a design that extends it must be grounded in
+    # what is already there. Any read tool counts: the check is whether the
+    # model LOOKED, not which door it used. write_spec is excluded because
+    # writing the answer is not the same as reading the constraints.
+    if case.get("must_look") and not [t for t in tools if t != SPEC_TOOL]:
+        return "expected the open repo to be read before designing into it"
     return None
 
 
@@ -61,6 +67,13 @@ async def _run_cases(cases: list[dict], session_factory, repeat: int) -> DesignR
             # Act 2's push-back is mode-gated: scoring an understand-mode turn
             # would measure the wrong prompt entirely.
             session.set_mode("design")
+            # Seeded BEFORE set_mode would be wrong and after it is right:
+            # set_mode injects the base prompt into an empty history, so a
+            # history seeded first would sit above the system message rather
+            # than below it. The two cases that need this are the ones a
+            # single opening turn cannot express — "the reasoning is now
+            # established, so write the spec" is by definition not turn one.
+            session.history.extend(case.get("history") or [])
             events = [event async for event in session.run_turn(case["premise"])]
             problem = _check_design(events, case)
             if problem is None:

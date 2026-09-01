@@ -109,3 +109,19 @@ def test_text_mode_is_bounded():
     is stated and that the overflow becomes the next hop."""
     assert "answers most questions completely" in flat(TEXT_STYLE)
     assert "offer the rest as the next hop" in flat(TEXT_STYLE)
+
+
+def test_design_mode_knows_a_repo_is_open():
+    """M21. DESIGN_PROMPT never said whether this was greenfield or an
+    extension of the repo the session is already pointed at — a distinction
+    that changes every answer after the first question. The failure it now
+    names is the expensive one: a spec that is internally coherent and
+    impossible to build here, because it looks finished."""
+    from pyrrhon.core.agent.design_prompts import DESIGN_PROMPT
+
+    assert "EXTENSION" in flat(DESIGN_PROMPT)
+    assert "Go and look before you interrogate" in flat(DESIGN_PROMPT)
+    # The other half, and it is not decoration: a rule that only says "look at
+    # the repo" makes a model force a connection to code that has nothing to
+    # do with what the user is designing.
+    assert "design greenfield" in flat(DESIGN_PROMPT)

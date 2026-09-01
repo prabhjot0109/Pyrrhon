@@ -72,6 +72,9 @@ class FakeSession:
     def __init__(self, events):
         self._events = events
         self.mode = "understand"
+        # A real Session injects the base prompt into an empty history when
+        # set_mode is called first, which is the ordering the runner relies on.
+        self.history: list[dict] = []
 
     def set_mode(self, mode: str) -> None:
         self.mode = mode
@@ -126,3 +129,42 @@ def test_an_empty_case_file_is_not_a_pass(tmp_path: Path):
     report = run_design_eval(yaml_path, lambda: FakeSession([]))
     assert report.total == 0
     assert report.passed == 0
+
+
+def test_a_case_can_be_a_later_turn(tmp_path: Path):
+    """M21. "The reasoning is now established, so write the spec" is by
+    definition not turn one, and until the runner could seed history there was
+    no way to express the half of Act 2 that produces an artifact — so the
+    only measured behaviour was refusing to write one."""
+    yaml_path = tmp_path / "design.yaml"
+    yaml_path.write_text(
+        '- premise: "Write it up."\n'
+        "  must_write: PRD.md\n"
+        "  history:\n"
+        '    - {role: user, content: "postgres, because we join constantly"}\n'
+        '    - {role: assistant, content: "Agreed. What is the read/write mix?"}\n',
+        encoding="utf-8",
+    )
+    seen: list[FakeSession] = []
+
+    def factory():
+        session = FakeSession([ToolCallStarted(name="write_spec", args={})])
+        seen.append(session)
+        return session
+
+    report = run_design_eval(yaml_path, factory)
+    assert report.passed == 1, report.failures
+    # Seeded AFTER set_mode, which is what puts it below the system message
+    # rather than above it.
+    assert seen[0].mode == "design"
+    assert len(seen[0].history) == 2
+
+
+def test_must_look_wants_the_repo_read_not_the_spec_written():
+    """M21's own check. A design that extends the open repo has to be grounded
+    in what is already there, and write_spec is excluded because writing the
+    answer is not the same as reading the constraints."""
+    case = {"premise": "Add a retry layer to the client.", "must_look": True}
+    assert _check_design([ToolCallStarted(name="grep", args={})], case) is None
+    assert _check_design([ToolCallStarted(name="write_spec", args={})], case) is not None
+    assert _check_design([], case) is not None
