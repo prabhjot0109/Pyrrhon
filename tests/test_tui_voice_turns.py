@@ -37,6 +37,34 @@ def make_app(repo_root: Path) -> PyrrhonApp:
     return PyrrhonApp(repo_root=repo_root, agent=agent)
 
 
+async def settle(pilot, until, what: str, limit: int = 20) -> None:
+    """Pause until a burst of deferred voice events has actually landed.
+
+    `_on_voice_event` hands every event to `call_later`, and one
+    `pilot.pause()` drains the message queue once — which is not enough for a
+    burst whose hooks are `async def` and await rotations of their own. A test
+    that acts after a single pause is not testing the ordering it describes;
+    it is testing whichever ordering the scheduler happened to produce, which
+    is why this file went from green to a coin flip depending on machine load.
+
+    The failure it produced was a good imitation of a real bug. With the
+    transcription still queued, the typed `begin_turn()` runs FIRST, the
+    deferred `on_transcription` rotates after it, and the utterance ends up
+    owning the NEWER turn — which the generation guard then closes, correctly,
+    while the assertion reads the missing row as the guard being broken.
+
+    So every wait here is on an observable effect. Raising on timeout rather
+    than returning quietly, because an event that never lands is its own
+    failure and a silent give-up reports it as whatever the next assertion
+    happens to be about.
+    """
+    for _ in range(limit):
+        await pilot.pause()
+        if until():
+            return
+    raise AssertionError(f"voice events never settled: waiting for {what}")
+
+
 def speech_rows(app: PyrrhonApp) -> list:
     return list(app.query("AssistantRow.speech"))
 
@@ -183,9 +211,18 @@ async def test_a_late_turn_finished_cannot_close_the_turn_that_replaced_it(
     """
     app = make_app(sample_repo)
     async with app.run_test(size=(120, 40)) as pilot:
+        before = app.turn.generation
         app._on_voice_event(Transcription(text="A spoken question?"))
         app._on_voice_event(SpeechChunk(text="A spoken answer."))
-        await pilot.pause()
+        # BOTH events, not just the rotation: the premise is that the
+        # utterance's turn is older than the typed one AND already holds the
+        # answer. A speech chunk still queued lands on the typed turn instead
+        # and takes its working row down, which is the assertion below.
+        await settle(
+            pilot,
+            lambda: app.turn.generation != before and app.turn.speaking,
+            "the spoken turn to open and start speaking",
+        )
         spoken = app.turn.generation
 
         # The turn is replaced — what a typed turn's begin_turn() does.
@@ -201,10 +238,15 @@ async def test_a_turn_finished_still_closes_its_own_turn(sample_repo: Path):
     """The other half of the guard: it must not refuse the normal case."""
     app = make_app(sample_repo)
     async with app.run_test(size=(120, 40)) as pilot:
+        before = app.turn.generation
         app._on_voice_event(Transcription(text="A question?"))
         app._on_voice_event(SpeechChunk(text="An answer."))
         app._on_voice_event(TurnFinished())
-        await pilot.pause()
+        await settle(
+            pilot,
+            lambda: app.turn.generation != before and not app.turn.speaking,
+            "the spoken turn to open and close",
+        )
         assert not app.turn.speaking
         assert not list(app.query(WorkingRow))
 

@@ -1306,6 +1306,14 @@ find, and no check that only asks whether an answer came back can see it. A
 missing key skips rather than fails, and the key is declared at job level
 because a step's `if` reads the env context as it stood *before* the step.
 
+**The 3.14 cap is still earned, checked 2026-09-02.** `requires-python` is
+`>=3.12,<3.14` because `pyaudio` compiles against `portaudio.h` and ships no
+wheel for 3.14, so a clean install on 3.14 dies in a C compiler rather than in
+our code. PyPI still has `pyaudio` at 0.2.14 with wheels for cp38 through
+cp313 and nothing newer. Re-check the wheel tags rather than the version — a
+release that adds cp314 may not bump the minor — and lift the cap when one
+appears.
+
 **M20 (retrieval) is deliberately NOT started**, and the reason is the roadmap's
 own sequencing rather than appetite. Lexical search is the wrong tool for
 "where is the thing I can't name", and the two cheap candidates — symbol-name
