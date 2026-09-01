@@ -31,6 +31,7 @@ from pathlib import Path
 
 from pyrrhon.config.settings import Settings, load_settings
 from pyrrhon.config.trust import Grant, read_trust_file, record_grants
+from pyrrhon.core.agent.briefing import capture_session_context
 from pyrrhon.core.agent.loop import Agent
 from pyrrhon.core.agent.soul import build_system_prompt, pending_soul_grants
 from pyrrhon.core.events import ScreenArtifact
@@ -160,6 +161,14 @@ def orient_in_background(
     not wait on a cold index walk to appear. Same fire-and-forget shape as the
     warm-ups above, and for the same reason — a repo with no readable source is
     a normal case, not a startup failure.
+
+    One walk, two consumers, and until M18 only one of them existed. The screen
+    got the census and the ranked map; the model got the repo root path and
+    nothing else, so it opened every session blinder than the user watching it
+    and spent round one re-deriving what was already on screen. The model's
+    copy is built second because the screen's is what the user is waiting on,
+    and it lands on whatever turn follows rather than on turn one — the same
+    trade the screen brief has always made.
     """
     tool = agent.tools.get("find_symbol")
     index = getattr(tool, "index", None)
@@ -171,6 +180,12 @@ def orient_in_background(
             render(await build_orientation(agent.repo_root, index))
         except Exception:  # pragma: no cover - never let a brief break startup
             log.debug("orientation brief failed", exc_info=True)
+        try:
+            agent.session_context = await capture_session_context(
+                agent.session_context, index
+            )
+        except Exception:  # pragma: no cover - a blind model still answers
+            log.debug("session context capture failed", exc_info=True)
 
     return asyncio.create_task(_orient())
 

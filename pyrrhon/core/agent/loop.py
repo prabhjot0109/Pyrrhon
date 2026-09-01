@@ -26,6 +26,7 @@ from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
 
+from pyrrhon.core.agent.briefing import SessionContext, render_session_context
 from pyrrhon.core.agent.escalate import ThinkDeeperTool
 from pyrrhon.core.agent.guards import (
     ToolGuard,
@@ -306,6 +307,12 @@ class Agent:
         self.voice_active = voice_active
         # Mutable: Session.set_mode reassigns it on /mode switches.
         self.mode = mode
+        # What the model is told about the session it is in (M18). Starts with
+        # only the fact a synchronous caller can know for free; the background
+        # orientation task replaces it wholesale once the index is warm and
+        # git has answered. A whole-object swap rather than field writes,
+        # because the walk runs in another task while the turn loop reads it.
+        self.session_context = SessionContext(repo_root=repo_root)
         # The configured value, or None for "ask the driver". Read through the
         # two properties below rather than directly: which of them a caller
         # wants is a real distinction, not a spelling.
@@ -537,7 +544,18 @@ class Agent:
         # stays the base system message we can safely rewrite here.
         with trace.time_preamble():
             style = VOICE_STYLE if self.voice_active else TEXT_STYLE
-            system_content = f"{self.system_prompt}\n{style}"
+            # Session context goes AFTER the style, never into
+            # system_prompt. system_prompt is the prefix a provider
+            # caches and the style block already varies with /voice, so
+            # everything that changes within a session sits on one side
+            # of that boundary instead of splitting the prefix into a
+            # cache family per session state.
+            session = render_session_context(
+                self.session_context,
+                mode=self.mode,
+                voice_active=self.voice_active,
+            )
+            system_content = f"{self.system_prompt}\n{style}\n{session}"
             if not history:
                 history.append({"role": "system", "content": system_content})
             elif history[0].get("role") == "system":
