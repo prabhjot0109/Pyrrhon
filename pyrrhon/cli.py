@@ -41,6 +41,23 @@ def main(argv: list[str] | None = None) -> None:
         help="Start with the voice pipeline on (equivalent to /voice on)",
     )
     parser.add_argument(
+        "-p",
+        "--print",
+        dest="print_prompt",
+        nargs="?",
+        const="",
+        metavar="QUESTION",
+        help=(
+            "Answer one question and exit, printing to stdout. Reads the "
+            "question from stdin when none is given, so it pipes."
+        ),
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="With --print, emit the answer, its citations and the turn's trace as JSON",
+    )
+    parser.add_argument(
         "--setup",
         action="store_true",
         help="Run the provider/API-key setup wizard, then start",
@@ -63,7 +80,19 @@ def main(argv: list[str] | None = None) -> None:
         run_wizard()
 
     # Channels imported lazily so `--version` works without touching them.
-    if args.text:
+    if args.print_prompt is not None:
+        # Checked before --text and --voice rather than beside them: --print
+        # is a different KIND of run, not a third screen. Voice on a channel
+        # with no microphone and no listener would be a silent no-op.
+        from pyrrhon.headless import main_headless
+
+        main_headless(
+            args.repo,
+            args.print_prompt or None,
+            trust_repo=args.trust_repo,
+            as_json=args.json,
+        )
+    elif args.text:
         from pyrrhon.repl import run_repl
 
         run_repl(args.repo, voice=args.voice, trust_repo=args.trust_repo)
