@@ -972,18 +972,52 @@ The eval also grew a `history` key per case, because the one probe this rule is
 most about — a follow-up the model could answer from recollection — was
 inexpressible against empty history.
 
-**The number is not measured, and that is the honest state of the milestone.**
-Both stored keys answer 4xx (Groq `401`, Cerebras `403`), so the eval runs end
-to end and reports zeros because every turn died before producing prose. Until
-a baseline and an after-run exist, **M16e's criterion is unmet and S2S stays
-blocked.** Do not read the mechanism landing as the criterion being met; they
-are different claims, and the plan is explicit that failing to move the rate is
-an acceptable result to record, never an argument for relaxing a check.
+**Measured 2026-09-01 against a working Groq account, and the criterion turned
+out to be unmeasurable.** The eval was run twice on the fixture set with
+`prompts.py` as the only variable: once with the file at `f7032e2` (the
+pre-M16e prompt) and once at HEAD. Model `openai/gpt-oss-120b`, n=8 per arm,
+one run each.
 
-One trap worth carrying: a run against a dead key scores 4/8 on the fixture
-set, because every `must_not_cite: "*"` case passes trivially when the model
-produces no citations at all. The same confound M16b's record flags for its
-3/6-vs-5/6 comparison. Read `stop_reason` before reading the score.
+| | before (pre-M16e prompt) | after (HEAD) |
+|---|---|---|
+| cases passed | 6/8 | **7/8** |
+| gate intervention rate | **0/15 checks (0.0%)** | **0/26 checks (0.0%)** |
+| citations promoted | 2 | **3** |
+| hedged / stripped | 0 / 0 | 0 / 0 |
+| mean rounds per turn | 5.12 | **4.12** |
+| mean tool calls per turn | 3.88 | **3.38** |
+| `Stop(reason="rounds")` | 2 | **0** |
+| turns ending in `error` | 1 | **0** |
+
+**The intervention rate was already 0.0% before the change, so it cannot
+fall.** That is the finding, and it is not the same as M16e failing. The gate
+promoted every reference the model produced and hedged or stripped none, in
+both arms. A criterion phrased as "the rate falls substantially" has no
+headroom to fall through, so this eval can neither confirm nor refute it.
+
+An attempt was made to find headroom where it should exist. The self set's five
+fabrication-class cases name a REAL file and ask about something not in it, so
+a guess lands on a plausible in-range line and the path verifies — the one
+shape the fixture set cannot produce. The before arm intervened **0/5** as
+well, with the model correctly declining rather than guessing. **Both bait arms
+are void and must not be quoted**: four of five before-turns and all five
+after-turns ended in `stop_reason=error`, and 5/5 "passed" is exactly the
+`must_not_cite: "*"` confound. Read `stop_reason` before reading any score.
+
+**What did move is M16c's and M16d's target, not M16e's own.** A fifth of the
+rounds went away on a THREE-FILE repo, both cases that had been hitting the
+round cap now finish under it, and accuracy and citation count both went up
+rather than down — so assumption 3 did not bite. The counterweight held: 26
+gate checks against 15 means the answers got *longer*, not vaguer.
+
+**S2S therefore stays blocked, and the reason is now specific.** The plan is
+explicit that a rate which does not fall leaves the block in place, and that
+stands. But the honest reading is not "verification upstream did not work" — it
+is that this model, on this eval, was never tripping the gate, so the eval
+cannot tell whether the gate is load-bearing. Settling the S2S question needs
+cases where a model actually fabricates. A null across thirteen baseline cases
+is weak evidence at best, and it is not grounds for removing a check that costs
+1-2ms.
 
 **LLM lane and vision (M15b).** LLM providers are rows in
 `core/providers/registry.py`; `BUILTIN_PROVIDERS` and the wizard's catalog are
@@ -1078,24 +1112,39 @@ neither number has been taken because no provider key works. The mechanism
 landing is not the criterion being met. Until both numbers exist the block
 stands, and it is not a licence to weaken the gate.
 
-**Planned next. M16a through M16e are code-complete; every runtime pass is
-outstanding, and all of them wait on one working provider key.** Spec:
+**Planned next. M16a through M16e are code-complete. M16e's runtime pass ran on
+2026-09-01 and is written up above; the other three are still outstanding and
+wait on token allowance rather than on a key.** Spec:
 `docs/superpowers/specs/2026-08-29-pyrrhon-m16-agent-harness-design.md`; the
 five plans are `m16a` through `m16e` in `docs/superpowers/plans/`. Two runtime
 passes are the parts left open, and both are blocked on a working provider key
-rather than on code (as of 2026-08-31 the Groq key in
-`~/.pyrrhon/credentials.toml` answers `401` and the Cerebras one `403`):
-M16b's (the grounding eval, the tuning of the policy
+rather than on code (the Groq key in `~/.pyrrhon/credentials.toml` works as of
+2026-09-01; its DAILY token budget is what runs out, see the two-ceilings note
+below): M16b's (the grounding eval, the tuning of the policy
 numbers, and driving both channels) and M16c's (a transcript replay confirming
 that no read exceeds what the preceding search pointed at, and a grounding-eval
 comparison confirming that suppressing a re-read costs the gate no citation it
 needed). M16d adds a third: a genuinely multi-file question driven through both
 channels, confirming `/debug-history` shows one `explore` result rather than a
-dozen tool results, plus the live half of its context-saving comparison. M16e
-adds the fourth and it is the one the milestone is judged by: the eval's
-intervention rate and its accuracy taken together, once before the prompt
-change and once after, plus both channels driven against a question about code
-that does not exist and a question spanning several files.
+dozen tool results, plus the live half of its context-saving comparison. M16e's
+own pass is **done** for the eval half and reported above; what it still owes is
+both channels driven by hand against a question about code that does not exist
+and a question spanning several files.
+
+Two things the 2026-09-01 run confirmed live as a side effect, both worth more
+than the milestone they came from. M16a's 429 path declined a `retry-after` of
+**471 seconds** outright rather than clamping it, and said "it should clear in
+about 471 seconds" — the design decision that waiting and then reporting
+failure is strictly worse than reporting now, verified a second time. And
+M16b's context-overflow safety net fired for the first time in a real session,
+logging `context overflow: safety net reached rung 'summarize'` and recovering.
+
+The two-ceilings trap bit again and in a nastier form than the M16b record
+describes. When the daily budget is spent, the 429 arrives with
+`x-ratelimit-remaining-tokens: 8000` and `x-ratelimit-remaining-requests: 980`
+— both per-minute buckets reading FULL — while a small request still succeeds
+and a belt-bearing one does not. The headers cannot be used to tell whether the
+account has budget. Read the 429 body.
 
 **M16a was verified against a real Groq account on 2026-08-30, and the run
 found a fault the plan did not know about** — see the plan's "Runtime
@@ -1152,10 +1201,12 @@ holds.
 state machine (M16b), the tool contract (M16c), the context firewall (M16d)
 and verification upstream (M16e) are all built and tested. That is the moat;
 M15 exists to make the seam thin enough that M16 never thinks about audio.
-What is not done is the evidence: four runtime passes, one key. M16e in
-particular is code-complete and **unproven** — its criterion is a number, the
-number has not been taken, and the milestone does not get to be called
-finished on the strength of its diff.
+What is not done is the evidence. M16e's eval pass ran on 2026-09-01: the tool
+policy is **proven** (a fifth of the rounds gone, `Stop(reason="rounds")` from
+two to zero, accuracy up), and its own criterion is **unmeasurable**, because
+the gate's intervention rate was already 0.0% before the change. Three runtime
+passes remain, plus driving both channels by hand, and they wait on daily token
+allowance rather than on a key.
 
 Deferred on purpose, with triggers recorded in the M15a plan: the
 `SoundfileMixer` thinking bed, until someone decides what it should sound like.
