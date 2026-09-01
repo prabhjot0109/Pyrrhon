@@ -51,6 +51,29 @@ uv run pyrrhon --text .              # plain-text REPL
 uv run pyrrhon --voice .             # TUI with the voice pipeline on
 ```
 
+Sessions are saved, so a week-long walkthrough does not restart every morning:
+
+```bash
+uv run pyrrhon --continue .          # pick up this repo's most recent session
+uv run pyrrhon --resume 20260901 .   # a specific one; a leading prefix is enough
+uv run pyrrhon --no-save .           # keep nothing
+```
+
+Only the questions and the answers are saved — never tool output, and never a
+line number. A resumed session therefore has to reopen a file before it can
+cite one, which is the grounding rule enforced by the shape of the data rather
+than by asking the model nicely.
+
+And one question, non-interactively, for scripts and CI:
+
+```bash
+uv run pyrrhon --print "how does the retry path work?" .
+echo "where is the cache invalidated?" | uv run pyrrhon -p --json .
+```
+
+The answer goes to stdout and nothing else does; progress goes to stderr, and
+`--json` adds the citations and the turn's trace as data.
+
 Text and TUI need one LLM key. Groq is the default:
 
 ```bash
@@ -70,6 +93,11 @@ heard.
 Commands worth knowing: `/help`, `/mode design`, `/model fast
 groq/llama-3.3-70b-versatile`, `/mcp`, `/plugins`, `/code` (opens the last
 citation in your editor), `/debug-history`, `/quit`.
+
+For the session itself: `/covered` (what you have established so far), `/clear`
+(a fresh thread, same window), `/compact` (summarize now, and say by how much),
+`/cost` (tokens and requests this session), `/export` (the walkthrough as
+markdown, with its citations), `/sessions` (what `--resume` can pick up).
 
 ## Configuration
 

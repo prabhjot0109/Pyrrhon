@@ -14,12 +14,20 @@ the suite tests the *runners*, and the runners test the *agent*.
 |---|---|---|
 | `grounding.yaml` | 1 — Understand | `tests/fixtures/sample_repo` (default) |
 | `grounding-self.yaml` | 1 — Understand | Pyrrhon itself (`--repo .`, required) |
+| `understanding.yaml` | 1 — Understand | Pyrrhon itself (`--repo .`, required) |
+| `strangers/httpx.yaml` | 1 — Understand | encode/httpx at `b5addb64` |
+| `strangers/cobra.yaml` | 1 — Understand | spf13/cobra at `adbc8813` |
 | `design.yaml` | 2 — Design | any (`--repo .`) |
 
-Two grounding files, not one, because a case is only meaningful against the
-repo its answers came from. Run the fixture set with `--repo .` and every
+A file per repo, not one big file, because a case is only meaningful against
+the repo its answers came from. Run the fixture set with `--repo .` and every
 expected path is missing; run the self set against the fixture and the same is
 true. Keeping them separate makes each file runnable rather than half-failing.
+
+`strangers/` is M17's answer to the fact that everything above it was measured
+either on three files or on the codebase whose author is doing the judging. See
+`strangers/README.md`; `uv run python -m pyrrhon.evals.strangers` puts both
+repos on disk at their pinned commits and prints how to run them.
 
 ## Running them
 
@@ -97,7 +105,14 @@ provenance (`[grounding] require_provenance`) exists to catch.
 - premise: "Let's use MongoDB. We have users, orders, and we join them constantly."
   must_challenge: true          # the turn must emit an AskUser question
   must_not_write_spec: true     # the turn must not call write_spec
-  # must_write: PRD.md          # ...or the inverse, for late-stage cases
+
+- premise: "That's settled then. Write it up."
+  must_write: PRD.md            # the turn MUST call write_spec
+  history:                      # seeds earlier turns — see below
+    - {role: user, content: "..."}
+
+- premise: "Add a caching layer in front of the tool belt in this repo."
+  must_look: true               # the open repo must be READ before designing
 ```
 
 This measures VISION.md's fourth success criterion — that Pyrrhon "pushes back
@@ -106,6 +121,24 @@ mechanical on purpose, the same reasoning as the grounding gate: an LLM judge
 would be slower, non-deterministic, and would itself need evaluating. "Asked a
 question and did not write a spec" is a crude proxy for Socratic behaviour, but
 it is a proxy that cannot drift.
+
+`history` and `must_look` arrived with M21 and each closes a way the set
+measured only the easy half.
+
+Without `history`, every case was an opening turn, so the only thing measurable
+was refusing to write a spec — and a model that challenges everything and
+produces nothing scored full marks. "The reasoning is now established, so write
+it up" is by definition not turn one. Seeded messages are appended AFTER
+`set_mode`, because `set_mode` injects the base prompt into an empty history
+and a history seeded first would sit above the system message rather than below
+it.
+
+`must_look` passes when any read tool ran, and `write_spec` does not count:
+writing the answer is not the same as reading the constraints. It catches the
+expensive failure — a design produced in the abstract while the code it has to
+live in sits unopened, which yields a spec that is internally coherent and
+impossible to build here. That is worse than an obviously wrong one, because it
+looks finished.
 
 ## Adding a case
 
