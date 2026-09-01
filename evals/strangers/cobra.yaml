@@ -1,0 +1,94 @@
+# Act 1 on a stranger repo, in a language nothing has ever evaluated:
+# spf13/cobra, frozen at adbc8813.
+#
+#   uv run python -m pyrrhon.evals.strangers          # puts it on disk at the pin
+#   uv run python -m pyrrhon.evals.grounding evals/strangers/cobra.yaml \
+#     --repo ~/.pyrrhon/strangers/cobra
+#
+# The symbol index has been table-driven across Python, TypeScript, TSX,
+# JavaScript and Go since M14, and until this file every eval ran against
+# Python. So this set measures two things at once, and the second one is not
+# about the model at all: whether the Go row of `languages.py` produces symbol
+# rows good enough to answer a question with.
+#
+# Cobra's layout is what makes it the harder of the two repos. It is one flat
+# package of large files — command.go alone is ~2k lines — so a question is
+# answered by finding the right FUNCTION, never by finding the right directory.
+# That is precisely the query lexical search is worst at, which is why the
+# roadmap gates M20 on what this file reports rather than on intuition.
+#
+# Every line number was read out of that tree with grep on 2026-09-01, none of
+# it by asking Pyrrhon, and all of it is true only of adbc8813.
+
+# --- locating: the execution path -------------------------------------------
+- question: "Where does a command work out which subcommand the arguments refer to?"
+  expected:
+    - {file: command.go, line: 757}
+- question: "Where does Cobra actually run the command it resolved?"
+  expected_any:
+    - {file: command.go, line: 905}
+    - {file: command.go, line: 1084}
+- question: "Where does Cobra parse the flags for a command?"
+  expected:
+    - {file: command.go, line: 1868}
+- question: "Where is the default help command created?"
+  expected:
+    - {file: command.go, line: 1263}
+
+# --- locating: "did you mean" ----------------------------------------------
+# Two halves of one feature in one file, two thousand lines apart. A model that
+# finds the threshold and calls it the algorithm has answered the wrong half,
+# so they are separate cases rather than one expected_any.
+- question: "Where does Cobra compute its 'did you mean' suggestions for a mistyped command?"
+  expected:
+    - {file: command.go, line: 863}
+- question: "What decides how close a typo has to be before Cobra suggests a command?"
+  expected_any:
+    - {file: command.go, line: 259}
+    - {file: command.go, line: 785}
+
+# --- locating: flags and arguments ------------------------------------------
+- question: "Where does Cobra enforce that two flags cannot be used together?"
+  expected_any:
+    - {file: flag_groups.go, line: 65}
+    - {file: flag_groups.go, line: 188}
+- question: "Where is the positional-argument validator that requires exactly N arguments?"
+  expected:
+    - {file: args.go, line: 107}
+- question: "Where does Cobra check that flags marked as required together were all given?"
+  expected_any:
+    - {file: flag_groups.go, line: 33}
+    - {file: flag_groups.go, line: 144}
+
+# --- locating: completion ---------------------------------------------------
+- question: "Where are the shell completion directives defined?"
+  expected_any:
+    - {file: completions.go, line: 45}
+    - {file: completions.go, line: 56}
+- question: "Where does active help get appended to a list of completions?"
+  expected:
+    - {file: active_help.go, line: 38}
+
+# --- says it doesn't know (VISION.md criterion 3) ---------------------------
+# Each names something cobra genuinely does not contain, verified by grep over
+# the .go files at the pin. `yaml` and `plugin` are deliberately NOT baited:
+# doc/yaml_docs.go and a comment in completions.go would both make a correct
+# find look like a fabrication.
+- question: "Where does Cobra start the HTTP server for its admin interface?"
+  must_not_cite: "*"
+- question: "Which file implements the goroutine worker pool?"
+  must_not_cite: "*"
+- question: "Where is the i18n message catalog loaded?"
+  must_not_cite: "*"
+- question: "Where does Cobra persist command history to SQLite?"
+  must_not_cite: "*"
+- question: "Where is the telemetry uploader?"
+  must_not_cite: "*"
+
+# --- admissibility across turns (M16e) --------------------------------------
+- question: "Which line does the flag-group validation function start on, exactly?"
+  history:
+    - {role: user, content: "where does cobra validate flag groups?"}
+    - {role: assistant, content: "Flag-group validation lives in flag_groups.go."}
+  expected:
+    - {file: flag_groups.go, line: 81}

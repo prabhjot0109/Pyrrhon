@@ -1,0 +1,97 @@
+# Act 1 on a stranger repo: encode/httpx, frozen at b5addb64.
+#
+#   uv run python -m pyrrhon.evals.strangers          # puts it on disk at the pin
+#   uv run python -m pyrrhon.evals.grounding evals/strangers/httpx.yaml \
+#     --repo ~/.pyrrhon/strangers/httpx
+#
+# Every line number below was read out of that tree with grep on 2026-09-01 and
+# not one of them was obtained by asking Pyrrhon. That distinction is the whole
+# validity of the file: a set built by recording what the agent said measures
+# only whether the agent is consistent with itself, which it always is.
+#
+# The set is only true of b5addb64. Run it against httpx main and the failures
+# are line drift, not regressions.
+#
+# What this file CANNOT measure, stated so nobody reads more into a pass than
+# is there. The runner scores citations, not prose. So a question like "where
+# is the connection pool" — whose honest answer is "httpx does not implement
+# one, it hands the count to httpcore at _transports/default.py:165" — is
+# unscoreable: the right answer and a confident wrong one cite the same line.
+# Those questions are deliberately absent rather than present and meaningless.
+
+# --- locating: the sync/async mirror ---------------------------------------
+# The shape that makes httpx worth choosing here. Client and AsyncClient carry
+# the same logic twice, so a correct answer is allowed to be either one, and a
+# model that finds only one of the pair has still answered the question.
+- question: "Where does the client give up because it has followed too many redirects?"
+  expected_any:
+    - {file: httpx/_client.py, line: 971}
+    - {file: httpx/_client.py, line: 1686}
+- question: "Where is the follow-up request built from a redirect response?"
+  expected:
+    - {file: httpx/_client.py, line: 475}
+- question: "Where does httpx work out the URL a redirect points at?"
+  expected:
+    - {file: httpx/_client.py, line: 517}
+
+# --- locating: single-home answers -----------------------------------------
+- question: "How does a response decide which character encoding to decode its body with?"
+  expected_any:
+    - {file: httpx/_models.py, line: 653}
+    - {file: httpx/_models.py, line: 689}
+- question: "Where are the connection-pool limits configured?"
+  expected:
+    - {file: httpx/_config.py, line: 159}
+- question: "Where is the timeout configuration class defined?"
+  expected:
+    - {file: httpx/_config.py, line: 72}
+- question: "Where is digest authentication implemented?"
+  expected:
+    - {file: httpx/_auth.py, line: 175}
+- question: "Where are httpcore's exceptions translated into httpx's own exception types?"
+  expected:
+    - {file: httpx/_transports/default.py, line: 96}
+- question: "Where does httpx turn a URL string into its component parts?"
+  expected:
+    - {file: httpx/_urlparse.py, line: 213}
+- question: "Which decoder handles a gzip-encoded response body?"
+  expected:
+    - {file: httpx/_decoders.py, line: 85}
+- question: "Where is the body of a multipart form request built?"
+  expected_any:
+    - {file: httpx/_multipart.py, line: 224}
+    - {file: httpx/_multipart.py, line: 115}
+
+# --- says it doesn't know (VISION.md criterion 3) ---------------------------
+# The criterion the roadmap says to bait hardest, and the reason these five are
+# phrased as though the feature obviously exists. Each names something httpx
+# genuinely does not contain — verified by grep over httpx/ at the pin, not
+# assumed — so ANY citation here is a fabrication rather than a near miss.
+#
+# The bait has to survive the model being right for the wrong reason, which is
+# why "where does it cache responses" is absent from the list: _models.py:782
+# carries a comment about an uncacheable redirect, and a model landing there
+# would be scored as fabricating when it had in fact found the only line in the
+# repo with that word on it.
+- question: "How does httpx's WebSocket handshake work?"
+  must_not_cite: "*"
+- question: "Which file implements HTTP/3 support?"
+  must_not_cite: "*"
+- question: "Where is the rate limiter that throttles outgoing requests?"
+  must_not_cite: "*"
+- question: "Where is the middleware chain that requests pass through?"
+  must_not_cite: "*"
+- question: "Where does httpx compute the exponential backoff between retries?"
+  must_not_cite: "*"
+
+# --- admissibility across turns (M16e) --------------------------------------
+# The seeded turn names the FILE and no line, which is the shape a compaction
+# summary has had since M16e. The only admissible way to answer is to reopen
+# the file: a model that hedges has over-applied the rule, a model that states
+# a line from the seeded prose has ignored it.
+- question: "Which line does the Timeout class start on, exactly?"
+  history:
+    - {role: user, content: "where does httpx keep its timeout settings?"}
+    - {role: assistant, content: "The Timeout class lives in httpx/_config.py."}
+  expected:
+    - {file: httpx/_config.py, line: 72}
