@@ -1,0 +1,75 @@
+name: live-smoke
+
+# Every test in `ci.yml` uses a double. That is correct for a grounding gate —
+# a check whose verdicts depend on a live model is a check that fails for
+# reasons unrelated to the change — but it means a PROVIDER-side break is
+# discovered by a user rather than by us. A renamed model id, a retired
+# endpoint, a `tools` array the provider stopped accepting: none of them can
+# fail a suite where the provider is a fake.
+#
+# So one grounded question against one real provider, once a night. Nightly and
+# not per-push, deliberately: this spends real tokens, the failure it catches
+# is the account's or the provider's rather than the commit's, and a flaky
+# external dependency wired into every push teaches people to ignore red.
+#
+# `workflow_dispatch` is here because the useful moment to run it by hand is
+# right after a provider changes something, which is exactly when nobody wants
+# to wait until 03:00.
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    # Job level, not step level, and that is load-bearing: a step's `if` reads
+    # the env context as it stood BEFORE the step, so a key declared on the
+    # step it guards is always empty when the guard runs. Declared here, the
+    # guard sees it.
+    #
+    # A missing key SKIPS rather than fails. A fork, or any clone without the
+    # secret, would otherwise show a permanently red nightly that nobody can
+    # fix and everybody learns to scroll past — which costs more than the
+    # check is worth.
+    env:
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: sudo apt-get update && sudo apt-get install -y portaudio19-dev
+      - run: uv sync --dev
+
+      - name: One grounded question, against a real provider
+        id: ask
+        if: ${{ env.GROQ_API_KEY != '' }}
+        # The fixture repo, not a stranger repo: this is a liveness check on
+        # the provider, not a measurement of the model. Three files keep it
+        # cheap, keep the answer unambiguous, and keep a slow night from
+        # spending a budget the eval passes need.
+        run: |
+          uv run pyrrhon --print "Where is the greet function defined?" \
+            --json tests/fixtures/sample_repo > smoke.json
+          cat smoke.json
+
+      - name: The answer has to be grounded, not merely present
+        if: ${{ env.GROQ_API_KEY != '' }}
+        # Asserting on the citation rather than on the prose is the whole
+        # point. A provider that returns a polite paragraph and no tool call
+        # is exactly the break this job exists to find, and it is invisible to
+        # any check that only asks whether an answer came back.
+        run: |
+          python - <<'PY'
+          import json, sys
+          report = json.load(open("smoke.json"))
+          if report.get("stop_reason") == "error":
+              sys.exit("turn ended in a provider error — read the trace above")
+          if not report.get("citations"):
+              sys.exit("answered with no citation: the belt or the gate is broken")
+          if report.get("tool_calls", 0) < 1:
+              sys.exit("answered without calling a tool: the belt did not reach the model")
+          print("live smoke ok:", report["citations"])
+          PY
