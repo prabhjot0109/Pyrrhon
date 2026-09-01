@@ -356,3 +356,28 @@ def test_too_few_checks_is_its_own_answer():
 
     note = measurability_note(GateCounters(checks=2, promoted=2))
     assert "too few" in note
+
+
+def test_a_run_of_dead_turns_refuses_to_report_a_score():
+    """The confound that has bitten twice, made mechanical.
+
+    A set of `must_not_cite: "*"` cases passes PERFECTLY when nothing answers
+    at all, which is exactly the shape of a score that looks like a result and
+    is an outage. M16e's pass read a 3/6 as a regression when it was six turns
+    of stop_reason=error, and quoted a 5/5 from a bait arm where every turn had
+    died. Both times the plan already said "read stop_reason first".
+    """
+    from pyrrhon.evals.grounding import dead_turn_warning
+
+    traces = [{"stop_reason": "error"}, {"stop_reason": "answered"}]
+    warning = dead_turn_warning(traces)
+    assert "1/2 turn(s)" in warning
+    assert "NOT a" in warning
+    assert "must_not_cite" in warning
+
+
+def test_a_clean_run_gets_no_warning():
+    from pyrrhon.evals.grounding import dead_turn_warning
+
+    assert dead_turn_warning([{"stop_reason": "answered"}] * 3) == ""
+    assert dead_turn_warning([]) == ""

@@ -241,6 +241,36 @@ def compare_latency(
     return regressions
 
 
+def dead_turn_warning(traces: list[dict]) -> str:
+    """The confound that has now bitten twice, said out loud. "" when clean.
+
+    Every M16-era plan says "read stop_reason before reading any score", and
+    that guidance failed on its own terms both times it mattered. M16e's pass
+    read a 3/6 as a regression when it was six turns of stop_reason=error from
+    a spent allowance, and quoted a 5/5 from a bait arm where every turn had
+    died — a set of `must_not_cite: "*"` cases passes PERFECTLY when nothing
+    answers at all, which is the exact shape of a score that looks like a
+    result and is an outage.
+
+    So it stops being guidance. A run with dead turns prints how many, names
+    the trap by name, and the caller cannot reach the score without passing
+    this line.
+    """
+    dead = [t for t in traces if t.get("stop_reason") == "error"]
+    if not dead:
+        return ""
+    return "\n".join(
+        (
+            f"  WARNING: {len(dead)}/{len(traces)} turn(s) ended in "
+            "stop_reason=error. The score above is NOT a",
+            "           measurement — a must_not_cite case passes perfectly "
+            "when nothing answers at all.",
+            "           Fix the provider and re-run before reading any number "
+            "here.",
+        )
+    )
+
+
 def _gate_line(gate: GateCounters) -> str:
     """One line, both numbers. A before/after diff of two eval runs has to be
     readable by eye, so the rate and the counts that produced it stay together
@@ -295,6 +325,28 @@ def measurability_note(gate: GateCounters) -> str:
     )
 
 
+def agent_factory_for(repo_root, model: str | None):
+    """A zero-argument factory the runners call once per case.
+
+    `--model` overrides the FAST slot only. The deep slot is left alone
+    deliberately: an eval that silently repointed escalation would be
+    measuring a pairing nobody configured, and think_deeper is dispatched by
+    the fast model's judgment rather than by the case.
+    """
+    from pyrrhon.bootstrap import build_agent
+    from pyrrhon.config.settings import ModelSlot, load_settings
+    from pyrrhon.core.providers.llm import create_llm
+
+    if not model:
+        return lambda: build_agent(repo_root)
+    provider, _, name = model.partition("/")
+    if not name:
+        raise SystemExit(f"--model wants PROVIDER/MODEL, got {model!r}")
+    settings = load_settings(repo_root)
+    llm = create_llm(ModelSlot(provider=provider, model=name), settings)
+    return lambda: build_agent(repo_root, llm=llm, settings=settings)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m pyrrhon.evals.grounding",
@@ -311,6 +363,16 @@ def main(argv: list[str] | None = None) -> int:
         "--repeat", type=int, default=1,
         help="Run the whole case set N times, for latency variance",
     )
+    parser.add_argument(
+        "--model",
+        metavar="PROVIDER/MODEL",
+        help=(
+            "Run against this slot instead of the configured one, e.g. "
+            "cerebras/gpt-oss-120b. M17 needs it twice over: to find a model "
+            "that actually fabricates, and to run the same set against two "
+            "models without editing config between them."
+        ),
+    )
     parser.add_argument("--json", type=Path, help="Write the full report here")
     parser.add_argument(
         "--compare", type=Path,
@@ -324,7 +386,6 @@ def main(argv: list[str] | None = None) -> int:
 
     # Imported here, not at module top: only the CLI needs a real,
     # API-key-backed agent — unit tests inject FakeLLM-backed factories.
-    from pyrrhon.bootstrap import build_agent
     from pyrrhon.config.credentials import load_credentials
 
     # `pyrrhon --setup` writes keys to ~/.pyrrhon/credentials.toml and only the
@@ -334,8 +395,17 @@ def main(argv: list[str] | None = None) -> int:
     load_credentials()
 
     repo_root = args.repo.resolve()
-    report = run_eval(args.yaml_path, lambda: build_agent(repo_root), args.repeat)
+    report = run_eval(
+        args.yaml_path, agent_factory_for(repo_root, args.model), args.repeat
+    )
     print(f"grounding eval: {report.passed}/{report.total} passed")
+    if args.model:
+        print(f"  model: {args.model}")
+    # First, above everything: a reader who stops after one line must stop
+    # after this one rather than after the score.
+    dead = dead_turn_warning(report.traces)
+    if dead:
+        print(dead)
     print(f"  provenance downgrades: {report.downgrades}")
     print(f"  gate intervention rate: {_gate_line(report.gate)}")
     note = measurability_note(report.gate)
@@ -381,6 +451,11 @@ def main(argv: list[str] | None = None) -> int:
             encoding="utf-8",
         )
         print(f"  wrote {args.json}")
+
+    # A run whose turns died is not a pass, whatever the cases said. Exiting
+    # non-zero is what stops a green CI line from certifying an outage.
+    if dead:
+        return 1
 
     regressed: list[str] = []
     if args.compare:

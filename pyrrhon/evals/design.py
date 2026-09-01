@@ -115,23 +115,32 @@ def main(argv: list[str] | None = None) -> int:
         "--repeat", type=int, default=1,
         help="Run the whole case set N times (push-back is not deterministic)",
     )
+    parser.add_argument(
+        "--model",
+        metavar="PROVIDER/MODEL",
+        help="Run against this slot instead of the configured one, e.g. cerebras/gpt-oss-120b",
+    )
     args = parser.parse_args(argv)
 
     # Imported here, not at module top: only the CLI needs a real,
     # API-key-backed session — unit tests inject scripted doubles.
-    from pyrrhon.bootstrap import build_agent
     from pyrrhon.config.credentials import load_credentials
     from pyrrhon.core.session import Session
+    from pyrrhon.evals.grounding import agent_factory_for
 
     # Same gap as the grounding eval: keys written by `pyrrhon --setup` were
     # invisible here. setdefault semantics mean a real env var still wins.
     load_credentials()
 
     repo_root = args.repo.resolve()
-    report = run_design_eval(
-        args.yaml_path, lambda: Session(build_agent(repo_root)), args.repeat
-    )
+    # Shared with the grounding runner rather than written twice: --model is
+    # the one knob both acts need, and a second copy would drift on the first
+    # question anybody asks of it (does it move the deep slot too?).
+    build = agent_factory_for(repo_root, args.model)
+    report = run_design_eval(args.yaml_path, lambda: Session(build()), args.repeat)
     print(f"design eval: {report.passed}/{report.total} passed")
+    if args.model:
+        print(f"  model: {args.model}")
     for failure in report.failures:
         print(f"  FAIL {failure}")
     return 0 if report.total and report.passed == report.total else 1
