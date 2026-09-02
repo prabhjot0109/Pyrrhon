@@ -91,3 +91,27 @@ async def test_voice_state_distinguishes_listening_from_speaking(sample_repo: Pa
 
         app.turn._speech_stream = None
         app.voice._task = None
+
+
+async def test_the_spinner_timer_survives_a_teardown_with_a_turn_open(
+    sample_repo: Path,
+):
+    """The 100ms working-row timer outlives the widget tree.
+
+    `TurnView.finish()` stops it, and nothing calls `finish()` when the app
+    tears down mid-answer — which is what `/exit` or ctrl+c during a turn does.
+    A tick landing in that window used to find the screen emptied and raise
+    `NoMatches`, printing a traceback over the user's terminal on the way out.
+
+    Reproduced directly rather than by racing the timer: the failure was a
+    query against a screen with no StatusBar on it, so removing the bar and
+    ticking is the same call in the same state, every run.
+    """
+    app = make_app(sample_repo)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await app.begin_turn()
+        await pilot.pause()
+        app.query_one(StatusBar).remove()
+        await pilot.pause()
+        # The tick, exactly as the timer issues it. Must not raise.
+        app.refresh_voice_state()

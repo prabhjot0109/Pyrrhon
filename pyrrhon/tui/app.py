@@ -387,8 +387,28 @@ class PyrrhonApp(App):
         return "speaking" if self.turn.speaking else "listening"
 
     def refresh_voice_state(self) -> None:
-        """The one field the working row's timer repaints."""
-        self.query_one(StatusBar).voice_state = self.voice_state()
+        """The one field the working row's timer repaints.
+
+        `query`, not `query_one`, and the difference is a real crash rather
+        than defensiveness. This is called from `TurnView._tick`, a 100ms timer
+        that `finish()` stops — and nothing calls `finish()` when the app tears
+        down with a turn still open, which is exactly what `/exit` or ctrl+c
+        during an answer does. A tick landing inside that window found the
+        widget tree already emptied and raised `NoMatches`, printing a
+        traceback over the user's terminal on the way out.
+
+        It surfaced as an intermittent test failure first, in whichever TUI
+        test happened to leave a spinner running at teardown — which is why it
+        appeared to move between tests and looked like a race in the code each
+        one was actually about.
+
+        A missing status bar during shutdown is a real transient state, so the
+        honest response is to skip the repaint. It is never missing while the
+        app is running: `compose` mounts it, and `refresh_status` still uses
+        `query_one` precisely so a bar that genuinely failed to mount is loud.
+        """
+        for bar in self.query(StatusBar):
+            bar.voice_state = self.voice_state()
 
     @on(TextArea.Changed, "#prompt")
     def on_prompt_changed(self, event: TextArea.Changed) -> None:
