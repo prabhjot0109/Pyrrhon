@@ -58,3 +58,37 @@ class StreamingFakeLLM:
         for delta in deltas:
             yield ("text", delta)
         yield ("reply", reply)
+
+
+async def settle(pilot, until, what: str, limit: int = 20) -> None:
+    """Pause a Textual test until an effect has actually landed.
+
+    **One `pilot.pause()` drains the message queue once**, and that is not
+    enough whenever the work being waited on is deferred (`call_later`), is an
+    `async def` hook that awaits something of its own, or is a reactive watcher
+    that schedules a second pass. Under load — a full suite on a busy machine —
+    a test that acts after a single pause is not testing the sequence it
+    describes. It is testing whichever sequence the scheduler happened to
+    produce that run.
+
+    That is a whole FAMILY of intermittent failures in this suite, not one
+    test. Two members were caught in 2026-09-02's full-suite runs:
+    `test_a_late_turn_finished_cannot_close_the_turn_that_replaced_it`, where
+    acting early built the exact ordering the test exists to rule out, and
+    `test_down_moves_the_highlight_not_the_cursor`, where the completion menu
+    had not yet chosen a row. Both pass alone every time, which is what makes
+    them expensive to diagnose from a CI log.
+
+    So the rule for anything driving a deferred path: wait on the observable
+    EFFECT, and wait for the whole burst rather than its first event.
+
+    Raises on timeout rather than giving up quietly, because an effect that
+    never lands is its own failure — a silent give-up reports it as whatever
+    the next assertion happens to be about, which sends the reader to the
+    wrong subsystem.
+    """
+    for _ in range(limit):
+        await pilot.pause()
+        if until():
+            return
+    raise AssertionError(f"never settled: waiting for {what}")

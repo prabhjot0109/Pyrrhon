@@ -27,7 +27,7 @@ from pyrrhon.core.events import (
 )
 from pyrrhon.tui.app import PyrrhonApp
 from pyrrhon.tui.messages import WorkingRow
-from tests.helpers import FakeLLM
+from tests.helpers import FakeLLM, settle
 
 
 def make_app(repo_root: Path) -> PyrrhonApp:
@@ -35,34 +35,6 @@ def make_app(repo_root: Path) -> PyrrhonApp:
     # TUI warms the symbol index, which writes .pyrrhon/cache.db.
     agent = build_agent(repo_root, llm=FakeLLM([]), home=repo_root.parent)
     return PyrrhonApp(repo_root=repo_root, agent=agent)
-
-
-async def settle(pilot, until, what: str, limit: int = 20) -> None:
-    """Pause until a burst of deferred voice events has actually landed.
-
-    `_on_voice_event` hands every event to `call_later`, and one
-    `pilot.pause()` drains the message queue once — which is not enough for a
-    burst whose hooks are `async def` and await rotations of their own. A test
-    that acts after a single pause is not testing the ordering it describes;
-    it is testing whichever ordering the scheduler happened to produce, which
-    is why this file went from green to a coin flip depending on machine load.
-
-    The failure it produced was a good imitation of a real bug. With the
-    transcription still queued, the typed `begin_turn()` runs FIRST, the
-    deferred `on_transcription` rotates after it, and the utterance ends up
-    owning the NEWER turn — which the generation guard then closes, correctly,
-    while the assertion reads the missing row as the guard being broken.
-
-    So every wait here is on an observable effect. Raising on timeout rather
-    than returning quietly, because an event that never lands is its own
-    failure and a silent give-up reports it as whatever the next assertion
-    happens to be about.
-    """
-    for _ in range(limit):
-        await pilot.pause()
-        if until():
-            return
-    raise AssertionError(f"voice events never settled: waiting for {what}")
 
 
 def speech_rows(app: PyrrhonApp) -> list:
@@ -230,8 +202,21 @@ async def test_a_late_turn_finished_cannot_close_the_turn_that_replaced_it(
         assert app.turn.generation != spoken, "a new turn is on screen"
 
         app._on_voice_event(TurnFinished())
-        await pilot.pause()
-        assert list(app.query(WorkingRow)), "the newer turn is still working"
+        # Waited on the hook CONSUMING the report, not on one pause. The
+        # renderer takes `_spoken_generation` and leaves None behind, so that
+        # is the observable "the guard has now run" — and without it a pass
+        # could mean the report simply had not arrived, which is the same
+        # screen state for the opposite reason.
+        await settle(
+            pilot,
+            lambda: app._renderer._spoken_generation is None,
+            "the end-of-turn report to be consumed",
+        )
+        # The TurnView's own row, not a global query. `finish()` removes a row
+        # without awaiting it, so a query over the whole app can see a row that
+        # is on its way out or miss one on its way in; the turn knows which row
+        # is ITS row.
+        assert app.turn.working_row is not None, "the newer turn is still working"
 
 
 async def test_a_turn_finished_still_closes_its_own_turn(sample_repo: Path):

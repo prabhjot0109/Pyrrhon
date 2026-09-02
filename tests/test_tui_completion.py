@@ -12,7 +12,7 @@ from pyrrhon.bootstrap import build_agent
 from pyrrhon.tui.app import PyrrhonApp
 from pyrrhon.tui.completion import CommandMenu, matches
 from pyrrhon.tui.prompt import Prompt
-from tests.helpers import FakeLLM
+from tests.helpers import FakeLLM, settle
 
 
 def make_app(repo: Path) -> PyrrhonApp:
@@ -72,11 +72,14 @@ async def test_down_moves_the_highlight_not_the_cursor(sample_repo: Path):
     async with app.run_test(size=(120, 40)) as pilot:
         prompt = app.query_one("#prompt", Prompt)
         prompt.text = "/mod"
-        await pilot.pause()
         menu = app.query_one("#completion", CommandMenu)
+        # The menu is populated by a reactive watcher, so one pause is not a
+        # guarantee that a row has been chosen — under load it reads None and
+        # the test fails describing a highlight bug that is not there.
+        await settle(pilot, lambda: menu.selected is not None, "the menu to choose a row")
         assert menu.selected == "mode"
         await pilot.press("down")
-        await pilot.pause()
+        await settle(pilot, lambda: menu.selected != "mode", "the highlight to move")
         assert menu.selected == "model"
         await pilot.press("enter")
         await pilot.pause()
