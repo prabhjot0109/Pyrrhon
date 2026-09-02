@@ -311,7 +311,45 @@ Everything through M21 is implemented and tested, bar the measurements named
 under "Planned next" — M16a–M16e (the harness), M17 (the evidence apparatus),
 M18 (the opening context), M19 (the session as a product) and M21 (Act 2 to
 parity). M20 is deliberately not started; see the note at the end of M21's
-section for why. The parts worth knowing about before you change them:
+section for why.
+
+### Status at a glance
+
+Read this before the detail below. Everything in the left column is built and
+covered by tests; the right column is what is genuinely missing, and it is
+almost all evidence rather than code.
+
+| Milestone | What it is | State |
+|---|---|---|
+| M0–M9 | Grounded REPL, gate, TUI, voice, deep reasoning, MCP, plugins, context, providers | done |
+| M10 | Latency harness, streaming, parallel dispatch, prefix cache | done, **measured** |
+| M11–M14 | Trust boundary, correctness sweep, truthful grounding, code intelligence | done |
+| M15a/M15b | Voice integration, LLM lane and vision | done; native providers behind the adapter seam deliberately parked |
+| M16a | Provider boundary — status-code error taxonomy, learned limits | done, **verified live** 2026-08-30 |
+| M16b | Turn state machine — `TurnPolicy`, `decide()`, the compaction ladder | done; policy numbers untuned (needs real traces) |
+| M16c | Tool contract — schema/signature test, result store, re-read suppression | done; transcript replay owed |
+| M16d | Context firewall — `explore`, the second evidence bucket | done; live half of the saving comparison owed |
+| M16e | Verification upstream — admissibility, history closure, `GateCounters` | done; eval ran 2026-09-01, criterion **unmeasurable** (rate was already 0.0%) |
+| M17 | Evidence apparatus — two frozen stranger repos, 34 cases, two runner guards | apparatus done; **no reading taken** |
+| M18 | Opening context — repo brief and environment into the model's prompt | done; before/after measurement owed |
+| M19 | Session as a product — persist, resume, `/clear /compact /cost /export /covered /sessions` | done |
+| M20 | Retrieval that aims better | **deliberately not started** — gated on M17's findings |
+| M21 | Act 2 to parity — design mode knows the repo is open; `history` and `must_look` | done; eval run owed |
+| ops | `--print`, nightly live smoke, PUBLISH.md | done, except a clean-machine install verification |
+
+**The one-line summary: the instrument is built and the reading has not been
+taken.** Every owed item is blocked on a working provider key, not on code,
+design, or appetite — see the credential finding under "Planned next". The
+exceptions are M16a's listen test, which needs a human, and the clean-machine
+install, which needs a clean machine.
+
+**What NOT to do while it is in this state.** Do not tune the policy numbers,
+deepen a prompt, or start M20 on intuition. Every one of those is a change
+measured against a baseline that does not exist yet, which is the specific
+mistake M16b avoided by tuning from traces and M16e proved expensive by
+shipping a criterion with no headroom.
+
+### The parts worth knowing about before you change them
 
 **The TUI redesign (2026-08-23).** The Textual channel had not been designed
 since M2 and had drifted into a channel that measured far more than it showed.
