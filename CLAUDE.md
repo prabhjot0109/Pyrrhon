@@ -1450,32 +1450,51 @@ but the discipline still applies to anything you read by eye. And **read the
 429 body before diagnosing from request size**, because the per-minute headers
 read FULL when the daily budget is spent.
 
-**The suite's one intermittent was diagnosed and fixed on 2026-09-02, and the
-diagnosis is worth keeping** because the same shape will recur in any test that
-drives the voice path. `test_a_late_turn_finished_cannot_close_the_turn_that_replaced_it`
-failed in roughly half the full-suite runs on Windows and passed alone every
-time. The generation guard was correct; the test's SETUP was not.
-`_on_voice_event` defers every event with `call_later`, and one
-`pilot.pause()` drains the queue once — not enough for a burst whose hooks are
-`async def` and await rotations of their own. With the transcription still
-queued, the test's own `begin_turn()` ran FIRST, `on_transcription` rotated
-after it, and the utterance ended up owning the NEWER turn; the guard then
-closed that turn, correctly, and the missing working row read as the guard
-being broken. **The test was constructing the opposite arrangement from the one
-it describes, about half the time.**
+**The suite's long-standing intermittent was a PRODUCT bug, found 2026-09-02
+after two wrong diagnoses.** Worth reading in full, because both wrong turns
+were reasonable and the right answer was invisible from a CI log.
 
-The fix is to wait on an observable effect rather than on a count of pauses,
-and to wait for the WHOLE burst: a speech chunk still queued lands on the typed
-turn and takes down the working row the assertion is about, which is how the
-first attempt failed deterministically instead of intermittently. Four
-consecutive clean full-suite runs since, against three failures in the six
-before it. Not proof — a flake can hide — but a real change.
+`TurnView._tick` is a 100ms timer that repaints the working row and calls
+`PyrrhonApp.refresh_voice_state`, which used `query_one(StatusBar)`.
+`TurnView.finish()` stops that timer — and **nothing calls `finish()` when the
+app tears down with a turn still open**, which is exactly what `/exit` or
+ctrl+c during an answer does. A tick landing inside the teardown window found
+the widget tree already emptied and raised `NoMatches`.
 
-Anything else that drives `_on_voice_event` from a test should use `settle`
-rather than a bare `pilot.pause()`, for the same reason. The occasional
-`tests/test_adapter_driver.py` teardown ERRORs are a separate thing, appear
-without this test failing, and remain unchased: they are asyncio
-proactor-teardown noise from apps leaked by earlier tests.
+It is user-reachable: quitting mid-answer printed a traceback over the
+terminal on the way out. `refresh_voice_state` iterates `query(StatusBar)` now
+and skips the repaint when the bar is gone. `refresh_status` deliberately keeps
+`query_one`, so a bar that genuinely failed to mount is still loud.
+
+**Why it looked like something else.** It failed in whichever TUI test happened
+to leave a spinner running at teardown, so it appeared to MOVE between tests —
+from `test_a_late_turn_finished_cannot_close_the_turn_that_replaced_it` to
+`test_down_moves_the_highlight_not_the_cursor` — and each time it presented as
+a race in whatever that test was actually about. Two rounds of test-side fixes
+reduced its frequency without touching the cause, which is the trap: a flake
+that moves is usually shared state or shared teardown, not the test it lands
+in. `tests/test_tui_status.py` now pins it directly by removing the bar and
+ticking, which is the same call in the same state on every run.
+
+**A second, genuinely separate cause was found on the way and is also fixed.**
+One `pilot.pause()` drains the message queue once, which is not enough when the
+work being waited on is deferred through `call_later`, is an `async def` hook
+awaiting something of its own, or is a reactive watcher scheduling a second
+pass. `test_down_moves_the_highlight_not_the_cursor` read `menu.selected` as
+None under load for that reason. `tests/helpers.py::settle` is the fix and the
+rule: **wait on the observable effect, and wait for the whole burst rather than
+its first event.** In the voice test, waiting only for the rotation turned an
+intermittent failure into a deterministic one, because a speech chunk still
+queued lands on the typed turn and removes the row the assertion is about.
+
+There are ~66 `pilot.pause()` calls across the TUI tests and only the two
+observed members are converted; rewriting the rest blind trades a known flake
+for an unknown one. When the next one surfaces, `settle` makes it a two-minute
+fix.
+
+The `tests/test_adapter_driver.py` teardown ERRORs are a third thing, appear
+independently, and remain unchased: asyncio proactor-teardown noise from apps
+leaked by earlier tests.
 
 Two things the 2026-09-01 run confirmed live as a side effect, both worth more
 than the milestone they came from. M16a's 429 path declined a `retry-after` of
