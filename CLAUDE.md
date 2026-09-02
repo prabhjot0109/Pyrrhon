@@ -15,9 +15,13 @@ two acts:
 
 `README.md` is the pitch. `docs/superpowers/VISION.md` is the source of truth
 for scope, the two acts in detail, and the verifiable v1 success criteria. Read
-it before making any product or scope decision. Note the path: it is under
-`docs/`, which is never committed, so a fresh clone does not have it and this
-reference dangles there by design.
+it before making any product or scope decision. `docs/UNDERSTAND.md` is the
+internals guide — the mental model, one turn traced end to end, and a
+symptom-to-subsystem debugging table; read it first if you are new to the
+codebase, and read THIS file when you need to know why something is shaped the
+way it is. Note the path on both: they are under `docs/`, which is never
+committed, so a fresh clone does not have them and these references dangle
+there by design.
 
 Dont commit any docs to any brach and docs is commneted out of gitignore deliabertaly so you can read them so dont commits gitignore and docs to any branch.
 
