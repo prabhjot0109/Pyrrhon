@@ -1408,14 +1408,32 @@ but the discipline still applies to anything you read by eye. And **read the
 429 body before diagnosing from request size**, because the per-minute headers
 read FULL when the daily budget is spent.
 
-One known intermittent, observed several times on 2026-09-02 and never
-reproducible in isolation: `tests/test_tui_voice_turns.py::test_a_late_turn_finished_cannot_close_the_turn_that_replaced_it`
-fails, and `tests/test_adapter_driver.py` reports two teardown ERRORs, in some
-full-suite runs on Windows and not others. Both pass alone and both pass on a
-re-run of the identical command, which places them with the asyncio
-proactor-teardown noise the suite already produces. Not chased, on M17's own
-"collect, do not repair" rule; the likely cause in the first case is a single
-`await pilot.pause()` where the deferred voice hook needs two.
+**The suite's one intermittent was diagnosed and fixed on 2026-09-02, and the
+diagnosis is worth keeping** because the same shape will recur in any test that
+drives the voice path. `test_a_late_turn_finished_cannot_close_the_turn_that_replaced_it`
+failed in roughly half the full-suite runs on Windows and passed alone every
+time. The generation guard was correct; the test's SETUP was not.
+`_on_voice_event` defers every event with `call_later`, and one
+`pilot.pause()` drains the queue once — not enough for a burst whose hooks are
+`async def` and await rotations of their own. With the transcription still
+queued, the test's own `begin_turn()` ran FIRST, `on_transcription` rotated
+after it, and the utterance ended up owning the NEWER turn; the guard then
+closed that turn, correctly, and the missing working row read as the guard
+being broken. **The test was constructing the opposite arrangement from the one
+it describes, about half the time.**
+
+The fix is to wait on an observable effect rather than on a count of pauses,
+and to wait for the WHOLE burst: a speech chunk still queued lands on the typed
+turn and takes down the working row the assertion is about, which is how the
+first attempt failed deterministically instead of intermittently. Four
+consecutive clean full-suite runs since, against three failures in the six
+before it. Not proof — a flake can hide — but a real change.
+
+Anything else that drives `_on_voice_event` from a test should use `settle`
+rather than a bare `pilot.pause()`, for the same reason. The occasional
+`tests/test_adapter_driver.py` teardown ERRORs are a separate thing, appear
+without this test failing, and remain unchased: they are asyncio
+proactor-teardown noise from apps leaked by earlier tests.
 
 Two things the 2026-09-01 run confirmed live as a side effect, both worth more
 than the milestone they came from. M16a's 429 path declined a `retry-after` of
