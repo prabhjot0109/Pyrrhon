@@ -9,7 +9,12 @@ from pyrrhon.config.wizard import needs_setup, run_wizard
 
 def scripted(*answers):
     it = iter(answers)
-    return lambda prompt="": next(it)
+    def _ask(prompt=""):
+        try:
+            return next(it)
+        except StopIteration:
+            raise AssertionError(f"Scripted inputs exhausted! Last prompt was: {prompt!r}") from None
+    return _ask
 
 
 def pick(choices, provider_id: str) -> str:
@@ -19,7 +24,12 @@ def pick(choices, provider_id: str) -> str:
     table now, so a hard-coded index would break every time a row is added —
     which is a property of the table, not a regression.
     """
-    return str(next(i for i, c in enumerate(choices, 1) if c.id == provider_id))
+    for i, c in enumerate(choices, 1):
+        if c.id == provider_id:
+            return str(i)
+    raise ValueError(
+        f"Provider '{provider_id}' not found in choices: {[c.id for c in choices]}"
+    )
 
 
 class QuietConsole:
@@ -203,14 +213,28 @@ def test_switching_provider_drops_the_previous_provider_s_model_and_voice(tmp_pa
     assert voice["chars_per_sec"] == 12.5
 
 
-def test_a_provider_with_a_default_voice_still_pins_it(tmp_path):
+def test_a_provider_with_a_default_voice_still_pins_it(tmp_path, monkeypatch):
+    from pyrrhon.config.catalog import ProviderChoice
+
+    # Ensure piper is treated as ready so testing default-voice pinning does not
+    # depend on whether on-device packages are installed in the test environment.
+    orig_tts = tts_choices()
+    ready_tts = tuple(
+        ProviderChoice(
+            id=c.id, label=c.label, key_env=c.key_env, default_model=c.default_model,
+            note=c.note, state="ready", is_local=c.is_local, extra=c.extra
+        ) if c.id == "piper" else c
+        for c in orig_tts
+    )
+    monkeypatch.setattr("pyrrhon.config.wizard.tts_choices", lambda: ready_tts)
+
     run_wizard(
         home=tmp_path,
         console=QuietConsole(),
         input_fn=scripted(
             pick(llm_choices(), "groq"), "openai/gpt-oss-120b", "y",
             pick(stt_choices(), "groq"),
-            pick(tts_choices(), "piper"),
+            pick(ready_tts, "piper"),
             "y",
         ),
         getpass_fn=scripted("gsk-abc"),

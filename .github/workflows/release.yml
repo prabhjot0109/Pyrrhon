@@ -1,0 +1,39 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      # PyAudio ships no manylinux wheel and compiles against portaudio.h, so
+      # the runner needs the headers.
+      - run: sudo apt-get update && sudo apt-get install -y portaudio19-dev
+      - run: uv sync --dev
+      - run: uv run pytest
+      - run: uv run ruff check .
+      - run: uv run mypy pyrrhon/core
+      - run: uv build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write        # mints the PyPI Trusted Publishing OIDC token
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
