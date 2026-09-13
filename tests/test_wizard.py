@@ -258,6 +258,13 @@ def test_wizard_offers_autoinstall_for_uninstalled_provider(tmp_path, monkeypatc
     )
     monkeypatch.setattr("pyrrhon.config.wizard.stt_choices", lambda: (uninstalled_choice,))
 
+    # Piper is used as keyless TTS; mock it as ready so it doesn't trigger a second install prompt in slim CI
+    ready_piper = ProviderChoice(
+        id="piper", label="Piper (local)", key_env=None, default_model="en_US-lessac-medium",
+        note="free, on-device", state="ready", is_local=True, extra="piper"
+    )
+    monkeypatch.setattr("pyrrhon.config.wizard.tts_choices", lambda: (ready_piper,))
+
     console = QuietConsole()
     run_wizard(
         home=tmp_path,
@@ -266,7 +273,7 @@ def test_wizard_offers_autoinstall_for_uninstalled_provider(tmp_path, monkeypatc
             pick(llm_choices(), "groq"), "openai/gpt-oss-120b", "y",
             "1",  # pick whisper-local
             "y",  # accept auto-install
-            pick(tts_choices(), "piper"),
+            "1",  # pick piper
             "y",  # save setup
         ),
         getpass_fn=scripted("gsk-abc"),
@@ -290,6 +297,12 @@ def test_wizard_declined_autoinstall_shows_manual_instructions(tmp_path, monkeyp
     )
     monkeypatch.setattr("pyrrhon.config.wizard.stt_choices", lambda: (uninstalled_choice,))
 
+    ready_piper = ProviderChoice(
+        id="piper", label="Piper (local)", key_env=None, default_model="en_US-lessac-medium",
+        note="free, on-device", state="ready", is_local=True, extra="piper"
+    )
+    monkeypatch.setattr("pyrrhon.config.wizard.tts_choices", lambda: (ready_piper,))
+
     console = QuietConsole()
     run_wizard(
         home=tmp_path,
@@ -298,7 +311,7 @@ def test_wizard_declined_autoinstall_shows_manual_instructions(tmp_path, monkeyp
             pick(llm_choices(), "groq"), "openai/gpt-oss-120b", "y",
             "1",  # pick whisper-local
             "n",  # decline auto-install
-            pick(tts_choices(), "piper"),
+            "1",  # pick piper
             "y",  # save setup
         ),
         getpass_fn=scripted("gsk-abc"),
@@ -306,4 +319,43 @@ def test_wizard_declined_autoinstall_shows_manual_instructions(tmp_path, monkeyp
     )
     assert installed_extras == []
     assert any("Skipped auto-install" in line for line in console.lines)
+
+
+def test_wizard_offers_autoinstall_for_uninstalled_tts_provider(tmp_path, monkeypatch):
+    from pyrrhon.config.catalog import ProviderChoice
+
+    installed_extras = []
+    def fake_installer(console, extra):
+        installed_extras.append(extra)
+        return True
+
+    ready_groq = ProviderChoice(
+        id="groq", label="Groq Whisper", key_env=None, default_model=None,
+        note="fast", state="ready", is_local=False, extra="groq"
+    )
+    monkeypatch.setattr("pyrrhon.config.wizard.stt_choices", lambda: (ready_groq,))
+
+    uninstalled_piper = ProviderChoice(
+        id="piper", label="Piper (local)", key_env=None, default_model="en_US-lessac-medium",
+        note="on-device", state='install: uv add "pipecat-ai[piper]"', is_local=True, extra="piper"
+    )
+    monkeypatch.setattr("pyrrhon.config.wizard.tts_choices", lambda: (uninstalled_piper,))
+
+    console = QuietConsole()
+    run_wizard(
+        home=tmp_path,
+        console=console,
+        input_fn=scripted(
+            pick(llm_choices(), "groq"), "openai/gpt-oss-120b", "y",
+            "1",  # pick groq STT
+            "1",  # pick piper TTS
+            "y",  # accept auto-install for piper
+            "y",  # save setup
+        ),
+        getpass_fn=scripted("gsk-abc"),
+        installer=fake_installer,
+    )
+    assert installed_extras == ["piper"]
+    assert any("requires additional packages" in line for line in console.lines)
+
 

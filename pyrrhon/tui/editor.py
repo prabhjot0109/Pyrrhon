@@ -32,7 +32,7 @@ _GOTO = frozenset({"code", "code-insiders", "codium", "vscodium", "cursor", "win
 
 
 def _split_editor(value: str) -> list[str]:
-    """$EDITOR may carry flags ("code -w"), so it is a command line, not a name.
+    r"""$EDITOR may carry flags ("code -w"), so it is a command line, not a name.
 
     posix=False on Windows because posix mode eats the backslashes in
     `C:\Program Files\...`; the quote stripping afterwards is what posix mode
