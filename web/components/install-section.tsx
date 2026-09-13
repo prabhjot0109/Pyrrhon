@@ -27,14 +27,14 @@ const steps: { label: string; command: string; copy?: string; note: string }[] =
     note: "Python 3.12 or newer. The audio stack and every speech provider come with it, so there is no second command and no optional extra to remember.",
   },
   {
-    label: "Give it a key",
-    command: "export GROQ_API_KEY=...",
-    note: "Or run `pyrrhon` with no config and the setup wizard walks you through picking a provider. Point it at Ollama and nothing leaves your machine.",
+    label: "Set it up",
+    command: `${PACKAGE} setup`,
+    note: "Run the interactive wizard to pick an LLM and speech provider, or enter your API keys. Point it at Ollama and nothing leaves your machine.",
   },
   {
     label: "Point it at a repo",
-    command: `${PACKAGE} .          # terminal UI\n${PACKAGE} --voice .  # and talk to it`,
-    copy: `${PACKAGE} .`,
+    command: `${PACKAGE}           # terminal UI\n${PACKAGE} --voice   # and talk to it`,
+    copy: `${PACKAGE} `,
     note: "Then ask it something. \u201cWhere does the retry logic live?\u201d Talk over it any time; barge-in cuts the audio mid-sentence.",
   },
 ]
@@ -53,11 +53,7 @@ export function InstallSection() {
           between.
         </p>
 
-        <div className="mt-9 max-w-[440px]">
-          <CommandBlock command={INSTALL_COMMAND} size="hero" />
-        </div>
-
-        <ol className="mt-12 flex flex-col gap-3">
+        <ol className="mt-10 flex flex-col gap-3">
           {steps.map((step, i) => (
             <li key={step.label} className="overflow-hidden rounded-2xl border border-border bg-foreground/[0.03]">
               {/* The copy button lives on the step's title row rather than
@@ -80,10 +76,10 @@ export function InstallSection() {
         <div className="mt-12 rounded-2xl border border-border bg-foreground/[0.03] p-6 md:p-7">
           <p className="font-display text-display-xs text-foreground">Prefer something else?</p>
           <p className="text-body-sm mt-2 max-w-[58ch] text-pretty text-muted-foreground">
-            <code className="font-mono text-[0.92em] text-foreground/90">uv tool install</code> is the recommendation
-            because Pyrrhon is an application rather than a library: it wants its own environment with the{" "}
-            <code className="font-mono text-[0.92em] text-foreground/90">{PACKAGE}</code> binary on your PATH. Any of
-            these work.
+            <code className="font-mono text-[0.92em] text-foreground/90">pip install</code> is the primary method.
+            If you prefer an isolated environment or a one-off run, install{" "}
+            <code className="font-mono text-[0.92em] text-foreground/90">uv</code> first for uv commands, or use pipx.
+            Any of these work.
           </p>
           <dl className="mt-6 flex flex-col gap-4">
             {INSTALL_ALTERNATIVES.map((alt) => (

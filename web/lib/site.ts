@@ -10,31 +10,28 @@ export const REPO_URL = "https://github.com/prabhjot0109/Pyrrhon"
 export const PACKAGE = "pyrrhon"
 
 /**
- * The one command in the hero.
+ * The one command in the hero and install section.
  *
- * `uv tool install` rather than `pip install` because Pyrrhon is an
- * application, not a library: it wants its own isolated environment with the
- * `pyrrhon` binary linked onto PATH, which is precisely what a pip install
- * into whatever interpreter happens to be active does not give you. The
- * alternatives below cover people who do not have uv.
+ * `pip install` installs directly into the active Python environment.
+ * The alternatives below cover isolated environments and one-off runs.
  */
-export const INSTALL_COMMAND = `uv tool install ${PACKAGE}`
+export const INSTALL_COMMAND = `pip install ${PACKAGE}`
 
 export const INSTALL_ALTERNATIVES = [
   {
+    tool: "uv tool",
+    command: `uv tool install ${PACKAGE}`,
+    note: "Isolated environment with the pyrrhon binary on your PATH (install uv first).",
+  },
+  {
     tool: "uvx",
-    command: `uvx ${PACKAGE} .`,
-    note: "Run it once without installing anything.",
+    command: `uvx ${PACKAGE}`,
+    note: "Run it once without installing anything (install uv first).",
   },
   {
     tool: "pipx",
     command: `pipx install ${PACKAGE}`,
-    note: "Same isolation as uv, if that is what you already have.",
-  },
-  {
-    tool: "pip",
-    command: `pip install ${PACKAGE}`,
-    note: "Into the active environment. Works, but shares its dependencies.",
+    note: "Isolated environment with pipx, if that is what you already have.",
   },
 ] as const
 

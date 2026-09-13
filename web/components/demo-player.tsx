@@ -17,7 +17,7 @@ const DEMO_SRC = process.env.NEXT_PUBLIC_DEMO_SRC
 
 export function DemoPlayer() {
   return (
-    <div className="w-[calc(100vw-40px)] max-w-[1000px]">
+    <div id="pyrrhon-ui" className="w-[calc(100vw-40px)] max-w-[1000px]">
       <div className="rounded-2xl border border-border bg-foreground/[0.03] p-2 shadow-2xl backdrop-blur-sm">
         {DEMO_SRC ? (
           <video
