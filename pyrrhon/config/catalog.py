@@ -36,6 +36,8 @@ class ProviderChoice:
     # an OpenAI-compatible endpoint needs no extra, so the key is the whole
     # story there and the wizard's own key check already tells it.
     state: str = ""
+    is_local: bool = False
+    extra: str | None = None
 
 
 def llm_choices() -> tuple[ProviderChoice, ...]:
@@ -194,6 +196,8 @@ def _to_choice(provider) -> ProviderChoice:
         default_model=provider.default_voice,
         note=provider.note,
         state=availability(provider),
+        is_local=getattr(provider, "is_local", False),
+        extra=getattr(provider, "extra", None),
     )
 
 

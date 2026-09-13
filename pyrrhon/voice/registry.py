@@ -55,6 +55,10 @@ class VoiceProvider:
     # set it from a table review — set it from a run.
     verified: bool = False
 
+    @property
+    def is_local(self) -> bool:
+        return self.id in ("whisper-local", "moonshine", "piper", "kokoro", "piper-http")
+
 
 VOICE_PROVIDERS: tuple[VoiceProvider, ...] = (
     # ---- STT -------------------------------------------------------------
@@ -100,13 +104,13 @@ VOICE_PROVIDERS: tuple[VoiceProvider, ...] = (
         id="whisper-local", kind="stt", label="Whisper (local)",
         module="pipecat.services.whisper.stt", cls="WhisperSTTService",
         key_env=None, extra="whisper",
-        note="on-device: tiny|base|small|medium|large-v3 or an HF id",
+        note="on-device (downloads local weights; needs local-voice extra)",
     ),
     VoiceProvider(
         id="moonshine", kind="stt", label="Moonshine (local)",
         module="pipecat.services.moonshine.stt", cls="MoonshineSTTService",
         key_env=None, extra="moonshine",
-        note="on-device, tuned for short utterances",
+        note="on-device (fast short utterances; needs local-voice extra)",
     ),
     VoiceProvider(
         id="gemini", kind="stt", label="Google Gemini",
@@ -130,7 +134,7 @@ VOICE_PROVIDERS: tuple[VoiceProvider, ...] = (
         # download_voices does `download_dir / name` internally, and a str
         # raises TypeError there. Tier 3 is what caught this.
         extra_kwargs={"download_dir": Path.home() / ".pyrrhon" / "piper"},
-        note="free, on-device, no key and no server",
+        note="free, on-device (downloads voice model; needs local-voice extra)",
         verified=True,  # tier 3, 2026-08-22
     ),
     VoiceProvider(
@@ -181,7 +185,7 @@ VOICE_PROVIDERS: tuple[VoiceProvider, ...] = (
         id="kokoro", kind="tts", label="Kokoro (local)",
         module="pipecat.services.kokoro.tts", cls="KokoroTTSService",
         key_env=None, extra="kokoro",
-        note="free, on-device, ONNX",
+        note="free, on-device (ONNX; needs local-voice extra)",
     ),
     VoiceProvider(
         id="gemini", kind="tts", label="Google Gemini",

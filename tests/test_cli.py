@@ -52,6 +52,26 @@ def test_setup_flag_runs_the_wizard_then_launches(monkeypatch):
     assert calls == ["wizard", "tui"]
 
 
+def test_setup_subcommand_runs_wizard_and_exits(monkeypatch):
+    calls = []
+    monkeypatch.setattr("pyrrhon.config.wizard.run_wizard", lambda: calls.append("wizard") or "ok")
+    monkeypatch.setattr("pyrrhon.tui.app.run_tui", lambda repo, voice=False, trust_repo=False, **kwargs: calls.append("tui"))
+    from pyrrhon.cli import main
+
+    main(["setup"])
+    assert calls == ["wizard"]
+
+
+def test_configure_subcommand_runs_wizard_and_exits(monkeypatch):
+    calls = []
+    monkeypatch.setattr("pyrrhon.config.wizard.run_wizard", lambda: calls.append("wizard") or "ok")
+    monkeypatch.setattr("pyrrhon.tui.app.run_tui", lambda repo, voice=False, trust_repo=False, **kwargs: calls.append("tui"))
+    from pyrrhon.cli import main
+
+    main(["configure"])
+    assert calls == ["wizard"]
+
+
 def test_trust_repo_flag_reaches_the_channel(monkeypatch):
     """--trust-repo grants a repo's servers, providers, and soul files without
     prompting. If it silently stopped reaching the channel, automation would

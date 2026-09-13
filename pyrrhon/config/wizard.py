@@ -14,6 +14,9 @@ from __future__ import annotations
 
 import getpass
 import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 from rich.console import Console
@@ -63,7 +66,8 @@ def _choose(console, ask, title: str, choices: tuple[ProviderChoice, ...],
             stored: dict[str, str], allow_back: bool) -> ProviderChoice:
     console.print(f"\n[bold]{title}[/bold]")
     for n, c in enumerate(choices, 1):
-        console.print(f"  {n}. {c.label:<22} {c.note}  [{_key_status(c, stored)}]")
+        type_str = "[cyan](local)[/cyan] " if c.is_local else ""
+        console.print(f"  {n}. {c.label:<22} {type_str}{c.note}  [{_key_status(c, stored)}]")
     hint = "number, Enter = 1" + (", b = back" if allow_back else "")
     while True:
         raw = ask(f"> pick ({hint}): ").strip().lower()
@@ -115,8 +119,55 @@ def _collect_key(console, secret, choice: ProviderChoice,
         )
 
 
+def _install_dependency(console, extra: str | None) -> bool:
+    if not extra:
+        return False
+    pkg = f"pipecat-ai[{extra}]"
+    console.print(f"[bold blue]Installing {pkg}... (this may take a few moments)[/bold blue]")
+    cmd = ["uv", "pip", "install", pkg] if shutil.which("uv") else [sys.executable, "-m", "pip", "install", pkg]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if res.returncode == 0:
+            console.print(f"[green]Successfully installed {pkg}![/green]")
+            return True
+        err = res.stderr.strip() or res.stdout.strip()
+        console.print(f"[red]Installation failed:[/red] {err}")
+        return False
+    except Exception as exc:
+        console.print(f"[red]Error during install:[/red] {exc}")
+        return False
+
+
+def _ensure_provider_installed(
+    console, ask, choice: ProviderChoice, installer=None
+) -> ProviderChoice:
+    """If choice needs an uninstalled extra, inform user and offer auto-install."""
+    if not (choice.state and choice.state.startswith("install:")):
+        return choice
+
+    desc = "on-device model (~1 GB+ with weights/PyTorch)" if choice.is_local else "voice provider"
+    console.print(
+        f"\n[yellow]Notice: '{choice.label}' is an {desc} that requires additional packages.[/yellow]"
+    )
+    answer = ask(f"> Auto-install dependencies for {choice.label} now? [Y/n]: ").strip().lower()
+    if answer in ("", "y", "yes"):
+        fn = installer or _install_dependency
+        if fn(console, choice.extra):
+            from pyrrhon.config.catalog import _to_choice
+            from pyrrhon.voice.registry import find
+            provider = find("stt", choice.id) or find("tts", choice.id)
+            if provider:
+                return _to_choice(provider)
+    else:
+        console.print(
+            f"[dim]Skipped auto-install. You can install it manually later with:[/dim]\n"
+            f"  [cyan]uv add \"pipecat-ai[{choice.extra}]\"[/cyan]  or  [cyan]pip install \"pyrrhon[local-voice]\"[/cyan]\n"
+        )
+    return choice
+
+
 def run_wizard(home: Path | None = None, console: Console | None = None,
-               input_fn=None, getpass_fn=None) -> str:
+               input_fn=None, getpass_fn=None, installer=None) -> str:
     home = home or Path.home()
     console = console or Console()
     ask = input_fn or input
@@ -143,10 +194,12 @@ def run_wizard(home: Path | None = None, console: Console | None = None,
             return
         stt = _choose(console, ask, "Speech-to-text (your voice -> text):",
                       stt_choices(), stored, allow_back=True)
+        stt = _ensure_provider_installed(console, ask, stt, installer=installer)
         state["stt"] = stt
         _collect_key(console, secret, stt, state["keys"], stored)
         tts = _choose(console, ask, "Text-to-speech (Pyrrhon's voice):",
                       tts_choices(), stored, allow_back=True)
+        tts = _ensure_provider_installed(console, ask, tts, installer=installer)
         state["tts"] = tts
         _collect_key(console, secret, tts, state["keys"], stored)
 

@@ -2548,7 +2548,7 @@ dependencies = [
     { name = "huggingface-hub" },
     { name = "mcp" },
     { name = "openai" },
-    { name = "pipecat-ai", extra = ["deepgram", "google", "groq", "kokoro", "local", "local-smart-turn", "moonshine", "piper", "rnnoise", "whisper"] },
+    { name = "pipecat-ai", extra = ["deepgram", "google", "groq", "local", "rnnoise"] },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "rich" },
@@ -2557,6 +2557,26 @@ dependencies = [
     { name = "tomli-w" },
     { name = "tree-sitter" },
     { name = "tree-sitter-language-pack" },
+]
+
+[package.optional-dependencies]
+kokoro = [
+    { name = "pipecat-ai", extra = ["kokoro"] },
+]
+local-voice = [
+    { name = "pipecat-ai", extra = ["kokoro", "local-smart-turn", "moonshine", "piper", "whisper"] },
+]
+moonshine = [
+    { name = "pipecat-ai", extra = ["moonshine"] },
+]
+piper = [
+    { name = "pipecat-ai", extra = ["piper"] },
+]
+smart-turn = [
+    { name = "pipecat-ai", extra = ["local-smart-turn"] },
+]
+whisper = [
+    { name = "pipecat-ai", extra = ["whisper"] },
 ]
 
 [package.dev-dependencies]
@@ -2577,7 +2597,13 @@ requires-dist = [
     { name = "huggingface-hub", specifier = ">=1.22.0" },
     { name = "mcp", specifier = ">=1.10,<2" },
     { name = "openai", specifier = ">=2.44.0" },
-    { name = "pipecat-ai", extras = ["assemblyai", "cartesia", "deepgram", "elevenlabs", "gladia", "google", "groq", "inworld", "kokoro", "local", "local-smart-turn", "moonshine", "openai", "piper", "rime", "rnnoise", "silero", "whisper"], specifier = ">=1.7.0" },
+    { name = "pipecat-ai", extras = ["assemblyai", "cartesia", "deepgram", "elevenlabs", "gladia", "google", "groq", "inworld", "local", "openai", "rime", "rnnoise", "silero"], specifier = ">=1.7.0" },
+    { name = "pipecat-ai", extras = ["kokoro"], marker = "extra == 'kokoro'", specifier = ">=1.7.0" },
+    { name = "pipecat-ai", extras = ["kokoro", "local-smart-turn", "moonshine", "piper", "whisper"], marker = "extra == 'local-voice'", specifier = ">=1.7.0" },
+    { name = "pipecat-ai", extras = ["local-smart-turn"], marker = "extra == 'smart-turn'", specifier = ">=1.7.0" },
+    { name = "pipecat-ai", extras = ["moonshine"], marker = "extra == 'moonshine'", specifier = ">=1.7.0" },
+    { name = "pipecat-ai", extras = ["piper"], marker = "extra == 'piper'", specifier = ">=1.7.0" },
+    { name = "pipecat-ai", extras = ["whisper"], marker = "extra == 'whisper'", specifier = ">=1.7.0" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "rich", specifier = ">=14.3.1" },
@@ -2587,6 +2613,7 @@ requires-dist = [
     { name = "tree-sitter", specifier = ">=0.25.2,<0.26" },
     { name = "tree-sitter-language-pack", specifier = ">=1.12.2" },
 ]
+provides-extras = ["kokoro", "local-voice", "moonshine", "piper", "smart-turn", "whisper"]
 
 [package.metadata.requires-dev]
 dev = [

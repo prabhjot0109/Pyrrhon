@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from pyrrhon import __version__
 
@@ -92,10 +93,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--version", action="version", version=f"pyrrhon {__version__}")
     args = parser.parse_args(argv)
 
-    if args.setup:
+    if args.setup or (args.repo in ("setup", "configure") and not Path(args.repo).is_dir()):
         from pyrrhon.config.wizard import run_wizard
 
         run_wizard()
+        if args.repo in ("setup", "configure"):
+            return
 
     # "" means "the most recent one", which is what --continue asks for, and
     # None means "start fresh". One value rather than two flags threaded

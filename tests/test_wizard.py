@@ -217,3 +217,69 @@ def test_a_provider_with_a_default_voice_still_pins_it(tmp_path):
     )
     voice = tomllib.loads((tmp_path / ".pyrrhon" / "config.toml").read_text())["voice"]
     assert voice["tts_voice"] == "en_US-lessac-medium"
+
+
+def test_wizard_offers_autoinstall_for_uninstalled_provider(tmp_path, monkeypatch):
+    from pyrrhon.config.catalog import ProviderChoice
+
+    installed_extras = []
+    def fake_installer(console, extra):
+        installed_extras.append(extra)
+        return True
+
+    # Monkeypatch stt_choices to return an uninstalled local provider choice
+    uninstalled_choice = ProviderChoice(
+        id="whisper-local", label="Whisper (local)", key_env=None, default_model=None,
+        note="on-device", state='install: uv add "pipecat-ai[whisper]"', is_local=True, extra="whisper"
+    )
+    monkeypatch.setattr("pyrrhon.config.wizard.stt_choices", lambda: (uninstalled_choice,))
+
+    console = QuietConsole()
+    run_wizard(
+        home=tmp_path,
+        console=console,
+        input_fn=scripted(
+            pick(llm_choices(), "groq"), "openai/gpt-oss-120b", "y",
+            "1",  # pick whisper-local
+            "y",  # accept auto-install
+            pick(tts_choices(), "piper"),
+            "y",  # save setup
+        ),
+        getpass_fn=scripted("gsk-abc"),
+        installer=fake_installer,
+    )
+    assert installed_extras == ["whisper"]
+    assert any("requires additional packages" in line for line in console.lines)
+
+
+def test_wizard_declined_autoinstall_shows_manual_instructions(tmp_path, monkeypatch):
+    from pyrrhon.config.catalog import ProviderChoice
+
+    installed_extras = []
+    def fake_installer(console, extra):
+        installed_extras.append(extra)
+        return True
+
+    uninstalled_choice = ProviderChoice(
+        id="whisper-local", label="Whisper (local)", key_env=None, default_model=None,
+        note="on-device", state='install: uv add "pipecat-ai[whisper]"', is_local=True, extra="whisper"
+    )
+    monkeypatch.setattr("pyrrhon.config.wizard.stt_choices", lambda: (uninstalled_choice,))
+
+    console = QuietConsole()
+    run_wizard(
+        home=tmp_path,
+        console=console,
+        input_fn=scripted(
+            pick(llm_choices(), "groq"), "openai/gpt-oss-120b", "y",
+            "1",  # pick whisper-local
+            "n",  # decline auto-install
+            pick(tts_choices(), "piper"),
+            "y",  # save setup
+        ),
+        getpass_fn=scripted("gsk-abc"),
+        installer=fake_installer,
+    )
+    assert installed_extras == []
+    assert any("Skipped auto-install" in line for line in console.lines)
+
